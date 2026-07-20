@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 // conductor-remote CLI entrypoint.
 //
-// Runs on plain Node ≥24 with zero flags: the relay is stdlib-only and the two
-// param-property constructors that once needed --experimental-transform-types
-// are gone, so default type-stripping handles the .ts sources on import.
+// Runs on plain Node ≥24 with zero flags. The published tarball ships compiled JS
+// under dist-node/ (Node REFUSES to type-strip .ts under node_modules, so an
+// installed package can't run raw sources); a dev checkout has no dist-node/ and
+// runs the .ts sources directly, since type-stripping works outside node_modules.
+// resolveEntry() prefers compiled, falls back to source — one entrypoint, both worlds.
 //
 // The one remaining wrinkle is node:sqlite, still flagged experimental in 24.
 // We silence *only* that warning here (instead of re-execing node with
 // --disable-warning) so the entrypoint stays a shebang + import.
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 const emitWarning = process.emitWarning.bind(process)
 process.emitWarning = (warning, ...rest) => {
@@ -25,6 +28,18 @@ if (major < REQUIRED_MAJOR) {
 			'It relies on node:sqlite and default TypeScript type-stripping. Upgrade node and retry.'
 	)
 	process.exit(1)
+}
+
+// Under node_modules (installed package) Node can't type-strip, so run compiled dist-node/; outside it
+// (dev checkout) run the live .ts source so edits take effect without a build. Each falls back to the
+// other if its preferred artifact is missing.
+function resolveEntry(compiledRel, sourceRel) {
+	const order = import.meta.url.includes('/node_modules/') ? [compiledRel, sourceRel] : [sourceRel, compiledRel]
+	for (const rel of order) {
+		const url = new URL(rel, import.meta.url)
+		if (existsSync(fileURLToPath(url))) return url.href
+	}
+	return new URL(order[0], import.meta.url).href
 }
 
 const [cmd, ...rest] = process.argv.slice(2)
@@ -65,12 +80,12 @@ function usage() {
 switch (cmd) {
 	case undefined:
 	case 'start':
-		await import('../src/server.ts')
+		await import(resolveEntry('../dist-node/src/server.js', '../src/server.ts'))
 		break
 	case 'service':
 		// service.ts reads its subcommand from argv[2]; re-shape argv so `service install` → `install`.
 		process.argv = [process.argv[0], process.argv[1], ...rest]
-		await import('../scripts/service.ts')
+		await import(resolveEntry('../dist-node/scripts/service.js', '../scripts/service.ts'))
 		break
 	case '-v':
 	case '--version':

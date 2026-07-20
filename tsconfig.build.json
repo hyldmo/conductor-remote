@@ -1,0 +1,19 @@
+{
+	// Node-relay build: emit runnable JS for the published tarball. The dev checkout runs the .ts sources
+	// directly via Node type-stripping, but Node REFUSES to strip files under node_modules, so an installed
+	// package must ship real JS. `rewriteRelativeImportExtensions` keeps the sources' `.ts` import specifiers
+	// (which let Node run them unbuilt) and rewrites them to `.js` on emit — one set of sources, both worlds.
+	//
+	// Only the runtime set is emitted (src + the two scripts bin/cli.js dispatches to); dev-only scripts
+	// (dev.ts, gen-icons.ts) are excluded so they don't ship dead references to devDependencies.
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": false,
+		"rewriteRelativeImportExtensions": true,
+		"outDir": "dist-node",
+		"rootDir": ".",
+		"declaration": false,
+		"sourceMap": false
+	},
+	"include": ["src", "scripts/service.ts", "scripts/qr.ts"]
+}

@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { packageRoot } from './pkg-root.ts'
 import type { WriteStrategy } from './writes.ts'
 
 const home = os.homedir()
@@ -54,7 +55,7 @@ function resolveToken(): string {
 
 /** The relay serves the Vite build. Warn early if it hasn't been built yet. */
 function resolvePublicDir(): string {
-	const dist = path.join(import.meta.dirname, '..', 'dist')
+	const dist = path.join(packageRoot(import.meta.dirname), 'dist')
 	if (!fs.existsSync(path.join(dist, 'index.html'))) {
 		console.warn(
 			'⚠ dist/ not built — run `yarn build` (or `yarn preview`). The API works; the PWA will 404 until then.'

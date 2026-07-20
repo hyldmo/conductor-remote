@@ -29,9 +29,8 @@
 	"bin": "bin/cli.js",
 	"files": [
 		"bin",
-		"src",
-		"scripts",
-		"dist"
+		"dist",
+		"dist-node"
 	],
 	"publishConfig": {
 		"access": "public",
@@ -43,6 +42,7 @@
 		"dev": "node scripts/dev.ts",
 		"dev:web": "vite",
 		"build": "vite build",
+		"build:node": "tsc -p tsconfig.build.json",
 		"preview": "yarn build && yarn start",
 		"gen:icons": "node scripts/gen-icons.ts",
 		"deploy": "yarn build && node bin/cli.js service install",
@@ -52,7 +52,7 @@
 		"fix": "biome check . --fix",
 		"verify": "yarn typecheck && yarn lint",
 		"release": "semantic-release",
-		"prepack": "yarn build",
+		"prepack": "yarn build && yarn build:node",
 		"postinstall": "husky || true"
 	},
 	"devDependencies": {

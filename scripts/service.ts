@@ -12,10 +12,11 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { packageRoot } from '../src/pkg-root.ts'
 import { qrLines } from './qr.ts'
 
 const LABEL = 'no.adluna.conductor-remote'
-const projectDir = path.resolve(import.meta.dirname, '..')
+const projectDir = packageRoot(import.meta.dirname)
 const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`)
 const logDir = path.join(os.homedir(), 'Library', 'Logs', 'conductor-remote')
 const uid = process.getuid?.() ?? 0

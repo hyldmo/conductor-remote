@@ -23,11 +23,12 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { packageRoot } from './pkg-root.ts'
 
 const execFileP = promisify(execFile)
 
 const NAME = 'conductor-remote'
-const projectDir = path.resolve(import.meta.dirname, '..')
+const projectDir = packageRoot(import.meta.dirname)
 const REGISTRY = process.env.NPM_REGISTRY ?? 'https://registry.npmjs.org'
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const FIRST_DELAY_MS = 90 * 1000

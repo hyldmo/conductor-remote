@@ -62,9 +62,10 @@ bakes the absolute `node` path, so re-run `yarn deploy` after an nvm upgrade.
 ## File map
 
 ```
-src/              Node relay (run via `node --experimental-transform-types`)
+src/              Node relay (dev: run as .ts via Node type-stripping; tarball: compiled to dist-node/)
   server.ts       HTTP router: /api/* (token-gated) + static PWA + SPA fallback
   config.ts       paths, port, Tailscale bind, token, write strategy, dist dir
+  pkg-root.ts     packageRoot(): walk up to package.json (works from src/ and dist-node/src/)
   db.ts           read-only node:sqlite handle to conductor.db
   reads.ts        workspaces / sessions / messages + worktree resolution
   transcript.ts   Claude Code SDK stream JSON → phone-renderable entries
@@ -82,6 +83,7 @@ web/              React PWA (Vite root)
   public/icon.svg source icon (PNGs via `yarn gen:icons`)
 scripts/dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status) + qr.ts (dep-free QR of the phone URL, printed by service.ts)
 dist/             built PWA (gitignored) — what the relay serves
+dist-node/        compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball
 ```
 
 ## Re-deriving Conductor internals (if a Conductor update breaks something)
@@ -110,9 +112,14 @@ assistant/system rows and plain text for user prompts; `queue_order` set +
 
 ## Gotchas
 
-- **Node flags.** The relay runs with `--experimental-transform-types` (strip-only
-  mode rejects the TS parameter properties in `db.ts`) and
-  `--disable-warning=ExperimentalWarning` (silences the `node:sqlite` warning).
+- **No Node flags; two run paths.** The relay runs under plain `node` — no
+  `--experimental-transform-types`. Dev imports the `.ts` sources directly (Node's
+  default type-stripping); an installed package runs the compiled `dist-node/` JS
+  because Node refuses to strip `.ts` under `node_modules`. `bin/cli.js` picks by
+  whether its own path contains `/node_modules/`. Strip-only mode rejects
+  parameter-property constructors/enums/namespaces, so the dev-run sources stay free
+  of them (see the strip-clean trap in CLAUDE.md). `bin/cli.js` silences only the
+  `node:sqlite` ExperimentalWarning in-process (no re-exec).
 - **Yarn standalone.** An empty `yarn.lock` marks this repo as its own project
   (there's a `package.json` higher up in `$HOME`). `.yarnrc.yml` sets
   `nodeLinker: node-modules`.

@@ -40,7 +40,8 @@ Two asymmetric halves — keep them separate:
 ```bash
 yarn verify   # typecheck (tsc) + lint (Biome) — run before every commit
 yarn fix      # Biome autofix (format + safe lints)
-yarn build    # Vite → dist/ (what the relay serves)
+yarn build    # Vite → dist/ (the PWA the relay serves)
+yarn build:node # tsc -p tsconfig.build.json → dist-node/ (compiled relay for the npm tarball)
 yarn start    # run the relay (node bin/cli.js)
 yarn dev      # Vite :5173 (HMR) proxying /api → relay :8787
 yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
@@ -53,16 +54,27 @@ unit test.
 
 ## Traps (these will bite)
 
-- **The relay is kept strip-clean so it runs flag-free — don't reintroduce the
-  transform flag.** The relay, `bin/cli.js`, and scripts run under plain `node`
-  (Node 24's default TS *type-stripping*), no `--experimental-transform-types`. This
-  is load-bearing for the npm package: `bin/cli.js` is a zero-flag entrypoint and the
-  published tarball has zero runtime deps. Strip-only erases types but rejects
-  syntax that must be *transformed* — so keep the code free of **parameter-property
-  constructors, enums, and namespaces**. `db.ts`/`reads.ts` use explicit field
-  assignments for exactly this reason (they once used `constructor(private readonly …)`).
-  The one experimental bit left, `node:sqlite`, only warns — `bin/cli.js` silences
-  just that warning (no re-exec).
+- **Two run paths, one source: dev strips `.ts` live, the tarball ships compiled JS.**
+  In a dev checkout `bin/cli.js` imports the `src/*.ts`/`scripts/*.ts` sources directly
+  under plain `node` (Node 24's default TS *type-stripping*, no `--experimental-transform-types`).
+  But Node **refuses to type-strip anything under `node_modules`** (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`),
+  so an *installed* package can't run raw `.ts` — it must ship real JS. So `prepack`
+  runs `yarn build:node` (`tsc -p tsconfig.build.json`) → `dist-node/`, and `bin/cli.js`
+  picks the artifact by whether its own path contains `/node_modules/` (compiled) or not
+  (live source). `tsconfig.build.json` uses **`rewriteRelativeImportExtensions`** so the
+  sources keep their `.ts` import specifiers (which let Node run them unbuilt) and emit
+  gets them rewritten to `.js` — never "fix" the `.ts` imports, they're load-bearing for
+  the dev path. The tarball still has **zero runtime deps** (relay is stdlib-only; `dist-node`
+  is plain JS + `node:*`), and `files` ships `bin`/`dist`/`dist-node` only — **no raw `.ts`**.
+  - The dev path is still strip-only, so keep the code free of syntax that must be
+    *transformed* — **parameter-property constructors, enums, namespaces**. `db.ts`/`reads.ts`
+    use explicit field assignments for exactly this reason (they once used `constructor(private readonly …)`).
+    (`tsc` in the node build *could* transform those, but the dev run can't, so the ban stands.)
+  - Anything that resolves a path against the package root must anchor on `packageRoot()`
+    (`src/pkg-root.ts`), **not** `import.meta.dirname/..` — the compiled files sit one dir
+    deeper (`dist-node/src/…`), so a hard `..` points at `dist-node`, not the real root.
+  - The one experimental bit left, `node:sqlite`, only warns — `bin/cli.js` silences
+    just that warning (no re-exec).
 - **The relay binds loopback; the HTTPS URL comes from Tailscale, and `EXPOSE` picks
   who can reach it.** `server.listen` uses `127.0.0.1` (override with `RELAY_HOST`), and
   `yarn deploy` (`service.ts` → `ensureTailscale`) fronts a stable `https://<magicdns>/`
