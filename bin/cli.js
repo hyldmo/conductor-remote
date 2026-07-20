@@ -60,6 +60,8 @@ function usage() {
 			'  conductor-remote [start]                 run the relay (default)',
 			'  conductor-remote service <subcommand>    manage the login LaunchAgent',
 			'      install | uninstall | restart | status',
+			'  conductor-remote nosleep [duration]      keep this Mac awake (incl. lid-closed) until',
+			'                                           Ctrl-C or the duration (e.g. 1h, 90m); needs sudo',
 			'  conductor-remote --version               print the installed version',
 			'',
 			'Install flags (each also settable via the env var in [brackets]):',
@@ -86,6 +88,11 @@ switch (cmd) {
 		// service.ts reads its subcommand from argv[2]; re-shape argv so `service install` → `install`.
 		process.argv = [process.argv[0], process.argv[1], ...rest]
 		await import(resolveEntry('../dist-node/scripts/service.js', '../scripts/service.ts'))
+		break
+	case 'nosleep':
+		// nosleep.ts reads its optional duration from argv[2]; re-shape argv so `nosleep 1h` → `1h`.
+		process.argv = [process.argv[0], process.argv[1], ...rest]
+		await import(resolveEntry('../dist-node/scripts/nosleep.js', '../scripts/nosleep.ts'))
 		break
 	case '-v':
 	case '--version':

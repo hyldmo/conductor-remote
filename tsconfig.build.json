@@ -15,5 +15,5 @@
 		"declaration": false,
 		"sourceMap": false
 	},
-	"include": ["src", "scripts/service.ts", "scripts/qr.ts"]
+	"include": ["src", "scripts/service.ts", "scripts/qr.ts", "scripts/nosleep.ts"]
 }
