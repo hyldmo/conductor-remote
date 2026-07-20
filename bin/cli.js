@@ -8,6 +8,8 @@
 // The one remaining wrinkle is node:sqlite, still flagged experimental in 24.
 // We silence *only* that warning here (instead of re-execing node with
 // --disable-warning) so the entrypoint stays a shebang + import.
+import { readFileSync } from 'node:fs'
+
 const emitWarning = process.emitWarning.bind(process)
 process.emitWarning = (warning, ...rest) => {
 	const type = typeof rest[0] === 'string' ? rest[0] : rest[0]?.type
@@ -27,6 +29,13 @@ if (major < REQUIRED_MAJOR) {
 
 const [cmd, ...rest] = process.argv.slice(2)
 
+function version() {
+	// Read the installed manifest lazily; semantic-release stamps the real version
+	// into it at publish time (the checked-in value is a placeholder).
+	const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+	console.info(version)
+}
+
 function usage() {
 	console.info(
 		[
@@ -36,6 +45,7 @@ function usage() {
 			'  conductor-remote [start]                 run the relay (default)',
 			'  conductor-remote service <subcommand>    manage the login LaunchAgent',
 			'      install | uninstall | restart | status',
+			'  conductor-remote --version               print the installed version',
 			'',
 			'Install flags (each also settable via the env var in [brackets]):',
 			'  --expose public|tailnet   reachability: public Funnel (default) or tailnet-only  [EXPOSE]',
@@ -61,6 +71,11 @@ switch (cmd) {
 		// service.ts reads its subcommand from argv[2]; re-shape argv so `service install` → `install`.
 		process.argv = [process.argv[0], process.argv[1], ...rest]
 		await import('../scripts/service.ts')
+		break
+	case '-v':
+	case '--version':
+	case 'version':
+		version()
 		break
 	case '-h':
 	case '--help':
