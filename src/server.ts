@@ -17,6 +17,27 @@ const db = new ConductorDb(cfg.dbPath)
 const reads = new Reads(db, cfg.workspacesRoot)
 const actuator = pickActuator(cfg.writeStrategy)
 
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
+/**
+ * Confirm a prompt actually reached the session by watching the transcript for a
+ * new user row matching it. The AppleScript actuator reports `ok` on `osascript`
+ * exit 0 — which only means the script *ran*, not that Conductor was focused and
+ * accepted the keystrokes — so without this a dropped send (asleep/unfocused Mac)
+ * looks delivered. Conductor writes the row right after the send presses Enter, so
+ * a short poll catches a real send fast and only the failure path waits the full
+ * window. A queued prompt still writes a user row, so it counts as delivered.
+ */
+async function confirmDelivery(sessionId: string, text: string, sinceRowid: number): Promise<boolean> {
+	const target = text.trim()
+	for (let attempt = 0; attempt < 12; attempt++) {
+		const { entries } = reads.getMessages(sessionId, sinceRowid)
+		if (entries.some(e => e.role === 'user' && e.text.trim() === target)) return true
+		await sleep(350)
+	}
+	return false
+}
+
 const MIME: Record<string, string> = {
 	'.html': 'text/html; charset=utf-8',
 	'.js': 'text/javascript; charset=utf-8',
@@ -206,7 +227,16 @@ const server = http.createServer(async (req, res) => {
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
 			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+			// Snapshot the transcript cursor so we can confirm the prompt actually lands.
+			const beforeRowid = reads.getMessages(sessionId).cursor
 			const result = await actuator.send({ workspace: ws, sessionId }, text)
+			if (result.ok && !(await confirmDelivery(sessionId, text, beforeRowid))) {
+				return json(req, res, 502, {
+					ok: false,
+					strategy: result.strategy,
+					error: 'Send didn’t land in the chat — Conductor may have been asleep or unfocused. Try again.'
+				})
+			}
 			return json(req, res, result.ok ? 200 : 502, result)
 		}
 

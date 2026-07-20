@@ -1,18 +1,11 @@
-import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUp, Info, Loader2, WifiOff } from 'lucide-react'
+import { ArrowUp, Info, WifiOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { client } from '../lib/api.ts'
-import { cn } from '../lib/cn.ts'
+import { useSendPrompt } from '../hooks.ts'
 import type { ActuatorInfo } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 
-interface Feedback {
-	kind: 'ok' | 'warn' | 'err'
-	msg: string
-}
-
 // Persist an unsent prompt per workspace so a force-quit (or reload) never loses
-// typing. Keyed by workspace id; cleared on a successful send.
+// typing. Keyed by workspace id; cleared on send.
 const DRAFT_PREFIX = 'conductor-remote-draft:'
 
 function loadDraft(workspaceId: string): string {
@@ -40,18 +33,9 @@ export function Composer({
 	actuator?: ActuatorInfo
 }) {
 	const [text, setText] = useState(() => loadDraft(workspaceId))
-	const [sending, setSending] = useState(false)
 	const online = useApp(s => s.online)
-	const markWorking = useApp(s => s.markWorking)
-	const queryClient = useQueryClient()
-	const [feedback, setFeedback] = useState<Feedback | null>(null)
+	const sendPrompt = useSendPrompt()
 	const ref = useRef<HTMLTextAreaElement>(null)
-
-	useEffect(() => {
-		if (!feedback) return
-		const t = setTimeout(() => setFeedback(null), feedback.kind === 'err' ? 5000 : 2800)
-		return () => clearTimeout(t)
-	}, [feedback])
 
 	const autosize = () => {
 		const el = ref.current
@@ -69,28 +53,15 @@ export function Composer({
 		autosize()
 	}
 
-	const send = async () => {
+	// Fire-and-forget: the optimistic bubble (and its inline error on failure) is the
+	// feedback now, so we clear the box immediately instead of awaiting the send.
+	const send = () => {
 		const value = text.trim()
-		if (!value || !sessionId || sending || !online) return
-		setSending(true)
-		try {
-			const r = await client.sendPrompt(sessionId, value, workspaceId)
-			if (r.ok) {
-				setText('')
-				saveDraft(workspaceId, '')
-				requestAnimationFrame(autosize)
-				setFeedback({ kind: r.warning ? 'warn' : 'ok', msg: r.warning || 'Sent' })
-				// Show the working indicator immediately; the status poll takes over.
-				markWorking(sessionId)
-				queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
-			} else {
-				setFeedback({ kind: 'err', msg: r.error || 'Send failed' })
-			}
-		} catch (err) {
-			setFeedback({ kind: 'err', msg: err instanceof Error ? err.message : String(err) })
-		} finally {
-			setSending(false)
-		}
+		if (!value || !sessionId || !online) return
+		void sendPrompt({ sessionId, workspaceId, text: value })
+		setText('')
+		saveDraft(workspaceId, '')
+		requestAnimationFrame(autosize)
 	}
 
 	const disabled = !sessionId
@@ -102,17 +73,6 @@ export function Composer({
 				<div className="mb-2 flex items-center gap-1.5 rounded-lg bg-del/10 px-3 py-1.5 text-xs text-del">
 					<WifiOff size={12} />
 					Offline — drafts are saved, sending resumes when the relay is back
-				</div>
-			) : feedback ? (
-				<div
-					className={cn(
-						'mb-2 rounded-lg px-3 py-1.5 text-xs',
-						feedback.kind === 'ok' && 'bg-idle/10 text-idle',
-						feedback.kind === 'warn' && 'bg-working/10 text-working',
-						feedback.kind === 'err' && 'bg-del/10 text-del'
-					)}
-				>
-					{feedback.msg}
 				</div>
 			) : (
 				!precise && (
@@ -141,17 +101,11 @@ export function Composer({
 				<button
 					type="button"
 					onClick={send}
-					disabled={disabled || sending || !text.trim() || !online}
-					aria-label={sending ? 'Sending' : 'Send'}
-					aria-busy={sending}
-					className={cn(
-						'mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90',
-						// Keep the accent fill while sending so the spinner stays prominent;
-						// only gray out when there's genuinely nothing to send.
-						!sending && 'disabled:bg-surface-2 disabled:text-faint'
-					)}
+					disabled={disabled || !text.trim() || !online}
+					aria-label="Send"
+					className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90 disabled:bg-surface-2 disabled:text-faint"
 				>
-					{sending ? <Loader2 size={19} className="animate-spin" /> : <ArrowUp size={19} />}
+					<ArrowUp size={19} />
 				</button>
 			</div>
 		</div>

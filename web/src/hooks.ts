@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, client } from './lib/api.ts'
@@ -261,4 +261,46 @@ export function useTranscript(sessionId: string | null): TranscriptState {
 	}, [sessionId, report])
 
 	return state
+}
+
+/**
+ * Send a prompt with an optimistic in-chat bubble. Adds a `sending` pending
+ * immediately, then relies on the relay's delivery read-back: on `ok` the real
+ * user row lands via the transcript poll and reconciles the bubble away (a
+ * fallback purge covers the rare no-match); on failure the bubble flips to an
+ * inline error with Retry. Reused by the Composer and the Transcript's Retry
+ * button — pass the pending's `id` to retry in place. There is no green "Sent"
+ * toast: a delivered prompt simply appears in the chat, a failed one shows an error.
+ */
+export function useSendPrompt() {
+	const queryClient = useQueryClient()
+	const addPending = useApp(s => s.addPending)
+	const failPending = useApp(s => s.failPending)
+	const removePending = useApp(s => s.removePending)
+	const markWorking = useApp(s => s.markWorking)
+
+	return useCallback(
+		async (opts: { id?: string; sessionId: string; workspaceId: string; text: string }) => {
+			const text = opts.text.trim()
+			if (!text) return
+			const id = opts.id ?? crypto.randomUUID()
+			const { sessionId, workspaceId } = opts
+			addPending({ id, sessionId, workspaceId, text })
+			try {
+				const r = await client.sendPrompt(sessionId, text, workspaceId)
+				if (r.ok) {
+					markWorking(sessionId)
+					queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
+					// The confirmed row surfaces on the next poll and hides this bubble;
+					// purge it after a beat so a text-match miss can't leave a duplicate.
+					setTimeout(() => removePending(id), 4000)
+				} else {
+					failPending(id, r.error || 'Send failed')
+				}
+			} catch (err) {
+				failPending(id, err instanceof Error ? err.message : String(err))
+			}
+		},
+		[addPending, failPending, removePending, markWorking, queryClient]
+	)
 }

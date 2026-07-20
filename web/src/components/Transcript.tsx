@@ -1,14 +1,35 @@
+import { AlertTriangle, Loader2 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import { useTranscript } from '../hooks.ts'
+import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import type { TranscriptEntry } from '../lib/types.ts'
+import type { PendingMessage } from '../store.ts'
+import { useApp } from '../store.ts'
 import { Markdown } from './Markdown.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
 export function Transcript({ sessionId, working }: { sessionId: string | null; working?: boolean }) {
 	const { entries, loading, error } = useTranscript(sessionId)
+	const pending = useApp(s => s.pending)
+	const removePending = useApp(s => s.removePending)
+	const sendPrompt = useSendPrompt()
 	const scroller = useRef<HTMLDivElement>(null)
 	const atBottom = useRef(true)
+
+	// This session's optimistic prompts, hiding any still-`sending` one whose text
+	// has already arrived as a real user row — the confirmed bubble replaces it.
+	const delivered = new Set(entries.filter(e => e.role === 'user').map(e => e.text.trim()))
+	const mine = pending.filter(p => p.sessionId === sessionId)
+	const visiblePending = mine.filter(p => !(p.status === 'sending' && delivered.has(p.text.trim())))
+
+	// Purge confirmed optimistic bubbles from the store once the real row shows (the
+	// send hook also purges on a timer; this catches the fast path so nothing lingers).
+	useEffect(() => {
+		const seen = new Set(entries.filter(e => e.role === 'user').map(e => e.text.trim()))
+		for (const p of pending) {
+			if (p.sessionId === sessionId && p.status === 'sending' && seen.has(p.text.trim())) removePending(p.id)
+		}
+	}, [entries, pending, sessionId, removePending])
 
 	// Track whether the user is pinned to the bottom before new content lands.
 	const onScroll = () => {
@@ -17,11 +38,11 @@ export function Transcript({ sessionId, working }: { sessionId: string | null; w
 		atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
 	}
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: fire on new entries (and the working indicator toggling) to keep the view pinned
+	// biome-ignore lint/correctness/useExhaustiveDependencies: fire on new entries, a new optimistic bubble, or the working indicator toggling to keep the view pinned
 	useLayoutEffect(() => {
 		const el = scroller.current
 		if (el && atBottom.current) el.scrollTop = el.scrollHeight
-	}, [entries, working])
+	}, [entries, visiblePending.length, working])
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset scroll intent when switching sessions
 	useEffect(() => {
@@ -30,22 +51,66 @@ export function Transcript({ sessionId, working }: { sessionId: string | null; w
 
 	if (!sessionId) return <Empty>No active session in this workspace.</Empty>
 
+	const empty = entries.length === 0 && visiblePending.length === 0
+
 	return (
 		<div ref={scroller} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
-			{loading && entries.length === 0 ? (
+			{loading && empty ? (
 				<Spinner label="Loading transcript…" />
-			) : error && entries.length === 0 ? (
+			) : error && empty ? (
 				<Empty>{error}</Empty>
-			) : entries.length === 0 && !working ? (
+			) : empty && !working ? (
 				<Empty>No messages yet.</Empty>
 			) : (
 				<div className="flex min-w-0 flex-col gap-2.5">
 					{entries.map(e => (
 						<Entry key={`${e.rowid}-${e.id}`} e={e} />
 					))}
+					{visiblePending.map(p => (
+						<PendingEntry
+							key={p.id}
+							p={p}
+							onRetry={() => sendPrompt({ id: p.id, sessionId: p.sessionId, workspaceId: p.workspaceId, text: p.text })}
+							onDismiss={() => removePending(p.id)}
+						/>
+					))}
 					{working ? <WorkingIndicator /> : null}
 				</div>
 			)}
+		</div>
+	)
+}
+
+/** An optimistic user prompt: greyed while `sending`, or a red bubble with Retry/Dismiss on failure. */
+function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: () => void; onDismiss: () => void }) {
+	if (p.status === 'error') {
+		return (
+			<div className="flex flex-col items-end gap-1">
+				<Bubble className="max-w-[85%] border border-del/40 bg-accent-soft text-text">
+					<Markdown>{p.text}</Markdown>
+				</Bubble>
+				<div className="flex items-center gap-2 pr-1 text-[11px] text-del">
+					<AlertTriangle size={11} className="shrink-0" />
+					<span className="max-w-[55vw] truncate">{p.error || 'Didn’t send'}</span>
+					<button type="button" onClick={onRetry} className="font-semibold underline underline-offset-2">
+						Retry
+					</button>
+					<button type="button" onClick={onDismiss} className="text-faint underline underline-offset-2">
+						Dismiss
+					</button>
+				</div>
+			</div>
+		)
+	}
+	return (
+		<div className="flex flex-col items-end gap-1">
+			<Bubble className="max-w-[85%] bg-accent-soft text-text opacity-60">
+				<Markdown>{p.text}</Markdown>
+			</Bubble>
+			<span className="flex items-center gap-1 pr-1 text-[11px] text-faint">
+				<Loader2 size={11} className="animate-spin" />
+				Sending…
+			</span>
 		</div>
 	)
 }

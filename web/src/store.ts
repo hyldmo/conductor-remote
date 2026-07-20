@@ -16,6 +16,22 @@ export interface ViewPrefs {
 const VIEW_KEY = 'conductor-remote-view'
 const defaultView: ViewPrefs = { groupBy: 'status', repo: null, sortBy: 'updated', collapsed: [] }
 
+/**
+ * A prompt shown optimistically in the transcript before the relay confirms it.
+ * `sending` until the POST resolves; `error` if it failed (the relay's read-back
+ * found no matching row, or the request never reached it). Carries workspaceId so
+ * the in-chat Retry can re-send without the Composer.
+ */
+export interface PendingMessage {
+	id: string
+	sessionId: string
+	workspaceId: string
+	text: string
+	status: 'sending' | 'error'
+	error?: string
+	createdAt: number
+}
+
 function loadView(): ViewPrefs {
 	try {
 		return { ...defaultView, ...JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') }
@@ -35,12 +51,18 @@ interface AppState {
 	 * working immediately, bridging the gap until the status poll catches up.
 	 */
 	workingHints: Record<string, number>
+	/** Prompts awaiting confirmation, rendered as optimistic in-chat bubbles. */
+	pending: PendingMessage[]
 	/** Mobile workspace drawer. On md+ the sidebar is static and this is ignored. */
 	sidebarOpen: boolean
 	view: ViewPrefs
 	setToken: (token: string | null) => void
 	setOnline: (online: boolean) => void
 	markWorking: (sessionId: string) => void
+	/** Add (or reset, by id — used by Retry) an optimistic prompt in the `sending` state. */
+	addPending: (m: { id: string; sessionId: string; workspaceId: string; text: string }) => void
+	failPending: (id: string, error: string) => void
+	removePending: (id: string) => void
 	setSidebarOpen: (open: boolean) => void
 	setView: (patch: Partial<ViewPrefs>) => void
 	toggleGroup: (key: string) => void
@@ -56,6 +78,7 @@ export const useApp = create<AppState>((set, get) => {
 		online: true,
 		lastSyncAt: null,
 		workingHints: {},
+		pending: [],
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
 		view: loadView(),
@@ -67,6 +90,16 @@ export const useApp = create<AppState>((set, get) => {
 		},
 		setOnline: online => set(online ? { online, lastSyncAt: Date.now() } : { online }),
 		markWorking: sessionId => set({ workingHints: { ...get().workingHints, [sessionId]: Date.now() } }),
+		addPending: m =>
+			set({
+				pending: [
+					...get().pending.filter(p => p.id !== m.id),
+					{ ...m, status: 'sending', error: undefined, createdAt: Date.now() }
+				]
+			}),
+		failPending: (id, error) =>
+			set({ pending: get().pending.map(p => (p.id === id ? { ...p, status: 'error', error } : p)) }),
+		removePending: id => set({ pending: get().pending.filter(p => p.id !== id) }),
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
 		setView: patch => saveView({ ...get().view, ...patch }),
 		toggleGroup: key => {

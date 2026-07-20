@@ -52,16 +52,34 @@ export class ApiError extends Error {
 	}
 }
 
-async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
+// A sleeping Mac (relay + Tailscale suspended) answers nothing — no response, no
+// reset — so a bare fetch hangs forever and the poll never errors, leaving the UI
+// frozen on stale data with no offline banner. A timeout aborts the request so the
+// poll surfaces an error and the banner shows. Polls stay short (flip to offline
+// fast); mutating calls drive AppleScript + a delivery read-back on the relay, so
+// they get a much longer budget.
+const POLL_TIMEOUT_MS = 6000
+const ACTION_TIMEOUT_MS = 25000
+
+async function api<T>(path: string, opts: RequestInit = {}, timeoutMs = POLL_TIMEOUT_MS): Promise<T> {
 	const token = getToken()
-	const res = await fetch(path, {
-		...opts,
-		headers: {
-			authorization: `Bearer ${token ?? ''}`,
-			'content-type': 'application/json',
-			...opts.headers
-		}
-	})
+	let res: Response
+	try {
+		res = await fetch(path, {
+			...opts,
+			signal: AbortSignal.timeout(timeoutMs),
+			headers: {
+				authorization: `Bearer ${token ?? ''}`,
+				'content-type': 'application/json',
+				...opts.headers
+			}
+		})
+	} catch (err) {
+		// AbortSignal.timeout rejects with a TimeoutError DOMException — normalise it
+		// to an ApiError(status 0) so callers treat it as "offline", not a 401 logout.
+		if (err instanceof DOMException && err.name === 'TimeoutError') throw new ApiError('Request timed out', 0)
+		throw err
+	}
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as { error?: string }
 		throw new ApiError(body.error || `HTTP ${res.status}`, res.status)
@@ -78,7 +96,10 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 const objectUrlCache = new Map<string, Promise<string>>()
 async function fetchObjectUrl(path: string): Promise<string> {
 	const token = getToken()
-	const res = await fetch(path, { headers: { authorization: `Bearer ${token ?? ''}` } })
+	const res = await fetch(path, {
+		headers: { authorization: `Bearer ${token ?? ''}` },
+		signal: AbortSignal.timeout(POLL_TIMEOUT_MS)
+	})
 	if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status)
 	return URL.createObjectURL(await res.blob())
 }
@@ -101,14 +122,19 @@ export const client = {
 		api<MessagesResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${after}`),
 	diff: (workspaceId: string) => api<WorkspaceDiff>(`/api/workspaces/${encodeURIComponent(workspaceId)}/diff`),
 	sendPrompt: (sessionId: string, text: string, workspaceId: string) =>
-		api<SendResult>(`/api/sessions/${encodeURIComponent(sessionId)}/prompt`, {
-			method: 'POST',
-			body: JSON.stringify({ text, workspaceId })
-		}),
+		api<SendResult>(
+			`/api/sessions/${encodeURIComponent(sessionId)}/prompt`,
+			{ method: 'POST', body: JSON.stringify({ text, workspaceId }) },
+			ACTION_TIMEOUT_MS
+		),
 	/** Open a new chat ("New chat, same files" / Cmd+T) in a workspace. */
 	newChat: (workspaceId: string) =>
-		api<NewChatResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`, { method: 'POST' }),
+		api<NewChatResult>(
+			`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`,
+			{ method: 'POST' },
+			ACTION_TIMEOUT_MS
+		),
 	/** Merge the workspace's open PR — `gh pr merge`, like Conductor's Merge button. */
 	merge: (workspaceId: string) =>
-		api<MergeResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/merge`, { method: 'POST' })
+		api<MergeResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/merge`, { method: 'POST' }, ACTION_TIMEOUT_MS)
 }
