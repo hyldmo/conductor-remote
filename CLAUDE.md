@@ -49,12 +49,20 @@ Two asymmetric halves — keep them separate:
        launch — nudging with **`reopen`** (the dock-click event — `activate`
        alone won't recreate a closed window), and every `window 1` read stays
        behind `requireWindow`/`webArea` so a window closing mid-run says so in
-       words. **`hasWindow` swallows every error**, so "no window" is also what
-       a *permission* refusal looks like: `scriptingBlocked` runs first and
-       distinguishes the two grants — Automation (may we talk to System Events)
-       from Accessibility (`UI elements enabled`, which **a node upgrade
-       silently revokes**) — or the phone gets told to open a window that is
-       already open.
+       words. **"returned 0 windows" and "refused to answer" are different
+       facts**, and a boolean loses one: `windowProbe` returns
+       `{count, errNum, errText}` (count `-1` = refused) and everything else —
+       `hasWindow`, `windowFailure`, the fail-fast in `activateConductor` —
+       reads *that*, so a permission refusal can't reach the phone as "no open
+       window". The grants are matched on macOS's own error (`assistive access`
+       → Accessibility, which **a node upgrade silently revokes**; `-1743` →
+       Automation), never on `UI elements enabled` — that flag **can report
+       true for a process that isn't itself trusted**, which is why it was
+       dropped. An unrecognised refusal is reported verbatim with its number
+       rather than mapped to the nearest known cause. If `reopen` has drawn
+       nothing by ~3s the app isn't answering that event, so `openNewWindow`
+       clicks the app's own **exact** "New Window" item ("New Workspace" is a
+       different command — exact match or nothing).
     1. **Workspace** — press its sidebar row (an `AXLink` named
        "&lt;repo&gt; &lt;title&gt; +adds -dels"). No keystrokes at all, so nothing can be
        swallowed by a focused field. Only *rendered* rows exist in the AX tree, so

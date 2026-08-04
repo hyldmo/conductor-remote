@@ -109,32 +109,39 @@ on splitLines(s)
 	return parts
 end splitLines
 
-on hasWindow()
-	-- Also false when the process itself is gone: "tell process" errors there.
+on windowProbe()
+	-- One read, three outcomes, none of them guessed: {count, errNum, errText}.
+	-- count is -1 when macOS refused the read at all. Everything that wants to
+	-- know about windows goes through here, because "returned 0" and "refused to
+	-- answer" are different facts and only this handler still has both.
 	try
 		tell application "System Events" to tell process "Conductor"
-			return (count of windows) > 0
+			set winCount to (count of windows)
 		end tell
-	on error
-		return false
+		return {winCount, 0, ""}
+	on error errText number errNum
+		return {-1, errNum, errText}
 	end try
+end windowProbe
+
+on hasWindow()
+	-- Also false when the process is gone or macOS refused: callers that only
+	-- need a boolean keep getting one. windowFailure() is what tells them why.
+	return (item 1 of my windowProbe()) > 0
 end hasWindow
 
-on scriptingBlocked()
-	-- hasWindow() cannot tell "no window" from "macOS refused us" — it swallows
-	-- every error — so without this a missing permission reads as "no open
-	-- window" and sends the user off to open a window that is already open.
-	-- These are the two separate grants the write path needs: Automation (may we
-	-- talk to System Events at all) and Accessibility (may we read the UI tree).
-	-- Returns "" when both are in place.
-	try
-		tell application "System Events" to set axTrusted to (UI elements enabled)
-	on error errText number errNum
-		return "macOS blocked the relay from controlling the UI (" & errNum & ") - grant Automation permission to the node binary running the relay in System Settings > Privacy & Security > Automation. " & errText
-	end try
-	if not axTrusted then return "the relay is not trusted for Accessibility - grant it to the node binary running the relay in System Settings > Privacy & Security > Accessibility, then restart the relay (upgrading node silently revokes it)"
+on refusalReason(probe)
+	-- macOS's own words, matched on the error it actually returned rather than on
+	-- a capability flag we hope is accurate. "UI elements enabled" was the earlier
+	-- attempt at this and is not trustworthy — it can report true for a process
+	-- that is not itself trusted, and then the refusal reappears downstream as
+	-- "no open window". These strings are the two grants the write path needs.
+	set errNum to item 2 of probe
+	set errText to item 3 of probe
+	if errText contains "assistive access" then return "the relay is not trusted for Accessibility - grant it to the node binary running the relay in System Settings > Privacy & Security > Accessibility, then restart the relay (upgrading node silently revokes it). macOS said: " & errText
+	if errNum is -1743 or errText contains "Not authorized" then return "macOS blocked the relay from controlling the UI - grant Automation permission to the node binary running the relay in System Settings > Privacy & Security > Automation. macOS said: " & errText
 	return ""
-end scriptingBlocked
+end refusalReason
 
 on conductorRunning()
 	try
@@ -144,20 +151,51 @@ on conductorRunning()
 	end try
 end conductorRunning
 
-on requireWindow()
+on windowFailure()
+	-- "" when a window is there; otherwise why not, in words the phone can act on.
 	-- ASCII on purpose: these reach the phone, and osascript decodes -e by the
-	-- caller's locale, which a LaunchAgent doesn't set.
-	if my hasWindow() then return
-	set blocked to my scriptingBlocked()
-	if blocked is not "" then error blocked
-	if not (my conductorRunning()) then error "Conductor is not running - the relay started it, but it did not come up in time. Try again in a few seconds."
-	error "Conductor has no open window - open it on your Mac and try again"
+	-- caller's locale, which a LaunchAgent doesn't set. The last branch carries
+	-- the raw error number and text on purpose — an unrecognised refusal must
+	-- arrive as itself, not as the most plausible-sounding of the known causes.
+	set probe to my windowProbe()
+	set winCount to item 1 of probe
+	if winCount > 0 then return ""
+	if winCount is 0 then return "Conductor has no open window - open it on your Mac and try again"
+	set refusal to my refusalReason(probe)
+	if refusal is not "" then return refusal
+	if not (my conductorRunning()) then return "Conductor is not running - the relay started it, but it did not come up in time. Try again in a few seconds."
+	return "couldn't read Conductor's windows (" & (item 2 of probe) & "): " & (item 3 of probe)
+end windowFailure
+
+on requireWindow()
+	set reason to my windowFailure()
+	if reason is not "" then error reason
 end requireWindow
+
+on openNewWindow()
+	-- Last resort when "reopen" draws nothing: press the app's own New Window.
+	-- Exact match only — "New Workspace" is a different command and would create a
+	-- workspace nobody asked for — so an app without that item fails closed and
+	-- silent, leaving windowFailure() to report the honest "no open window".
+	try
+		tell application "System Events" to tell process "Conductor"
+			repeat with topMenu in (menu bar items of menu bar 1)
+				try
+					click (first menu item of menu 1 of topMenu whose name is "New Window")
+					return true
+				end try
+			end repeat
+		end tell
+	end try
+	return false
+end openNewWindow
 
 on waitForWindow(attempts)
 	-- "reopen" is the dock-click event — that is what recreates a closed window;
 	-- "activate" on its own does not. Nudge a few times across the wait: a cold
-	-- launch can reach "process exists" long before it draws anything.
+	-- launch can reach "process exists" long before it draws anything. If reopen
+	-- has drawn nothing by ~3s, the app isn't answering that event at all, so
+	-- escalate to its own menu item rather than repeating what already failed.
 	repeat with attempt from 1 to attempts
 		if my hasWindow() then return true
 		if attempt is 2 or attempt is 8 or attempt is 20 then
@@ -166,6 +204,7 @@ on waitForWindow(attempts)
 				tell application "Conductor" to activate
 			end try
 		end if
+		if attempt is 12 or attempt is 28 then my openNewWindow()
 		delay 0.25
 	end repeat
 	return false
@@ -178,11 +217,13 @@ on activateConductor()
 	-- handler happened to run first. So: launch-or-front it ("activate" starts it
 	-- when it isn't running), wait for a real window, then say what actually went
 	-- wrong in words the phone can act on.
-	-- Permissions first: a blocked relay reads as "no process, no window" from
-	-- every probe below, and waiting 9s to say the wrong thing helps nobody.
-	set blocked to my scriptingBlocked()
-	if blocked is not "" then error blocked
-	set wasRunning to my conductorRunning()
+	-- Permissions first: a refusal reads as "no process, no window" from every
+	-- probe below, and waiting out the patience budget to say the wrong thing
+	-- helps nobody. A refusal is the one failure launching can't fix.
+	set firstProbe to my windowProbe()
+	set refusal to my refusalReason(firstProbe)
+	if refusal is not "" then error refusal
+	set wasRunning to (item 1 of firstProbe) >= 0
 	try
 		tell application "Conductor" to activate
 	on error errText
