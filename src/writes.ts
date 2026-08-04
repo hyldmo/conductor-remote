@@ -120,32 +120,47 @@ on hasWindow()
 	end try
 end hasWindow
 
+on scriptingBlocked()
+	-- hasWindow() cannot tell "no window" from "macOS refused us" — it swallows
+	-- every error — so without this a missing permission reads as "no open
+	-- window" and sends the user off to open a window that is already open.
+	-- These are the two separate grants the write path needs: Automation (may we
+	-- talk to System Events at all) and Accessibility (may we read the UI tree).
+	-- Returns "" when both are in place.
+	try
+		tell application "System Events" to set axTrusted to (UI elements enabled)
+	on error errText number errNum
+		return "macOS blocked the relay from controlling the UI (" & errNum & ") - grant Automation permission to the node binary running the relay in System Settings > Privacy & Security > Automation. " & errText
+	end try
+	if not axTrusted then return "the relay is not trusted for Accessibility - grant it to the node binary running the relay in System Settings > Privacy & Security > Accessibility, then restart the relay (upgrading node silently revokes it)"
+	return ""
+end scriptingBlocked
+
+on conductorRunning()
+	try
+		tell application "System Events" to return (exists process "Conductor")
+	on error
+		return false
+	end try
+end conductorRunning
+
 on requireWindow()
-	-- ASCII on purpose: this one reaches the phone, and osascript decodes -e by the
+	-- ASCII on purpose: these reach the phone, and osascript decodes -e by the
 	-- caller's locale, which a LaunchAgent doesn't set.
-	if not (my hasWindow()) then error "Conductor has no open window - open it on your Mac and try again"
+	if my hasWindow() then return
+	set blocked to my scriptingBlocked()
+	if blocked is not "" then error blocked
+	if not (my conductorRunning()) then error "Conductor is not running - the relay started it, but it did not come up in time. Try again in a few seconds."
+	error "Conductor has no open window - open it on your Mac and try again"
 end requireWindow
 
-on activateConductor()
-	-- Conductor keeps running with every window closed (standard macOS: the red
-	-- button doesn't quit), and a cold launch needs a moment to build one. Both
-	-- look identical from here, and both used to surface as "Can't get window 1 of
-	-- process Conductor. Invalid index." from whichever handler happened to run
-	-- first. So wait for a real window, nudge twice, then say it in words the phone
-	-- can act on. "reopen" is the dock-click event — that is what recreates a
-	-- closed window; "activate" on its own does not.
-	try
-		tell application "Conductor" to activate
-	on error errText
-		error "couldn't bring Conductor to the front: " & errText
-	end try
-	delay 0.4
-	-- ~4s of patience: enough for a reopen to draw, short enough that the caller's
-	-- osascript timeout still has room for the send itself. A cold launch slower
-	-- than this fails with the message below, and the retry finds a warm app.
-	repeat with attempt from 1 to 16
-		if my hasWindow() then return
-		if attempt is 2 or attempt is 8 then
+on waitForWindow(attempts)
+	-- "reopen" is the dock-click event — that is what recreates a closed window;
+	-- "activate" on its own does not. Nudge a few times across the wait: a cold
+	-- launch can reach "process exists" long before it draws anything.
+	repeat with attempt from 1 to attempts
+		if my hasWindow() then return true
+		if attempt is 2 or attempt is 8 or attempt is 20 then
 			try
 				tell application "Conductor" to reopen
 				tell application "Conductor" to activate
@@ -153,6 +168,35 @@ on activateConductor()
 		end if
 		delay 0.25
 	end repeat
+	return false
+end waitForWindow
+
+on activateConductor()
+	-- Conductor keeps running with every window closed (standard macOS: the red
+	-- button doesn't quit), and it may not be running at all. Both used to surface
+	-- as "Can't get window 1 of process Conductor. Invalid index." from whichever
+	-- handler happened to run first. So: launch-or-front it ("activate" starts it
+	-- when it isn't running), wait for a real window, then say what actually went
+	-- wrong in words the phone can act on.
+	-- Permissions first: a blocked relay reads as "no process, no window" from
+	-- every probe below, and waiting 9s to say the wrong thing helps nobody.
+	set blocked to my scriptingBlocked()
+	if blocked is not "" then error blocked
+	set wasRunning to my conductorRunning()
+	try
+		tell application "Conductor" to activate
+	on error errText
+		error "couldn't bring Conductor to the front: " & errText
+	end try
+	delay 0.4
+	-- Patience sized to what we're waiting for. A running app only has to redraw a
+	-- window (~4s is plenty, and the caller's osascript timeout still needs room
+	-- for the send itself). A cold launch is a whole app start, so it gets ~9s —
+	-- still inside the 20s script budget once the send's own delays are counted.
+	-- Anything slower fails with the message above and finds a warm app on retry.
+	set patience to 16
+	if not wasRunning then set patience to 36
+	if my waitForWindow(patience) then return
 	my requireWindow()
 end activateConductor
 

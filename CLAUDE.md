@@ -41,12 +41,20 @@ Two asymmetric halves — keep them separate:
     targeting decision is a read of the live UI, and each one fails closed:
     0. **A window must exist first.** Every AX read is rooted at `window 1`, but
        Conductor keeps *running with all its windows closed* (the red button
-       doesn't quit) and a cold launch draws one late — both surfaced as
-       "Can't get window 1 … Invalid index." from whichever handler ran first.
-       So `activateConductor` activates, then waits ~4s for a real window,
-       nudging with **`reopen`** (the dock-click event — `activate` alone won't
-       recreate a closed window), and every `window 1` read stays behind
-       `requireWindow`/`webArea` so a window closing mid-run says so in words.
+       doesn't quit), it may not be running at all, and a cold launch draws one
+       late — all surfaced as "Can't get window 1 … Invalid index." from
+       whichever handler ran first. So `activateConductor` checks permissions,
+       then `activate`s (which **starts Conductor if it isn't running**), then
+       waits for a real window — ~4s if the app was already up, ~9s for a cold
+       launch — nudging with **`reopen`** (the dock-click event — `activate`
+       alone won't recreate a closed window), and every `window 1` read stays
+       behind `requireWindow`/`webArea` so a window closing mid-run says so in
+       words. **`hasWindow` swallows every error**, so "no window" is also what
+       a *permission* refusal looks like: `scriptingBlocked` runs first and
+       distinguishes the two grants — Automation (may we talk to System Events)
+       from Accessibility (`UI elements enabled`, which **a node upgrade
+       silently revokes**) — or the phone gets told to open a window that is
+       already open.
     1. **Workspace** — press its sidebar row (an `AXLink` named
        "&lt;repo&gt; &lt;title&gt; +adds -dels"). No keystrokes at all, so nothing can be
        swallowed by a focused field. Only *rendered* rows exist in the AX tree, so
