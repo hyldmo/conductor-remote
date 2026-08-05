@@ -1,6 +1,6 @@
 # Handover — continue here
 
-Snapshot for picking this up cold (last updated 2026-07-19). Read
+Snapshot for picking this up cold (last updated 2026-08-06). Read
 [README.md](./README.md) for usage and [FINDINGS.md](./FINDINGS.md) for the
 reverse-engineering that shaped the design.
 
@@ -29,6 +29,16 @@ A complete, installable **PWA** (React 19 · Vite 7 · Tailwind v4 ·
     over Conductor's dispatch socket. Socket + local auth + JSON-RPC protocol
     **validated with safe read RPCs**; a real `query` send is implemented but not
     auto-run (it would inject into a live agent). See FINDINGS ▸ Writes.
+- **Push notifications — done.** `src/notify.ts` polls `sessions.status` for
+  `working → idle` (a turn ended: finished / asked a question / hit a permission
+  prompt) and `→ error`, then Web Pushes the phone. Protocol (`src/webpush.ts`)
+  is VAPID + `aes128gcm` on `node:crypto` — no dependency added. Verified: the
+  encryption round-trips against a hand-written user-agent decryptor, the ES256
+  JWT verifies against the advertised key, and an end-to-end rig (a stand-in push
+  service + a stubbed `Reads`) confirmed one push per confirmed transition, none
+  for the baseline tick, and none for a status that flaps back inside the
+  confirmation window. Only the last hop — a real APNs/FCM subscription — is
+  untested from CI; the browser side needs a granted permission.
 
 ## Run
 
@@ -80,17 +90,21 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   merge.ts        merge the workspace's open PR via `gh pr merge` (mirrors Conductor's Merge button)
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in)
+  notify.ts       status-transition watcher + subscription store (~/…/conductor-remote/push.json, 0600)
+  webpush.ts      Web Push protocol: VAPID (ES256) + aes128gcm payloads, node:crypto only
   logbuf.ts       console capture (ring + stamped stdout) + log-file tail → GET /api/logs, token redacted
 web/              React PWA (Vite root)
   index.html      loads /self-heal.js synchronously (before the module bundle) so it can catch a dead shell
   src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
   src/app.tsx     routes (/ list, /w/:id session) + token gate; mounts ReloadPrompt above the gate
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll)
-  src/lib/        api client, types, format helpers, cn
-  src/store.ts    zustand: token + connection status
+  src/lib/        api client, types, format helpers, cn, push (permission/subscribe/reconcile)
+  src/store.ts    zustand: token + connection status + this device's push subscription
   src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, AgentBar, NewWorkspaceSheet, LogsSheet, ReloadPrompt, ui
+                  (ConnectSheet carries the Notifications switch + "send a test")
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see PWA-update note below)
+  push-sw.js      push / notificationclick handlers, pulled into the generated SW by workbox.importScripts
 scripts/dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status) + qr.ts (dep-free QR of the phone URL, printed by service.ts)
 dist/             built PWA (gitignored) — what the relay serves
 dist-node/        compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball

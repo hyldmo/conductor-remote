@@ -68,6 +68,15 @@ interface AppState {
 	 * the box has to show it there and then, not on the next remount.
 	 */
 	drafts: Record<string, string>
+	/**
+	 * This device's push subscription as the *relay* knows it. Reconciled once at the
+	 * app shell (`usePushSync`) rather than by the Connect sheet, because the whole
+	 * point is to repair a subscription the relay has lost — which has to happen on
+	 * every load, not only when someone opens the sheet to look at it.
+	 * `deviceId` is null when this device isn't subscribed; `devices` counts every
+	 * phone the relay will notify.
+	 */
+	push: { deviceId: string | null; devices: number }
 	/** Mobile workspace drawer. On md+ the sidebar is static and this is ignored. */
 	sidebarOpen: boolean
 	view: ViewPrefs
@@ -84,6 +93,7 @@ interface AppState {
 	stashDraft: (workspaceId: string, text: string) => void
 	/** Drop a draft a send just consumed, so a retried stash can't linger and be sent twice. */
 	clearDraftIfEqual: (workspaceId: string, text: string) => void
+	setPush: (push: { deviceId: string | null; devices: number }) => void
 	setSidebarOpen: (open: boolean) => void
 	setView: (patch: Partial<ViewPrefs>) => void
 	toggleGroup: (key: string) => void
@@ -102,6 +112,7 @@ export const useApp = create<AppState>((set, get) => {
 		workingHints: {},
 		pending: [],
 		drafts: loadDrafts(),
+		push: { deviceId: null, devices: 0 },
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
 		view: loadView(),
@@ -137,6 +148,7 @@ export const useApp = create<AppState>((set, get) => {
 		clearDraftIfEqual: (workspaceId, text) => {
 			if ((get().drafts[workspaceId] ?? '').trim() === text.trim()) get().setDraft(workspaceId, '')
 		},
+		setPush: push => set({ push }),
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
 		setView: patch => saveView({ ...get().view, ...patch }),
 		toggleGroup: key => {

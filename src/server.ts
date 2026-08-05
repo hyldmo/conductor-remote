@@ -19,6 +19,7 @@ import {
 	tailLogFile
 } from './logbuf.ts'
 import { mergePr } from './merge.ts'
+import { notifyDevice, pushConfig, startNotifier, subscribeDevice, unsubscribeDevice } from './notify.ts'
 import { attachPrStatus } from './pr.ts'
 import { Reads, type SessionRow, type Workspace } from './reads.ts'
 import { driftWarningLines, tailscaleBin } from './tailscale.ts'
@@ -283,6 +284,54 @@ const server = http.createServer(async (req, res) => {
 			})
 		}
 
+		// GET /api/push — the VAPID public key the phone subscribes with, plus who's already subscribed
+		if (req.method === 'GET' && pathname === '/api/push') {
+			return json(req, res, 200, pushConfig())
+		}
+
+		// POST /api/push/subscribe { subscription, label? } — register (or refresh) this device.
+		// Idempotent by endpoint: the app re-sends on every load, which is what heals a relay that
+		// lost its store, or a subscription the browser silently renewed.
+		if (req.method === 'POST' && pathname === '/api/push/subscribe') {
+			const body = JSON.parse((await readBody(req)) || '{}') as {
+				subscription?: { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
+				label?: string
+			}
+			const sub = body.subscription
+			if (!sub?.endpoint || !sub.keys?.p256dh || !sub.keys.auth) {
+				return json(req, res, 400, { error: 'need a subscription with endpoint and keys' })
+			}
+			// An endpoint is a URL we will POST to — never accept a non-HTTPS one.
+			if (!/^https:\/\//i.test(sub.endpoint)) return json(req, res, 400, { error: 'endpoint must be https' })
+			const registered = subscribeDevice(
+				{ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } },
+				(body.label ?? '').slice(0, 64)
+			)
+			return json(req, res, 200, { ok: true, ...registered })
+		}
+
+		// POST /api/push/unsubscribe { endpoint } — the phone turned notifications off
+		if (req.method === 'POST' && pathname === '/api/push/unsubscribe') {
+			const body = JSON.parse((await readBody(req)) || '{}') as { endpoint?: string }
+			if (!body.endpoint) return json(req, res, 400, { error: 'need the endpoint' })
+			return json(req, res, 200, { ok: unsubscribeDevice(body.endpoint), devices: pushConfig().devices })
+		}
+
+		// POST /api/push/test { id } — push to one device, so "is this actually wired up?" has an answer
+		if (req.method === 'POST' && pathname === '/api/push/test') {
+			const body = JSON.parse((await readBody(req)) || '{}') as { id?: string }
+			if (!body.id) return json(req, res, 400, { error: 'need the device id' })
+			const result = await notifyDevice(body.id, {
+				title: 'Conductor Remote',
+				body: 'Notifications are working. You’ll get one when an agent finishes.',
+				tag: 'test',
+				url: '/',
+				kind: 'test',
+				ts: Date.now()
+			})
+			return json(req, res, result.ok ? 200 : 502, result)
+		}
+
 		// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link
 		if (req.method === 'POST' && pathname === '/api/workspaces') {
 			const body = JSON.parse((await readBody(req)) || '{}') as { repo?: string; prompt?: string; send?: boolean }
@@ -506,4 +555,7 @@ server.listen(cfg.port, cfg.host, () => {
 	// Keep the phone's public URL reachable — re-registers Funnel when its ingress goes stale after a
 	// network change. No-ops unless managed + public (Funnel) posture (see funnel-watchdog.ts).
 	startFunnelWatchdog()
+	// Watch for turns ending and push them to subscribed phones. Idle (one small local
+	// query per tick) until a device subscribes; see notify.ts.
+	startNotifier(reads)
 })

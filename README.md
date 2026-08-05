@@ -65,9 +65,10 @@ across re-deploys.
  (React, installable)                 │
                                       ├─ reads:  node:sqlite ⟶ conductor.db   (workspaces, sessions, transcripts)
                                       ├─ reads:  git ⟶ each worktree           (diffs vs target branch)
-                                      └─ writes: Actuator ⟶ Conductor
-                                                 ├─ applescript (default): osascript ⟶ focused session
-                                                 └─ sidecar (opt-in):      unix socket ⟶ exact session
+                                      ├─ writes: Actuator ⟶ Conductor
+                                      │          ├─ applescript (default): osascript ⟶ focused session
+                                      │          └─ sidecar (opt-in):      unix socket ⟶ exact session
+                                      └─ push:   turn ended ⟶ Web Push ⟶ your lock screen
 ```
 
 - **Two halves.** A **Node relay** on the Mac (reads Conductor's state, drives
@@ -77,6 +78,9 @@ across re-deploys.
   git worktrees outlive UI changes.
 - **Writes are the one fragile nerve** and are isolated behind a swappable
   `Actuator` (`src/writes.ts`).
+- **Notifications ride the durable side.** The relay watches the same SQLite for
+  turns ending and sends a Web Push straight to the phone — no Conductor process
+  involved, and it works with the app closed.
 
 ## Stack
 
@@ -162,6 +166,8 @@ env. `EXPOSE`/`--expose` is documented under Install above.
 | `AUTO_UPDATE` | `--auto-update` | `auto` | Self-update mode: `auto` / `check` / `off` |
 | `CONDUCTOR_DB` | `--db` | `~/Library/Application Support/com.conductor.app/conductor.db` | State DB |
 | `CONDUCTOR_WORKSPACES` | `--workspaces` | `~/conductor/workspaces` | Worktree root |
+| `PUSH_NOTIFY` | — | `on` | `off` disables push notifications entirely |
+| `PUSH_SUBJECT` | — | the project's repo URL | VAPID `sub` (a `mailto:` or `https:` URL identifying the sender) |
 
 The token is auto-generated once and persisted, so the home-screen icon keeps
 working across restarts without any env var. To pin a specific secret (e.g. to
@@ -187,6 +193,33 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
     target `sessionId` over Conductor's dispatch socket — precise per-workspace
     targeting, no focus needed. Speaks a private, versioned IPC (see FINDINGS ▸
     Writes), so it's the more fragile of the two.
+- ✅ **Push notifications** when an agent finishes its turn or hits an error —
+  see below.
+
+## Notifications
+
+Turn them on from the **Connect sheet** (the QR button in the workspace list
+header) ▸ *Notifications*. The relay then pings that phone whenever an agent
+**ends a turn** — which covers finishing, asking you a question, and stopping at
+a permission prompt — or **errors**. The notification carries the workspace name,
+the repo, and the agent's last line; tapping it opens that workspace.
+
+Notifications arrive with the app closed. There's a *Send a test notification*
+link right under the switch to prove the path end to end.
+
+**On iPhone/iPad you must add the app to your Home Screen first** — iOS only
+exposes notifications to installed web apps, never to a Safari tab. The switch
+says so if you haven't. The connection also has to be `https://` (the Tailscale
+URL `yarn deploy` sets up, or `127.0.0.1` locally); a plain LAN IP is not a
+secure context and browsers refuse push there.
+
+Under the hood: standard Web Push (VAPID + `aes128gcm`), implemented directly on
+`node:crypto` so the package keeps its zero runtime dependencies. Subscriptions
+and the VAPID keypair live in
+`~/Library/Application Support/conductor-remote/push.json` (mode `0600`). The
+relay only ever POSTs to Apple's/Google's/Mozilla's push endpoint for the phones
+you subscribed; nothing else leaves the Mac. `PUSH_NOTIFY=off` disables the whole
+thing.
 
 ## Layout
 
@@ -200,10 +233,13 @@ src/                the Node relay (no build step)
   git.ts            workspace diff vs target branch (incl. untracked)
   sidecar.ts        Conductor sidecar IPC client (precise write path)
   writes.ts         Actuator interface + AppleScript (default) + Sidecar (opt-in)
+  notify.ts         watches session status for ended turns → push; subscription store
+  webpush.ts        Web Push (VAPID + aes128gcm) on node:crypto — no dependencies
   logbuf.ts         console capture + log-file tail behind /api/logs (token redacted)
 web/                the React PWA (Vite)
   index.html, src/  app shell, components, hooks, api client
 public/             icon.svg + PWA PNGs (repo-root so Conductor's icon lookup finds them)
+  push-sw.js        push / notification-click handlers, imported into the generated SW
 scripts/
   dev.ts            runs Vite + relay together
   gen-icons.ts      rasterizes icon.svg → PWA PNGs (sharp)

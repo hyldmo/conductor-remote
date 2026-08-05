@@ -72,6 +72,10 @@ export default defineConfig({
 				]
 			},
 			workbox: {
+				// Push + notification-click handlers. Workbox owns sw.js in generateSW mode, so this
+				// is the seam for adding listeners to it (see public/push-sw.js). The file is also
+				// precached, which is what makes an edit to it change sw.js and actually ship.
+				importScripts: ['/push-sw.js'],
 				navigateFallback: '/index.html',
 				// Never cache the token-gated API — it must always hit the live relay.
 				navigateFallbackDenylist: [/^\/api\//],

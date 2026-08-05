@@ -218,6 +218,37 @@ export interface LogsResponse {
 	entries: LogEntry[]
 }
 
+/** A phone subscribed to push notifications (mirrors `DeviceInfo` in src/notify.ts). */
+export interface PushDevice {
+	/** Hash of the push endpoint — how a device is addressed without exposing its push URL. */
+	id: string
+	label: string
+	createdAt: number
+	lastOkAt: number | null
+	lastError: string | null
+	failures: number
+}
+
+export interface PushConfig {
+	/** False when the relay was started with `PUSH_NOTIFY=off`. */
+	enabled: boolean
+	/** VAPID public key to subscribe with — stable for the life of the relay's store. */
+	publicKey: string
+	devices: PushDevice[]
+}
+
+export interface PushSubscribeResult {
+	ok: boolean
+	/** This device's id, for `POST /api/push/test`. */
+	id?: string
+	devices: PushDevice[]
+}
+
+export interface PushTestResult {
+	ok: boolean
+	error?: string
+}
+
 export type MergeMethod = 'squash' | 'merge' | 'rebase'
 
 /** Result of POST /api/workspaces/:id/merge — merges the branch's open PR via `gh`. */

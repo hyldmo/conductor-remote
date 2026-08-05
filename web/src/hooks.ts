@@ -1,9 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { ApiError, client } from './lib/api.ts'
 import type { ParkedPrompt } from './lib/firstPrompt.ts'
 import { clearFirstPrompt, listFirstPrompts, noteFirstPromptAttempt } from './lib/firstPrompt.ts'
+import type { PushSupport } from './lib/push.ts'
+import { currentSubscription, deviceLabel, pushSupport, subscribe, syncSubscription, toJson } from './lib/push.ts'
 import type { TranscriptEntry } from './lib/types.ts'
 import { useApp } from './store.ts'
 
@@ -434,6 +437,175 @@ export function useSendPrompt() {
 		},
 		[addPending, failPending, removePending, markWorking, clearDraftIfEqual, queryClient]
 	)
+}
+
+/** The relay's push config, shared by the shell's sync and the Connect sheet's toggle. */
+function usePushConfig(enabled: boolean) {
+	return useQuery({ queryKey: ['push'], queryFn: () => client.push(), enabled, staleTime: 30_000 })
+}
+
+/**
+ * Keep this device's subscription and the relay's copy of it in agreement.
+ *
+ * Mounted on the app shell, not on the Connect sheet: the failure it repairs —
+ * the relay no longer holding a subscription that the browser still has, so the
+ * toggle reads "on" while nothing is ever delivered — is invisible from the phone,
+ * and waiting for someone to open the sheet and look would mean it usually never
+ * gets repaired at all. The whole reconciliation lives in `syncSubscription`; this
+ * just runs it whenever the relay's public key appears or changes (a changed key
+ * *is* the signal that the relay lost its store).
+ */
+export function usePushSync(): void {
+	const [support] = useState(pushSupport)
+	const setPush = useApp(s => s.setPush)
+	const { data } = usePushConfig(support === 'ok')
+	const publicKey = data?.publicKey
+	useEffect(() => {
+		if (support !== 'ok' || !publicKey) return
+		let alive = true
+		void syncSubscription(publicKey)
+			.then(result => {
+				if (alive) setPush({ deviceId: result?.id ?? null, devices: result?.devices ?? 0 })
+			})
+			.catch(() => {
+				// A failed re-sync isn't worth surfacing: the toggle still reflects the browser's
+				// own state, and the next load (or focus refetch) tries again.
+			})
+		return () => {
+			alive = false
+		}
+	}, [support, publicKey, setPush])
+}
+
+export interface PushControls {
+	support: PushSupport
+	/** The browser's own permission state ('unsupported' where the API doesn't exist). */
+	permission: NotificationPermission | 'unsupported'
+	/** This device has a live subscription registered with the relay. */
+	enabled: boolean
+	/** The relay is running with notifications switched off entirely (`PUSH_NOTIFY=off`). */
+	relayDisabled: boolean
+	busy: boolean
+	error: string | null
+	/** How many phones this relay will notify, including this one. */
+	devices: number
+	enable: () => Promise<void>
+	disable: () => Promise<void>
+	test: () => Promise<void>
+}
+
+/**
+ * The Notifications switch. Reads the reconciled state `usePushSync` put in the
+ * store and owns only the three user actions.
+ *
+ * Turning them on has to happen inside the user's tap — `requestPermission()`
+ * needs that activation — so `enable` asks, subscribes and registers in one go
+ * rather than splitting the steps across effects.
+ */
+export function usePush(): PushControls {
+	const [support] = useState(pushSupport)
+	const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(() =>
+		'Notification' in window ? Notification.permission : 'unsupported'
+	)
+	const [busy, setBusy] = useState(false)
+	const [error, setError] = useState<string | null>(null)
+	const { deviceId, devices } = useApp(s => s.push)
+	const setPush = useApp(s => s.setPush)
+	const config = usePushConfig(support === 'ok')
+	const publicKey = config.data?.publicKey
+
+	const enable = useCallback(async () => {
+		setBusy(true)
+		setError(null)
+		try {
+			const permissionResult = await Notification.requestPermission()
+			setPermission(permissionResult)
+			if (permissionResult !== 'granted') {
+				setError(
+					permissionResult === 'denied'
+						? 'Notifications are blocked for this app — allow them in your device settings, then try again.'
+						: 'Notification permission wasn’t granted.'
+				)
+				return
+			}
+			const key = publicKey ?? (await client.push()).publicKey
+			const sub = await subscribe(key)
+			const result = await client.pushSubscribe(toJson(sub), deviceLabel())
+			setPush({ deviceId: result.id ?? null, devices: result.devices.length })
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err))
+		} finally {
+			setBusy(false)
+		}
+	}, [publicKey, setPush])
+
+	const disable = useCallback(async () => {
+		setBusy(true)
+		setError(null)
+		try {
+			const sub = await currentSubscription()
+			let remaining = 0
+			if (sub) {
+				// Tell the relay first so it stops pushing even if the local unsubscribe fails;
+				// if this call is the one that fails, the next push 410s and prunes it anyway.
+				const result = await client.pushUnsubscribe(sub.endpoint).catch(() => null)
+				remaining = result?.devices.length ?? 0
+				await sub.unsubscribe()
+			}
+			setPush({ deviceId: null, devices: remaining })
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err))
+		} finally {
+			setBusy(false)
+		}
+	}, [setPush])
+
+	const test = useCallback(async () => {
+		if (!deviceId) return
+		setBusy(true)
+		setError(null)
+		try {
+			const result = await client.pushTest(deviceId)
+			if (!result.ok) setError(result.error ?? 'The push service rejected it.')
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err))
+		} finally {
+			setBusy(false)
+		}
+	}, [deviceId])
+
+	return {
+		support,
+		permission,
+		enabled: !!deviceId,
+		relayDisabled: config.data?.enabled === false,
+		busy,
+		error,
+		devices,
+		enable,
+		disable,
+		test
+	}
+}
+
+/**
+ * Route a notification tap. The service worker focuses the open app and posts the
+ * target instead of navigating it (see public/push-sw.js) — a real navigation
+ * would remount the token-gated SPA and drop whatever was half-typed.
+ */
+export function usePushRouting(): void {
+	const navigate = useNavigate()
+	useEffect(() => {
+		if (!('serviceWorker' in navigator)) return
+		const onMessage = (event: MessageEvent) => {
+			const data = event.data as { type?: string; url?: string } | null
+			if (data?.type === 'push-navigate' && typeof data.url === 'string' && data.url.startsWith('/')) {
+				navigate(data.url)
+			}
+		}
+		navigator.serviceWorker.addEventListener('message', onMessage)
+		return () => navigator.serviceWorker.removeEventListener('message', onMessage)
+	}, [navigate])
 }
 
 /** Sends spent on a parked first prompt before it is handed back to the composer. */

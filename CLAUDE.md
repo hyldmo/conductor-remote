@@ -136,6 +136,32 @@ Two asymmetric halves — keep them separate:
     `query` send injects a real prompt into a running agent; never auto-run it to
     "test."** Since `applescript` is now precise, sidecar buys nothing today.
 
+- **Notifications are a read that pushes** — the cheap third shape, on the durable
+  side of the split. `src/notify.ts` polls the same read-only SQLite for
+  `sessions.status` transitions and POSTs a Web Push message; no Conductor
+  process, no AX, no window. **`working → idle` is the whole trigger** — it is
+  what "done", "asked you a question" and "waiting on a permission prompt" all
+  look like, because each ends the turn — plus `→ error`. Don't hunt for a
+  finer-grained signal: the schema has no permission-request table (checked), and
+  `status` only ever holds `working`/`idle`/`error`. Two invariants keep it from
+  being a nuisance: a transition must **survive one more tick** before it fires
+  (a queued prompt restarting the turn would otherwise buzz for nothing), and the
+  first tick after a device subscribes is a **baseline, not a broadcast** (else
+  enabling it fires once per already-idle workspace). Web Push is written out of
+  `node:crypto` in `src/webpush.ts` (VAPID ES256 + `aes128gcm`) to keep the
+  tarball's **zero runtime deps** — the traps there are that ES256 needs raw
+  `r||s` (`dsaEncoding: 'ieee-p1363'`, not Node's default DER) and that **the
+  VAPID keypair must never be regenerated behind a live subscription**, since
+  `applicationServerKey` is baked in at subscribe time and a re-keyed relay is
+  rejected forever after — hence the persisted `push.json` and the client-side
+  `matchesKey` re-subscribe. The phone re-POSTs its subscription on **every app
+  load** from the shell (`hooks.ts` ▸ `usePushSync`, not the Connect sheet):
+  a subscription the relay has lost still looks enabled from the phone, so
+  repairing it can't wait for someone to open a sheet and look. The push handlers
+  live in `public/push-sw.js` (plain JS, pulled into the Workbox-generated worker
+  via `workbox.importScripts`) and **must always show a notification** — iOS drops
+  the subscription for a silent push.
+
 `sessions.id == claude_session_id` — Conductor is a GUI over Claude Code sessions.
 
 ## Commands

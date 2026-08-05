@@ -64,6 +64,19 @@ export interface SessionRow {
 /** GitHub PR state of a workspace's branch, attached best-effort by src/pr.ts. */
 export type PrStatus = 'merged' | 'draft' | 'conflicts' | 'mergeable'
 
+/** One chat's live status, with enough context to name it in a notification (see src/notify.ts). */
+export interface SessionState {
+	sessionId: string
+	workspaceId: string
+	/** 'working' | 'idle' | 'error' — Conductor's own live agent status. */
+	status: string | null
+	/** The sidebar title of the owning workspace. */
+	workspaceTitle: string
+	repoName: string | null
+	/** Chat tab title, when the workspace has more than one. */
+	sessionTitle: string | null
+}
+
 export interface Workspace extends WorkspaceRow {
 	/** Absolute path to the git worktree on disk, or null if it can't be resolved. */
 	worktree: string | null
@@ -79,6 +92,27 @@ export interface Workspace extends WorkspaceRow {
 }
 
 const worktreeCache = new Map<string, string | null>()
+
+/**
+ * Conductor's sidebar title for a workspace: manual name → PR title → humanized
+ * branch → worktree codename → id. Deliberately a second copy of the web's
+ * `workspaceLabel` (web/src/lib/format.ts, where the precedence is documented) —
+ * the relay can't import from the Vite root, and a notification that names a
+ * workspace differently from the list it came from is worse than the duplication.
+ */
+export function workspaceTitle(w: {
+	id: string
+	workspace_name: string | null
+	pr_title: string | null
+	branch: string | null
+	directory_name: string | null
+}): string {
+	const branch = w.branch ?? ''
+	const slug = branch.includes('/') ? branch.slice(branch.indexOf('/') + 1) : branch
+	const words = slug.replace(/[-_]/g, ' ').trim()
+	const humanized = words ? words[0].toUpperCase() + words.slice(1) : ''
+	return w.workspace_name || w.pr_title || humanized || w.directory_name || w.id.slice(0, 8)
+}
 
 /**
  * Resolve a workspace's worktree path. Conductor lays worktrees out as
@@ -204,6 +238,79 @@ export class Reads {
 			 ORDER BY created_at ASC`,
 			[workspaceId]
 		)
+	}
+
+	/**
+	 * Every live chat's status, across all workspaces — what the notifier watches for
+	 * transitions. Unlike `listWorkspaces` this is not limited to the *active* session:
+	 * a background tab finishing its turn is exactly the thing you want told about.
+	 * `setting_up` workspaces are excluded; their chat isn't the user's turn yet.
+	 */
+	listSessionStates(): SessionState[] {
+		const rows = this.db.query<{
+			id: string
+			status: string | null
+			title: string | null
+			workspace_id: string
+			workspace_name: string | null
+			pr_title: string | null
+			branch: string | null
+			directory_name: string | null
+			repo_name: string | null
+			tab_count: number
+		}>(
+			`SELECT s.id, s.status, s.title, s.workspace_id,
+			        w.workspace_name, w.pr_title, w.branch, w.directory_name,
+			        r.name AS repo_name,
+			        (SELECT COUNT(*) FROM sessions t WHERE t.workspace_id = w.id AND COALESCE(t.is_hidden, 0) = 0) AS tab_count
+			 FROM sessions s
+			 JOIN workspaces w ON w.id = s.workspace_id
+			 LEFT JOIN repos r ON r.id = w.repository_id
+			 WHERE w.state = 'ready' AND COALESCE(s.is_hidden, 0) = 0`
+		)
+		return rows.map(r => ({
+			sessionId: r.id,
+			workspaceId: r.workspace_id,
+			status: r.status,
+			workspaceTitle: workspaceTitle({ ...r, id: r.workspace_id }),
+			repoName: r.repo_name,
+			// A single-tab workspace's chat title is just the workspace again — only name it when it disambiguates.
+			sessionTitle: r.tab_count > 1 ? r.title : null
+		}))
+	}
+
+	/**
+	 * The last thing the agent actually said in a chat — the body of a "finished"
+	 * notification. Reads the tail rather than the whole transcript, and runs the
+	 * same parser the phone renders with, so what lands on the lock screen is the
+	 * text that will be at the bottom of the chat when it's opened.
+	 */
+	lastAssistantText(sessionId: string): string | null {
+		const rows = this.db.query<{
+			rowid: number
+			id: string
+			role: string | null
+			content: string | null
+			full_message: string | null
+			created_at: string
+			sent_at: string | null
+			queue_order: number | null
+		}>(
+			`SELECT rowid, id, role, content, full_message, created_at, sent_at, queue_order
+			 FROM session_messages
+			 WHERE session_id = ?
+			 ORDER BY rowid DESC
+			 LIMIT 20`,
+			[sessionId]
+		)
+		// Rows come back newest-first; the last assistant text is the first one found.
+		for (const row of rows) {
+			const entries = parseMessage(row, null)
+			for (let i = entries.length - 1; i >= 0; i--) {
+				if (entries[i].role === 'assistant' && entries[i].text.trim()) return entries[i].text.trim()
+			}
+		}
+		return null
 	}
 
 	/** Session → worktree path, cached: it's stable for a session's lifetime and polled every tick. */

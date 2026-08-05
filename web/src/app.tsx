@@ -4,7 +4,13 @@ import { ReloadPrompt } from './components/ReloadPrompt.tsx'
 import { SessionView } from './components/SessionView.tsx'
 import { TokenGate } from './components/TokenGate.tsx'
 import { WorkspaceList } from './components/WorkspaceList.tsx'
-import { useEdgeSwipeDrawer, useFirstPromptDelivery, useVisualViewportHeight } from './hooks.ts'
+import {
+	useEdgeSwipeDrawer,
+	useFirstPromptDelivery,
+	usePushRouting,
+	usePushSync,
+	useVisualViewportHeight
+} from './hooks.ts'
 import { cn } from './lib/cn.ts'
 import { useApp } from './store.ts'
 
@@ -45,6 +51,13 @@ function Shell() {
 	// Shell-level, not session-level: a workspace created from the phone finishes
 	// setting up long after the user has looked away from it.
 	useFirstPromptDelivery()
+	// A tapped notification arrives as a message from the service worker, on whichever
+	// screen the app happens to be showing — so the listener lives with the router.
+	usePushRouting()
+	// Re-register this device's push subscription with the relay on every load. Also
+	// shell-level: a subscription the relay has lost looks fine from here, so waiting
+	// for someone to open the Connect sheet would mean it's usually never repaired.
+	usePushSync()
 	return (
 		<div className="flex h-full overflow-hidden">
 			{sidebarOpen ? (
