@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
 import { loadDrafts, writeDraft } from './lib/draft.ts'
+import { loadReadMarks, type ReadMarks, writeReadMarks } from './lib/read.ts'
 import type { UpdateStatus } from './lib/types.ts'
 
 /** Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by popover. */
@@ -63,6 +64,12 @@ interface AppState {
 	pending: PendingMessage[]
 	/** Unsent composer text per workspace, mirrored to localStorage (see lib/draft.ts). */
 	drafts: Record<string, string>
+	/**
+	 * Per-chat "seen up to here", mirrored to localStorage (see lib/read.ts). Conductor's
+	 * own unread flag can only be cleared from the Mac, so this is what stops a chat read
+	 * on the phone from staying unread forever.
+	 */
+	readMarks: ReadMarks
 	/** Mobile workspace drawer. On md+ the sidebar is static and this is ignored. */
 	sidebarOpen: boolean
 	view: ViewPrefs
@@ -75,6 +82,8 @@ interface AppState {
 	failPending: (id: string, error: string) => void
 	removePending: (id: string) => void
 	setDraft: (workspaceId: string, text: string) => void
+	/** Note a chat as seen up to `at` (its `updated_at`); older marks never overwrite newer ones. */
+	markRead: (sessionId: string, at: string) => void
 	setSidebarOpen: (open: boolean) => void
 	setView: (patch: Partial<ViewPrefs>) => void
 	toggleGroup: (key: string) => void
@@ -93,6 +102,7 @@ export const useApp = create<AppState>((set, get) => {
 		workingHints: {},
 		pending: [],
 		drafts: loadDrafts(),
+		readMarks: loadReadMarks(),
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
 		view: loadView(),
@@ -118,6 +128,12 @@ export const useApp = create<AppState>((set, get) => {
 		setDraft: (workspaceId, text) => {
 			writeDraft(workspaceId, text)
 			set({ drafts: { ...get().drafts, [workspaceId]: text } })
+		},
+		markRead: (sessionId, at) => {
+			// The session poll re-fires this every couple of seconds while a chat is open;
+			// bail unless it actually moves the mark, or every tick re-renders the sidebar.
+			if ((get().readMarks[sessionId] ?? '') >= at) return
+			set({ readMarks: writeReadMarks({ ...get().readMarks, [sessionId]: at }) })
 		},
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
 		setView: patch => saveView({ ...get().view, ...patch }),

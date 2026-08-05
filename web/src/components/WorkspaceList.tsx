@@ -12,6 +12,7 @@ import {
 	workspaceStatus,
 	workspaceStatusLabel
 } from '../lib/format.ts'
+import { unreadCount } from '../lib/read.ts'
 import type { Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
 import { ConnectSheet } from './ConnectSheet.tsx'
@@ -63,6 +64,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const navigate = useNavigate()
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const view = useApp(s => s.view)
+	const readMarks = useApp(s => s.readMarks)
 	const toggleGroup = useApp(s => s.toggleGroup)
 	const [controlsOpen, setControlsOpen] = useState(false)
 	const [connectOpen, setConnectOpen] = useState(false)
@@ -169,20 +171,23 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 								) : null}
 								{collapsed ? null : (
 									<ul className="flex flex-col gap-2 pb-2">
-										{g.items.map(w => (
-											<li key={w.id} className="fade-in">
-												<button
-													type="button"
-													className={cn(
-														'card w-full',
-														w.id === selectedId ? 'border-accent/50 bg-surface-2' : w.unread && 'border-l-accent'
-													)}
-													onClick={() => open(w.id)}
-												>
-													<WorkspaceCard w={w} selected={w.id === selectedId} />
-												</button>
-											</li>
-										))}
+										{g.items.map(w => {
+											const unread = unreadCount(w, readMarks)
+											return (
+												<li key={w.id} className="fade-in">
+													<button
+														type="button"
+														className={cn(
+															'card w-full',
+															w.id === selectedId ? 'border-accent/50 bg-surface-2' : unread && 'border-l-accent'
+														)}
+														onClick={() => open(w.id)}
+													>
+														<WorkspaceCard w={w} unread={unread} selected={w.id === selectedId} />
+													</button>
+												</li>
+											)
+										})}
 									</ul>
 								)}
 							</section>
@@ -300,7 +305,7 @@ function ViewSelect({
 	)
 }
 
-function WorkspaceCard({ w, selected }: { w: Workspace; selected: boolean }) {
+function WorkspaceCard({ w, unread, selected }: { w: Workspace; unread: number; selected: boolean }) {
 	const model = shortModel(w.model)
 	const ctx = w.context_used_percent
 	return (
@@ -315,8 +320,8 @@ function WorkspaceCard({ w, selected }: { w: Workspace; selected: boolean }) {
 					<span
 						className={cn(
 							'min-w-0 flex-1 truncate',
-							w.unread ? 'font-bold' : 'font-medium',
-							w.unread || selected ? 'text-text' : 'text-muted'
+							unread ? 'font-bold' : 'font-medium',
+							unread || selected ? 'text-text' : 'text-muted'
 						)}
 					>
 						{workspaceLabel(w)}
@@ -327,7 +332,9 @@ function WorkspaceCard({ w, selected }: { w: Workspace; selected: boolean }) {
 						</span>
 					) : null}
 					{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
-					{w.unread ? <Badge>{w.unread}</Badge> : null}
+					{/* Unread is a per-chat flag, so one unread chat has no number worth printing — a
+					    dot says it; the count only appears once several chats here have news. */}
+					{unread > 1 ? <Badge>{unread}</Badge> : unread ? <span className="dot size-2 bg-accent" /> : null}
 				</div>
 				{/* Row 1: repo + branch (branch flexes to fill and truncates). Row 2: model · ctx · time. */}
 				<div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted">

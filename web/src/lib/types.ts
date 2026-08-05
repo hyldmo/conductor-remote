@@ -14,6 +14,16 @@ export type RepoIcon =
 /** GitHub PR state of the branch (see src/pr.ts) — drives the workspace dot colour. */
 export type PrStatus = 'merged' | 'draft' | 'conflicts' | 'mergeable'
 
+/**
+ * A chat Conductor flags unread, and the activity that flagged it (`at` is the
+ * session's `updated_at`). Compare `at` only against a mark taken from the same
+ * column — see lib/read.ts.
+ */
+export interface UnreadSession {
+	id: string
+	at: string
+}
+
 export interface Workspace {
 	id: string
 	directory_name: string | null
@@ -27,7 +37,8 @@ export interface Workspace {
 	state: string | null
 	created_at: string
 	updated_at: string
-	unread: number | null
+	/** Chats with news Conductor hasn't seen you read — usually empty. */
+	unread_sessions: UnreadSession[]
 	pinned_at: string | null
 	active_session_id: string | null
 	intended_target_branch: string | null

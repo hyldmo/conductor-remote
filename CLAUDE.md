@@ -14,6 +14,20 @@ Two asymmetric halves — keep them separate:
   `git` in each worktree. No Conductor process is involved, no injection. An app
   update can rename every UI string and reads keep working. Never add a write to
   the DB handle in `db.ts`.
+  - **Unread is the one read that needs a second source.** `workspaces.unread` is
+    a **dead column** — Conductor still declares it (its migration still says
+    "when 1, the workspace should be marked visually as unread") but writes 0 on
+    every row (0 of 1691 here), which is why the sidebar's bold/badge never once
+    fired. The live flag is per chat, `sessions.unread_count`, and it *is* a flag
+    — only ever 0 or 1 — so what the sidebar counts is **unread chats**, not the
+    column's value, and one of them draws a dot rather than the meaningless
+    number "1". Conductor clears it when you open the workspace **on the Mac**,
+    and this relay is read-only, so a chat read on the phone would shout forever:
+    the PWA keeps its own marks (`web/src/lib/read.ts`) — the session's own
+    `updated_at` at the moment it was on screen, never our clock, because it is
+    only ever compared against that same column. The session view marks *only*
+    the chat on screen (a sibling tab's badge isn't ours to clear) and only while
+    the page is visible.
 - **Creating a workspace is the one write that isn't fragile.** Conductor's
   documented deep links (conductor.build/docs/reference/deep-links) are
   `conductor://prompt=<enc>[&path=<repo root>]`, `…linear_id=…` and

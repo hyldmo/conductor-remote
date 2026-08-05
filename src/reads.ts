@@ -18,7 +18,6 @@ export interface WorkspaceRow {
 	state: string | null
 	created_at: string
 	updated_at: string
-	unread: number | null
 	pinned_at: string | null
 	active_session_id: string | null
 	intended_target_branch: string | null
@@ -31,6 +30,19 @@ export interface WorkspaceRow {
 	session_title: string | null
 	model: string | null
 	context_used_percent: number | null
+}
+
+/**
+ * A chat Conductor has flagged unread, with the activity that flagged it.
+ *
+ * `at` is the session's own `updated_at`, which tracks its last message. The phone
+ * only ever compares it against a mark taken from this same column, so SQLite's
+ * `YYYY-MM-DD HH:MM:SS` (UTC, and lexically ordered) needs no parsing — don't
+ * reformat it into an ISO string that no longer matches what `listSessions` serves.
+ */
+export interface UnreadSession {
+	id: string
+	at: string
 }
 
 /** A repo Conductor can create workspaces in (see `Reads.listRepos`). */
@@ -66,6 +78,8 @@ export interface SessionRow {
 export type PrStatus = 'merged' | 'draft' | 'conflicts' | 'mergeable'
 
 export interface Workspace extends WorkspaceRow {
+	/** Chats in this workspace Conductor flags unread — empty for most (see `unreadSessions`). */
+	unread_sessions: UnreadSession[]
 	/** Absolute path to the git worktree on disk, or null if it can't be resolved. */
 	worktree: string | null
 	baseBranch: string
@@ -135,10 +149,34 @@ export class Reads {
 		this.workspacesRoot = workspacesRoot
 	}
 
+	/**
+	 * Unread chats, grouped by workspace. `workspaces.unread` is a **dead column** —
+	 * Conductor still declares it (and its migration still says "when 1, the workspace
+	 * should be marked visually as unread") but writes 0 on every row: 0 of 1691 are
+	 * non-zero on this Mac, which is why the sidebar's bold/badge never once fired.
+	 * The live flag is per session, and it *is* a flag — `unread_count` is only ever
+	 * 0 or 1 — so what's worth counting is how many chats have news, not the column.
+	 */
+	private unreadSessions(): Map<string, UnreadSession[]> {
+		const rows = this.db.query<{ workspace_id: string | null; id: string; updated_at: string }>(
+			`SELECT workspace_id, id, updated_at
+			 FROM sessions
+			 WHERE COALESCE(unread_count, 0) > 0 AND COALESCE(is_hidden, 0) = 0`
+		)
+		const byWorkspace = new Map<string, UnreadSession[]>()
+		for (const r of rows) {
+			if (!r.workspace_id) continue
+			const list = byWorkspace.get(r.workspace_id)
+			if (list) list.push({ id: r.id, at: r.updated_at })
+			else byWorkspace.set(r.workspace_id, [{ id: r.id, at: r.updated_at }])
+		}
+		return byWorkspace
+	}
+
 	listWorkspaces(): Workspace[] {
 		const rows = this.db.query<WorkspaceRow>(
 			`SELECT w.id, w.directory_name, w.workspace_name, w.branch, w.pr_title, w.derived_status, w.manual_status,
-			        w.state, w.created_at, w.updated_at, w.unread, w.pinned_at, w.active_session_id, w.intended_target_branch,
+			        w.state, w.created_at, w.updated_at, w.pinned_at, w.active_session_id, w.intended_target_branch,
 			        r.name AS repo_name, r.root_path AS repo_root, r.icon AS repo_icon,
 			        r.remote_url AS remote_url, r.default_branch AS default_branch,
 			        s.status AS session_status, s.title AS session_title, s.model AS model,
@@ -149,8 +187,10 @@ export class Reads {
 			 WHERE w.state IN ('ready', 'setting_up')
 			 ORDER BY (w.pinned_at IS NULL), w.updated_at DESC`
 		)
+		const unread = this.unreadSessions()
 		return rows.map(r => ({
 			...r,
+			unread_sessions: unread.get(r.id) ?? [],
 			worktree: resolveWorktree(this.workspacesRoot, r.repo_name, r.directory_name, r.branch, r.repo_root),
 			baseBranch: r.intended_target_branch || r.default_branch || 'main',
 			icon: describeRepoIcon({ icon: r.repo_icon, repoRoot: r.repo_root, remoteUrl: r.remote_url })

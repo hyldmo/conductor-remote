@@ -174,7 +174,9 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 ## What works today
 
 - ✅ Live list of active workspaces with agent status (working / idle / done),
-  repo, branch, model, context %, unread badge.
+  repo, branch, model, context %, and an unread mark on any workspace whose chats
+  finished something you haven't looked at — reading it *on the phone* clears it,
+  which Conductor itself only does when you open the workspace on the Mac.
 - ✅ Live transcript per session (assistant text, tool calls, queued messages),
   incremental polling.
 - ✅ Diff vs the workspace's target branch (file list + colorized patch,

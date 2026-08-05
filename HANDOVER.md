@@ -87,7 +87,7 @@ web/              React PWA (Vite root)
   src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
   src/app.tsx     routes (/ list, /w/:id session) + token gate; mounts ReloadPrompt above the gate
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll)
-  src/lib/        api client, types, format helpers, cn
+  src/lib/        api client, types, format helpers, cn, read marks (unread the phone has seen)
   src/store.ts    zustand: token + connection status
   src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, AgentBar, NewWorkspaceSheet, LogsSheet, ReloadPrompt, ui
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
