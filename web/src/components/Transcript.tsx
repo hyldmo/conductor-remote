@@ -77,9 +77,9 @@ export function Transcript({ sessionId, working }: { sessionId: string | null; w
 				<Empty>No messages yet.</Empty>
 			) : (
 				<div className="flex min-w-0 flex-col gap-2.5">
-					{entries.map(e => (
-						<Entry key={`${e.rowid}-${e.id}`} e={e} />
-					))}
+					{groupSteps(entries).map(row =>
+						row.kind === 'steps' ? <StepGroup key={row.key} entries={row.entries} /> : <Entry key={row.key} e={row.e} />
+					)}
 					{visiblePending.map(p => (
 						<PendingEntry
 							key={p.id}
@@ -92,6 +92,67 @@ export function Transcript({ sessionId, working }: { sessionId: string | null; w
 				</div>
 			)}
 		</div>
+	)
+}
+
+type Row =
+	| { kind: 'entry'; key: string; e: TranscriptEntry }
+	| { kind: 'steps'; key: string; entries: TranscriptEntry[] }
+
+const rowKey = (e: TranscriptEntry) => `${e.rowid}-${e.id}`
+
+/**
+ * Fold each run of the agent's own work (thinking + tool calls) between two
+ * spoken messages into one collapsible group — a turn is mostly plumbing, and on
+ * a phone that plumbing buries the prose. A run of one stays inline: wrapping a
+ * single row in a disclosure hides it without saving anything.
+ */
+function groupSteps(entries: TranscriptEntry[]): Row[] {
+	const rows: Row[] = []
+	let run: TranscriptEntry[] = []
+	const flush = () => {
+		if (run.length > 1) rows.push({ kind: 'steps', key: `steps-${rowKey(run[0])}`, entries: run })
+		else for (const e of run) rows.push({ kind: 'entry', key: rowKey(e), e })
+		run = []
+	}
+	for (const e of entries) {
+		if (e.role === 'tool' || e.role === 'thinking') {
+			run.push(e)
+			continue
+		}
+		flush()
+		rows.push({ kind: 'entry', key: rowKey(e), e })
+	}
+	flush()
+	return rows
+}
+
+/**
+ * The collapsed run of steps. Closed by default, but the header carries the last
+ * step's label — which keeps updating while the agent works — so the group reads
+ * as live activity without being opened, and any tool failure inside is counted
+ * on the header rather than hidden behind it.
+ */
+function StepGroup({ entries }: { entries: TranscriptEntry[] }) {
+	const failed = entries.filter(e => e.error).length
+	const last = entries[entries.length - 1]
+	const lastLabel = last.role === 'thinking' ? 'Thinking' : last.text
+	return (
+		<details className="group/steps min-w-0 overflow-hidden rounded-xl border border-border-soft bg-surface/40">
+			<summary className="flex cursor-pointer select-none list-none items-baseline gap-2 overflow-hidden whitespace-nowrap px-3 py-1.5 [&::-webkit-details-marker]:hidden">
+				<span className="shrink-0 font-mono text-[11px] text-faint transition-transform group-open/steps:rotate-90">
+					▸
+				</span>
+				<span className="shrink-0 text-[12.5px] text-muted">{entries.length} steps</span>
+				<span className="min-w-0 flex-1 truncate text-[11px] text-faint group-open/steps:invisible">{lastLabel}</span>
+				{failed ? <span className="shrink-0 text-[11px] text-del">{failed} failed</span> : null}
+			</summary>
+			<div className="flex min-w-0 flex-col gap-2.5 border-t border-border-soft px-2 py-2.5">
+				{entries.map(e => (
+					<Entry key={rowKey(e)} e={e} />
+				))}
+			</div>
+		</details>
 	)
 }
 
@@ -158,10 +219,11 @@ function Entry({ e }: { e: TranscriptEntry }) {
 		)
 	}
 	if (e.role === 'thinking') {
+		// Named group: a plain `group` would also answer to the enclosing StepGroup's open state.
 		return (
-			<details className="group px-1">
+			<details className="group/think px-1">
 				<summary className="cursor-pointer select-none list-none text-[11px] font-semibold uppercase tracking-wide text-faint [&::-webkit-details-marker]:hidden">
-					<span className="mr-1 inline-block transition-transform group-open:rotate-90">▸</span>
+					<span className="mr-1 inline-block transition-transform group-open/think:rotate-90">▸</span>
 					Thinking
 				</summary>
 				<div className="mt-1 border-l-2 border-border-soft pl-3 text-[13px] italic leading-relaxed text-muted">

@@ -193,6 +193,16 @@ unit test.
 - **Token is persisted**, not per-boot: `~/Library/Application Support/conductor-remote/token`
   (`config.ts` → `resolveToken`). Don't reintroduce a random-per-start token — it
   breaks the phone's saved home-screen URL. `RELAY_TOKEN` env still overrides.
+- **A workspace's own branch is not the one in the session snapshot, and its
+  "sibling" directory may be itself.** Conductor creates the worktree under a
+  *codename* (`directory_name`, e.g. `…/conductor-remote/ouagadougou`) and renames
+  the branch once the workspace is named, then drops a **symlink beside it named
+  after the new branch** (`collapse-thinking-steps-group → ouagadougou`). So the
+  agent harness's start-of-session `git status` can name a branch
+  (`hyldmo/<codename>`) that no longer exists, `GET /api/state` reports the *live*
+  branch, and the two look like two different workspaces sharing a repo. Read the
+  branch with `git branch --show-current` before acting on it, and resolve a path
+  with `readlink -f` before concluding another workspace is doing your work.
 - **Yarn is standalone here.** Its own `yarn.lock` + `.yarnrc.yml`
   (`nodeLinker: node-modules`) makes this its own project despite a `package.json`
   higher up in `$HOME`. `package.json` pins `yarn@4` via `packageManager`, so
