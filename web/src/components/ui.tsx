@@ -8,15 +8,16 @@ import { LUCIDE_ICONS } from '../lib/lucideIcons.ts'
 import type { RepoIcon, Workspace } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 
-/** Workspace dot: coloured by PR state (src/pr.ts), pulsing while the agent works. */
+/**
+ * Workspace dot: coloured by PR state (src/pr.ts). While the agent works it becomes a
+ * spinner in that same colour rather than a filled dot — so `background` must go to one
+ * or the other, never both, or the spinner's ring fills in and the motion disappears.
+ */
 export function StatusDot({ w, className }: { w: Workspace; className?: string }) {
-	const { color, pulse } = statusDot(w)
-	return (
-		<span
-			className={cn('dot', pulse && 'dot-pulse', className)}
-			style={{ background: color, '--pulse-color': color } as CSSProperties}
-		/>
-	)
+	const { color, working } = statusDot(w)
+	if (working)
+		return <span className={cn('dot-spinner', className)} style={{ '--spin-color': color } as CSSProperties} />
+	return <span className={cn('dot', className)} style={{ background: color }} />
 }
 
 function syncedAgo(ms: number): string {

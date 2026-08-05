@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ConductorDb } from './db.ts'
+import type { FirstPrompt } from './firstprompt.ts'
 import { describeRepoIcon, type RepoIcon, type ResolvedIcon, resolveRepoIcon } from './icons.ts'
 import { parseMessage, type TranscriptEntry } from './transcript.ts'
 
@@ -89,6 +90,8 @@ export interface Workspace extends WorkspaceRow {
 	pr_number?: number | null
 	/** PR web URL for the `#N ↗` link; set by src/pr.ts. */
 	pr_url?: string | null
+	/** A first prompt the relay hasn't delivered yet; set by src/server.ts from src/firstprompt.ts. */
+	pending_prompt?: FirstPrompt | null
 }
 
 const worktreeCache = new Map<string, string | null>()

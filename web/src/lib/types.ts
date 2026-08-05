@@ -44,6 +44,22 @@ export interface Workspace {
 	pr_number?: number | null
 	/** PR web URL for the `#N ↗` link. */
 	pr_url?: string | null
+	/** A first prompt the relay hasn't delivered yet — rendered in this workspace's chat. */
+	pending_prompt?: PendingPrompt | null
+}
+
+/**
+ * The prompt a workspace was created with, still undelivered (mirrors `FirstPrompt`
+ * in src/firstprompt.ts). The relay owns delivery; this is the phone's view of it.
+ */
+export interface PendingPrompt {
+	workspaceId: string
+	text: string
+	/** `failed` → the relay gave up and `error` says why; the text is still recoverable. */
+	status: 'waiting' | 'failed'
+	attempts: number
+	createdAt: number
+	error?: string
 }
 
 export interface ActuatorInfo {

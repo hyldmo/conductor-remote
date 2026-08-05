@@ -145,6 +145,9 @@ export const client = {
 		),
 	/** Repos a new workspace can be created in. */
 	repos: () => api<ReposResponse>('/api/repos'),
+	/** Drop a first prompt the relay couldn't deliver, once the user has dealt with it. */
+	dismissPrompt: (workspaceId: string) =>
+		api<{ ok: boolean }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/prompt`, { method: 'DELETE' }),
 	/**
 	 * Create a workspace from a first prompt via Conductor's deep link. Returns as
 	 * soon as the row exists — the worktree may still be setting up, so the caller

@@ -61,12 +61,7 @@ interface AppState {
 	workingHints: Record<string, number>
 	/** Prompts awaiting confirmation, rendered as optimistic in-chat bubbles. */
 	pending: PendingMessage[]
-	/**
-	 * Unsent composer text per workspace, mirrored to localStorage (see lib/draft.ts).
-	 * Held here rather than in the Composer's own state because it is also written
-	 * from outside it — an undeliverable first prompt is stashed into the draft, and
-	 * the box has to show it there and then, not on the next remount.
-	 */
+	/** Unsent composer text per workspace, mirrored to localStorage (see lib/draft.ts). */
 	drafts: Record<string, string>
 	/**
 	 * This device's push subscription as the *relay* knows it. Reconciled once at the
@@ -89,10 +84,6 @@ interface AppState {
 	failPending: (id: string, error: string) => void
 	removePending: (id: string) => void
 	setDraft: (workspaceId: string, text: string) => void
-	/** Park text in a workspace's composer without clobbering what's already typed there. */
-	stashDraft: (workspaceId: string, text: string) => void
-	/** Drop a draft a send just consumed, so a retried stash can't linger and be sent twice. */
-	clearDraftIfEqual: (workspaceId: string, text: string) => void
 	setPush: (push: { deviceId: string | null; devices: number }) => void
 	setSidebarOpen: (open: boolean) => void
 	setView: (patch: Partial<ViewPrefs>) => void
@@ -138,15 +129,6 @@ export const useApp = create<AppState>((set, get) => {
 		setDraft: (workspaceId, text) => {
 			writeDraft(workspaceId, text)
 			set({ drafts: { ...get().drafts, [workspaceId]: text } })
-		},
-		stashDraft: (workspaceId, text) => {
-			const current = get().drafts[workspaceId] ?? ''
-			if (current.includes(text)) return
-			// Prepend: the stashed prompt was written first, and joining beats picking a winner.
-			get().setDraft(workspaceId, current ? `${text}\n\n${current}` : text)
-		},
-		clearDraftIfEqual: (workspaceId, text) => {
-			if ((get().drafts[workspaceId] ?? '').trim() === text.trim()) get().setDraft(workspaceId, '')
 		},
 		setPush: push => set({ push }),
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),

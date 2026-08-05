@@ -5,6 +5,30 @@ import { sidecarAvailable, sidecarSendUserMessage } from './sidecar.ts'
 
 const exec = promisify(execFile)
 
+/**
+ * One UI operation at a time.
+ *
+ * Every script below drives Conductor's *shared, single* window — focus a
+ * workspace, select a tab, write the composer — so two of them overlapping
+ * interleaves their steps and lands a prompt in whatever the other one focused.
+ * That is the exact failure the whole fail-closed AX design exists to prevent,
+ * and no amount of per-step assertion catches it, because each script's reads
+ * are true at the moment it makes them.
+ *
+ * It was unreachable while every write was one person tapping one button. It
+ * stopped being unreachable when the relay grew a first-prompt queue that sends
+ * on its own schedule (`firstprompt.ts`), so the queue can now fire while the
+ * phone is mid-send. Cheap insurance either way: these run for seconds, the
+ * caller is already awaiting, and there is never a real queue of them.
+ */
+let uiTail: Promise<unknown> = Promise.resolve()
+function uiTurn<T>(op: () => Promise<T>): Promise<T> {
+	// `.then(op, op)` so a previous failure doesn't skip the next turn.
+	const turn = uiTail.then(op, op)
+	uiTail = turn.catch(() => undefined)
+	return turn
+}
+
 export interface SendResult {
 	ok: boolean
 	strategy: string
@@ -939,10 +963,12 @@ end tell
 		const tmp = path.join(os.tmpdir(), `relay-prompt-${process.pid}-${Date.now()}.txt`)
 		await fs.writeFile(tmp, text, 'utf8')
 		try {
-			await exec('osascript', ['-e', script], {
-				env: { ...process.env, RELAY_PROMPT_FILE: tmp, ...targetEnv(target) },
-				timeout: 20000
-			})
+			await uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: { ...process.env, RELAY_PROMPT_FILE: tmp, ...targetEnv(target) },
+					timeout: 20000
+				})
+			)
 			return { ok: true, strategy: this.name }
 		} catch (err) {
 			return { ok: false, strategy: this.name, error: osaError(err) }
@@ -997,17 +1023,19 @@ my selectChatTab()
 my applyAgentOptions()
 return "ok"`.trim()
 	try {
-		await exec('osascript', ['-e', script], {
-			env: {
-				...process.env,
-				...targetEnv(target),
-				RELAY_SET_EFFORT: opts.effort ? EFFORT_LABELS[opts.effort] : '',
-				RELAY_SET_PLAN: opts.plan === undefined ? '' : opts.plan ? '1' : '0',
-				RELAY_SET_FAST: opts.toggleFast ? '1' : '',
-				RELAY_SET_MODEL: opts.model ?? ''
-			},
-			timeout: 25000
-		})
+		await uiTurn(() =>
+			exec('osascript', ['-e', script], {
+				env: {
+					...process.env,
+					...targetEnv(target),
+					RELAY_SET_EFFORT: opts.effort ? EFFORT_LABELS[opts.effort] : '',
+					RELAY_SET_PLAN: opts.plan === undefined ? '' : opts.plan ? '1' : '0',
+					RELAY_SET_FAST: opts.toggleFast ? '1' : '',
+					RELAY_SET_MODEL: opts.model ?? ''
+				},
+				timeout: 25000
+			})
+		)
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
 		return { ok: false, strategy: 'applescript', error: osaError(err) }
@@ -1024,10 +1052,12 @@ my focusWorkspace()
 my selectChatTab()
 return my listModels()`.trim()
 	try {
-		const { stdout } = await exec('osascript', ['-e', script], {
-			env: { ...process.env, ...targetEnv(target) },
-			timeout: 25000
-		})
+		const { stdout } = await uiTurn(() =>
+			exec('osascript', ['-e', script], {
+				env: { ...process.env, ...targetEnv(target) },
+				timeout: 25000
+			})
+		)
 		const models = stdout
 			.split('\n')
 			.map(s => s.trim())
@@ -1072,7 +1102,9 @@ export async function createWorkspace(prompt: string, repoPath: string | null): 
 		.filter(Boolean)
 		.join('&')
 	try {
-		await exec('open', [`conductor://${query}`], { timeout: 15000 })
+		// Serialized with the AX writes: creating a workspace pulls Conductor forward and
+		// switches which one is showing, which is precisely what a concurrent send assumes.
+		await uiTurn(() => exec('open', [`conductor://${query}`], { timeout: 15000 }))
 		return { ok: true, strategy: 'deeplink' }
 	} catch (err) {
 		return { ok: false, strategy: 'deeplink', error: osaError(err) }
@@ -1095,10 +1127,12 @@ tell application "System Events"
 	keystroke "t" using {command down}
 end tell`.trim()
 	try {
-		await exec('osascript', ['-e', script], {
-			env: { ...process.env, ...targetEnv({ workspace, sessionId: null }) },
-			timeout: 15000
-		})
+		await uiTurn(() =>
+			exec('osascript', ['-e', script], {
+				env: { ...process.env, ...targetEnv({ workspace, sessionId: null }) },
+				timeout: 15000
+			})
+		)
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
 		return { ok: false, strategy: 'applescript', error: osaError(err) }

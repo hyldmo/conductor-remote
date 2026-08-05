@@ -28,19 +28,33 @@ Two asymmetric halves — keep them separate:
   optional** — a bare `conductor://path=…` opens an empty workspace like
   Conductor's own New workspace; that form is *undocumented* (every documented
   route carries a prompt) but verified live, so suspect it first if creation
-  breaks. The link is fire-and-forget and only *pre-fills* the composer, so the
-  relay watches the DB for the new row and the PWA parks any prompt
-  (`web/src/lib/firstPrompt.ts`) until the worktree is `ready`, guarded on
-  `last_user_message_at` so it can't double-send. Don't block the request on
-  setup: it measured 30s+, past the phone's own 25s budget. **Delivery belongs to
-  the app shell** (`hooks.ts` ▸ `useFirstPromptDelivery`), never to the session
-  view: setup outlasts the user's attention, and an iOS relaunch reopens at `/`,
-  so a route-scoped watcher waits for a mount that never comes and the prompt
-  rots in localStorage. That same `last_user_message_at` guard is what makes
-  retrying safe; after three failed sends the text is stashed into the
-  workspace's composer draft (store-backed — `web/src/lib/draft.ts`) so an
-  undeliverable prompt sits in the chat box instead of vanishing, and a send
-  matching the draft clears it so it can't go twice.
+  breaks. The link is fire-and-forget and only *pre-fills* the composer — someone
+  still has to press Enter ~30s later, once the worktree is `ready` and the chat
+  exists. **That someone is the relay** (`src/firstprompt.ts` ▸ `FirstPromptQueue`),
+  never the phone: a phone sleeps, iOS suspends a backgrounded PWA outright, and
+  the delivery hook it used to run only looked at its parked set once per app
+  launch, so prompts sat unsent until the next relaunch. Don't confuse that with
+  "block the request": creation still returns as soon as the row exists (~2s;
+  waiting for setup measured 30s+, past the phone's own 25s budget) and the queue
+  delivers on its own schedule. `send:true` opts an API caller into awaiting it.
+  Three properties hold it up: **one owner** (if the phone delivered too,
+  `last_user_message_at` wouldn't save you — it's a read, not a lock, and both
+  sides can read it null; the guard is still what makes *retrying* safe and what
+  detects a prompt sent by hand from the Mac); **persistence** to
+  `…/conductor-remote/first-prompts.json`, because `autoupdate` deliberately
+  `exit()`s to reload and launchd restarts us mid-setup; and **giving up in
+  public** — after 3 sends or 15 minutes the entry flips to `failed` *and stays*,
+  riding along on `/api/state` as `workspace.pending_prompt` so the chat can show
+  the text with the reason and a Retry (`DELETE …/workspaces/:id/prompt`
+  dismisses it). A waiting prompt shows the same way, because 30s of empty pane
+  reads as "swallowed" and gets retyped — which is the same prompt sent twice.
+- **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
+  here drives Conductor's single shared window, so two overlapping runs interleave
+  and land a prompt in whatever the other one focused — the exact failure every
+  step's fail-closed assertion *cannot* catch, since each script's reads are true
+  when it makes them. It was unreachable while every write was one person tapping
+  one button; the first-prompt queue, which sends on its own schedule, is what made
+  it reachable.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
   - `applescript` (**default**): drives Conductor's real UI send. **Conductor's
@@ -219,6 +233,16 @@ unit test.
 - **Token is persisted**, not per-boot: `~/Library/Application Support/conductor-remote/token`
   (`config.ts` → `resolveToken`). Don't reintroduce a random-per-start token — it
   breaks the phone's saved home-screen URL. `RELAY_TOKEN` env still overrides.
+- **A workspace's own branch is not the one in the session snapshot, and its
+  "sibling" directory may be itself.** Conductor creates the worktree under a
+  *codename* (`directory_name`, e.g. `…/conductor-remote/ouagadougou`) and renames
+  the branch once the workspace is named, then drops a **symlink beside it named
+  after the new branch** (`collapse-thinking-steps-group → ouagadougou`). So the
+  agent harness's start-of-session `git status` can name a branch
+  (`hyldmo/<codename>`) that no longer exists, `GET /api/state` reports the *live*
+  branch, and the two look like two different workspaces sharing a repo. Read the
+  branch with `git branch --show-current` before acting on it, and resolve a path
+  with `readlink -f` before concluding another workspace is doing your work.
 - **Yarn is standalone here.** Its own `yarn.lock` + `.yarnrc.yml`
   (`nodeLinker: node-modules`) makes this its own project despite a `package.json`
   higher up in `$HOME`. `package.json` pins `yarn@4` via `packageManager`, so
@@ -246,6 +270,30 @@ unit test.
   (2) The script lives in a **TS template literal** — a backtick in an AppleScript
   comment terminates it and `tsc` reports a nonsense error tens of lines away.
   Use quotes in those comments.
+- **The installed PWA's viewport is not the box iOS lays it out in, and `dvh`
+  reports whichever one it currently believes.** Measured in the iOS 26.5
+  Simulator (iPhone 17 Pro, 874pt screen, home-screen web app): `innerHeight`,
+  `100dvh`, `100vh` and `100lvh` all read 874 — but `documentElement.clientHeight`
+  is **812**, the screen minus the top inset. So a `100dvh` app column overflows
+  its own root by 62px and the *page* becomes draggable; dragging it slides the
+  app off the top and opens a dead band at the bottom, which is what "I have to
+  scroll up and down before it's full-screen" actually is. The catch is that the
+  two numbers are coupled: stop the overflow (`position:fixed`, or `height:100%`)
+  and WebKit re-lays-out in the safe box, `innerHeight`/`dvh` *become* 812, and the
+  dead band is now permanent. `100vh` was the only unit that stayed 874 in both
+  states, so `index.css` locks `html,body{overflow:hidden}` and sizes the
+  standalone app off `vh` (browsers keep `dvh` — there `vh` is the *large*
+  viewport and would bury the composer under Safari's toolbar). Corollary: **every
+  scroller must stay an inner element**; the document must never be one.
+- **Verify PWA layout in the iOS Simulator, not by reasoning.** None of this
+  reproduces in desktop Chrome or even simulator *Safari* (there `clientHeight ==
+  innerHeight` and the insets are 0) — only in a real home-screen web app. Recipe:
+  `xcrun simctl boot "iPhone 17 Pro"`, serve the build (`RELAY_PORT=879x yarn
+  start`), `simctl openurl` the token URL, then drive Safari's Share ▸ Add to Home
+  Screen with `cliclick` (map device points to screen with `x+760, y+124` for the
+  default window position; **one click per shell call** — batched clicks get eaten
+  by sheet animations), and read state back with `simctl io booted screenshot`.
+  Tapping the installed icon *resumes*; to load new HTML, re-add the icon.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."

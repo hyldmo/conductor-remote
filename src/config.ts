@@ -24,9 +24,17 @@ export interface Config {
 	publicDir: string
 }
 
+/**
+ * The relay's own state directory — its token, its Funnel posture, its undelivered
+ * first prompts. Never Conductor's: everything about Conductor is read from the DB.
+ */
+export function stateDir(): string {
+	return path.join(home, 'Library', 'Application Support', 'conductor-remote')
+}
+
 /** Where a generated token is persisted so a phone's saved URL stays valid across relay restarts. */
 function tokenStorePath(): string {
-	return path.join(home, 'Library', 'Application Support', 'conductor-remote', 'token')
+	return path.join(stateDir(), 'token')
 }
 
 /**

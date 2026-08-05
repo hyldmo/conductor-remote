@@ -6,7 +6,6 @@ import { useNavigate } from 'react-router'
 import { useRepos } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
-import { seedFirstPrompt } from '../lib/firstPrompt.ts'
 import { RepoAvatar } from './ui.tsx'
 
 /**
@@ -15,10 +14,11 @@ import { RepoAvatar } from './ui.tsx'
  * Conductor's deep-link scheme creates the workspace (no Accessibility, no
  * keystrokes) but only *pre-fills* the composer, and the worktree then takes
  * however long it takes — measured at 30s+ on a real repo, past the phone's own
- * request budget. So the relay returns as soon as the row exists and the prompt
- * is parked (see lib/firstPrompt.ts) for the session view to send once the
- * workspace turns ready: a slow repo shows a real workspace filling in rather
- * than a spinner, and closing the app leaves the prompt waiting in both places.
+ * request budget. So the relay returns as soon as the row exists and delivers the
+ * prompt itself once the workspace turns ready (src/firstprompt.ts): a slow repo
+ * shows a real workspace filling in rather than a spinner, and the prompt still
+ * goes if the phone is locked, closed, or off the network by then. This screen's
+ * job ends at the response; the chat shows the prompt until it lands.
  */
 export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const { data } = useRepos()
@@ -49,8 +49,6 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				setError(r.error ?? 'could not create the workspace')
 				return
 			}
-			// The shell's delivery hook picks this up and sends it once the worktree is ready.
-			if (text) seedFirstPrompt(r.workspaceId, text)
 			// ['state'] is the workspace-list query — an invalidate on any other key silently
 			// does nothing and the new workspace only shows up on the next 2.5s poll.
 			await queryClient.invalidateQueries({ queryKey: ['state'] })

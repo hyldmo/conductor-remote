@@ -27,8 +27,8 @@
  */
 import crypto from 'node:crypto'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { stateDir } from './config.ts'
 import type { Reads } from './reads.ts'
 import type { PushSubscription, VapidKeys } from './webpush.ts'
 import { generateVapidKeys, MAX_PAYLOAD_BYTES, sendPush } from './webpush.ts'
@@ -90,9 +90,9 @@ const MAX_FAILURES = 20
 
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n).trimEnd()}…` : s)
 
-/** Same Application Support dir as the token (src/config.ts) — one place holding this relay's secrets. */
+/** Alongside the token and the first-prompt queue — one dir holding everything this relay persists. */
 function storePath(): string {
-	return path.join(os.homedir(), 'Library', 'Application Support', 'conductor-remote', 'push.json')
+	return path.join(stateDir(), 'push.json')
 }
 
 /**

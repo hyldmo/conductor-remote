@@ -4,8 +4,9 @@ import http from 'node:http'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
-import { loadConfig } from './config.ts'
+import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
+import { FirstPromptQueue } from './firstprompt.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { workspaceDiff } from './git.ts'
 import {
@@ -32,6 +33,7 @@ import {
 	listAgentModels,
 	newChat,
 	pickActuator,
+	type SendResult,
 	setAgentOptions,
 	setRestartGuard
 } from './writes.ts'
@@ -105,34 +107,58 @@ async function confirmAgentOptions(ws: Workspace, sessionId: string, opts: Agent
 }
 
 /**
- * Send a freshly-created workspace's first prompt. Never fails the request: the
- * workspace exists either way, so an unsent prompt is a `warning` (it's still
- * pre-filled in Conductor's composer, one tap from going) rather than an error.
+ * Deliver a prompt to one chat and confirm it landed. The single write path: the
+ * phone's own sends go through it, and so does the first-prompt queue, so both
+ * get the same targeting, the same read-back and the same errors.
  */
-async function submitFirstPrompt(workspaceId: string, prompt: string): Promise<{ sent: boolean; warning?: string }> {
-	// A new workspace is 'setting_up' while its worktree (and setup script) runs;
-	// its composer isn't the visible pane yet, so wait for 'ready' before typing.
-	let ws = reads.getWorkspace(workspaceId)
-	for (let attempt = 0; attempt < 60 && ws?.state !== 'ready'; attempt++) {
-		await sleep(500)
-		ws = reads.getWorkspace(workspaceId)
-	}
-	if (ws?.state !== 'ready') {
-		return { sent: false, warning: 'Workspace created; still setting up, so the prompt is pre-filled but not sent.' }
-	}
-	const located = locateChat(ws, reads.listSessions(workspaceId)[0]?.id ?? '')
-	const tab = 'error' in located ? undefined : located.tab
-	const sessionId = reads.listSessions(workspaceId)[0]?.id
-	if (!sessionId) return { sent: false, warning: 'Workspace created, but it has no chat yet — prompt is pre-filled.' }
+async function deliverPrompt(ws: Workspace, sessionId: string, text: string): Promise<SendResult> {
+	const located = locateChat(ws, sessionId)
+	if ('error' in located) return { ok: false, strategy: actuator.name, error: located.error }
+	// Snapshot the transcript cursor so we can confirm the prompt actually lands.
 	const beforeRowid = reads.getMessages(sessionId).cursor
-	const result = await actuator.send({ workspace: ws, sessionId, tab }, prompt)
-	if (!result.ok)
-		return { sent: false, warning: `Workspace created; the prompt is pre-filled but wasn’t sent (${result.error}).` }
-	if (!(await confirmDelivery(sessionId, prompt, beforeRowid))) {
-		return { sent: false, warning: 'Workspace created; the prompt is pre-filled but didn’t land — send it again.' }
+	const result = await actuator.send({ workspace: ws, sessionId, tab: located.tab }, text)
+	if (!result.ok) {
+		console.warn(`[relay] send to ${ws.branch ?? ws.id} failed: ${result.error}`)
+		return result
 	}
-	return { sent: true }
+	if (!(await confirmDelivery(sessionId, text, beforeRowid))) {
+		// The phone only ever sees "try again"; the reason a send goes missing lives
+		// on this side, so leave a trail in relay.log rather than nothing at all.
+		console.warn(`[relay] send to ${ws.branch ?? ws.id} drove the UI but never landed in the chat`)
+		return {
+			ok: false,
+			strategy: result.strategy,
+			error: 'Send didn’t land in the chat — Conductor may have been asleep or unfocused. Try again.'
+		}
+	}
+	return result
 }
+
+/**
+ * Undelivered first prompts, owned by this process rather than by the phone (see
+ * firstprompt.ts for why). Everything Conductor-side it needs is a plain DB read.
+ */
+const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.json'), {
+	inspect: workspaceId => {
+		const ws = reads.getWorkspace(workspaceId)
+		if (!ws) return null
+		// A new workspace is 'setting_up' while its worktree (and setup script) runs;
+		// its composer isn't the visible pane yet, so wait for 'ready' before typing.
+		const sessions = reads.listSessions(workspaceId)
+		const session = sessions.find(s => s.id === ws.active_session_id) ?? sessions[0]
+		return {
+			ready: ws.state === 'ready',
+			sessionId: session?.id ?? null,
+			alreadySent: !!session?.last_user_message_at
+		}
+	},
+	send: async (workspaceId, sessionId, text) => {
+		const ws = reads.getWorkspace(workspaceId)
+		if (!ws) return { ok: false, error: 'the workspace is gone' }
+		const result = await deliverPrompt(ws, sessionId, text)
+		return { ok: result.ok, error: result.error }
+	}
+})
 
 const MIME: Record<string, string> = {
 	'.html': 'text/html; charset=utf-8',
@@ -242,6 +268,9 @@ const server = http.createServer(async (req, res) => {
 			const update = updateStatus()
 			const workspaces = reads.listWorkspaces()
 			attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
+			// An undelivered first prompt rides along with its workspace: the phone renders it
+			// in that chat rather than tracking delivery itself (see src/firstprompt.ts).
+			for (const ws of workspaces) ws.pending_prompt = firstPrompts.get(ws.id)
 			return json(req, res, 200, {
 				workspaces,
 				actuator: await describeActuator(actuator),
@@ -361,18 +390,21 @@ const server = http.createServer(async (req, res) => {
 					error: 'Conductor didn’t create a workspace — check it’s running and not showing a dialog.'
 				})
 			}
-			// Return as soon as the row exists (~2s) and let the caller submit the prompt
-			// once the worktree is ready. Waiting here would block the request through
-			// Conductor's whole setup — measured at 30s+ on a real repo, past the phone's
-			// own 25s budget. `send:true` opts into the blocking path for API callers.
+			// Return as soon as the row exists (~2s) — waiting for delivery would block the
+			// request through Conductor's whole setup, measured at 30s+ on a real repo and
+			// past the phone's own 25s budget. The queue delivers on its own schedule and
+			// the phone watches it in /api/state; `send:true` opts API callers into waiting.
 			// Whatever happens, the prompt is already pre-filled in Conductor's composer.
-			const submitted = body.send === true && prompt ? await submitFirstPrompt(created.id, prompt) : { sent: false }
+			const settled = prompt ? firstPrompts.enqueue(created.id, prompt) : null
+			const failed = settled && body.send === true ? await settled : null
+			settled?.catch(() => undefined) // fire-and-forget: it reports failure, it never rejects
 			return json(req, res, 200, {
 				ok: true,
 				workspaceId: created.id,
 				workspace: reads.getWorkspace(created.id) ?? created,
 				pendingPrompt: prompt || undefined,
-				...submitted
+				sent: body.send === true ? !failed : false,
+				warning: failed?.error && `Workspace created; the prompt is pre-filled but wasn’t sent (${failed.error}).`
 			})
 		}
 
@@ -502,24 +534,19 @@ const server = http.createServer(async (req, res) => {
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
 			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
-			const located = locateChat(ws, sessionId)
-			if ('error' in located) return json(req, res, 409, { error: located.error })
-			const { tab } = located
-			// Snapshot the transcript cursor so we can confirm the prompt actually lands.
-			const beforeRowid = reads.getMessages(sessionId).cursor
-			const result = await actuator.send({ workspace: ws, sessionId, tab }, text)
-			if (result.ok && !(await confirmDelivery(sessionId, text, beforeRowid))) {
-				// The phone only ever sees "try again"; the reason a send goes missing lives
-				// on this side, so leave a trail in relay.log rather than nothing at all.
-				console.warn(`[relay] send to ${ws.branch ?? ws.id} drove the UI but never landed in the chat`)
-				return json(req, res, 502, {
-					ok: false,
-					strategy: result.strategy,
-					error: 'Send didn’t land in the chat — Conductor may have been asleep or unfocused. Try again.'
-				})
-			}
-			if (!result.ok) console.warn(`[relay] send to ${ws.branch ?? ws.id} failed: ${result.error}`)
+			const result = await deliverPrompt(ws, sessionId, text)
+			// Whatever the queue was still holding for this workspace has now been said by
+			// hand — including a failed entry the user retried from the chat.
+			if (result.ok) firstPrompts.forget(ws.id)
 			return json(req, res, result.ok ? 200 : 502, result)
+		}
+
+		// DELETE /api/workspaces/:id/prompt — dismiss an undelivered first prompt
+		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/prompt$/)
+		if (req.method === 'DELETE' && m) {
+			const workspaceId = decodeURIComponent(m[1])
+			if (!firstPrompts.forget(workspaceId)) return json(req, res, 404, { error: 'no pending prompt' })
+			return json(req, res, 200, { ok: true })
 		}
 
 		return json(req, res, 404, { error: 'no route', pathname })
@@ -550,6 +577,9 @@ server.listen(cfg.port, cfg.host, () => {
 		const drift = driftWarningLines(tsBin)
 		if (drift.length) console.info(`\n${drift.join('\n')}`)
 	}
+	// Pick up any first prompt the previous process was still holding — an auto-update
+	// restart lands mid-setup often enough that this is the normal path, not a rare one.
+	firstPrompts.start()
 	// Keep the managed global daemon current — no-ops for dev checkouts / unmanaged runs (see autoupdate.ts).
 	startAutoUpdate()
 	// Keep the phone's public URL reachable — re-registers Funnel when its ingress goes stale after a

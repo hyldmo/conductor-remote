@@ -64,11 +64,12 @@ const PR_DOT_COLORS: Record<NonNullable<Workspace['pr_status']>, string> = {
 
 /**
  * The workspace dot: PR state drives the colour (merged/draft/conflicts/mergeable),
- * everything else falls back to the accent. It pulses while the agent is working.
+ * everything else falls back to the accent. While the agent is working the dot is
+ * drawn as a spinner in that colour instead (`StatusDot`).
  */
-export function statusDot(w: Workspace): { color: string; pulse: boolean } {
+export function statusDot(w: Workspace): { color: string; working: boolean } {
 	const color = (w.pr_status && PR_DOT_COLORS[w.pr_status]) || 'var(--color-accent)'
-	return { color, pulse: w.session_status === 'working' }
+	return { color, working: w.session_status === 'working' }
 }
 
 /**

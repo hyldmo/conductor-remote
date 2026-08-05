@@ -104,7 +104,8 @@ export function SessionView() {
 						creating={creatingChat}
 					/>
 				) : null}
-				<Transcript sessionId={sessionId} working={working} />
+				{/* `pending_prompt` is the relay's undelivered first prompt for this workspace. */}
+				<Transcript sessionId={sessionId} workspaceId={ws.id} working={working} queued={ws.pending_prompt} />
 				{activeSession ? <AgentBar session={activeSession} workspaceId={ws.id} /> : null}
 				<Composer key={ws.id} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
 			</div>
@@ -139,7 +140,7 @@ function SessionTabs({
 						onClick={() => onSelect(s.id)}
 						className={cn('pill flex shrink-0 items-center gap-1.5', s.id === activeId && 'pill-active')}
 					>
-						{s.status === 'working' ? <span className="dot dot-working size-1.5!" /> : null}
+						{s.status === 'working' ? <span className="dot-spinner size-3" /> : null}
 						<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
 						{s.unread_count ? <Badge>{s.unread_count}</Badge> : null}
 					</button>

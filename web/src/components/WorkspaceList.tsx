@@ -307,7 +307,8 @@ function WorkspaceCard({ w, selected }: { w: Workspace; selected: boolean }) {
 		<>
 			<div className="relative shrink-0 self-start">
 				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceLabel(w)} />
-				<StatusDot w={w} className="absolute -right-0.5 -bottom-0.5 ring-2 ring-surface" />
+				{/* `bg-surface` fills the spinner's hollow centre so the avatar doesn't show through it. */}
+				<StatusDot w={w} className="absolute -right-0.5 -bottom-0.5 bg-surface ring-2 ring-surface" />
 			</div>
 			<div className="min-w-0 flex-1 overflow-hidden">
 				<div className="flex items-center gap-2">

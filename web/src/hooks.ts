@@ -3,8 +3,6 @@ import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { ApiError, client } from './lib/api.ts'
-import type { ParkedPrompt } from './lib/firstPrompt.ts'
-import { clearFirstPrompt, listFirstPrompts, noteFirstPromptAttempt } from './lib/firstPrompt.ts'
 import type { PushSupport } from './lib/push.ts'
 import { currentSubscription, deviceLabel, pushSupport, subscribe, syncSubscription, toJson } from './lib/push.ts'
 import type { TranscriptEntry } from './lib/types.ts'
@@ -166,6 +164,11 @@ export function useVisualViewportHeight() {
 		const vv = window.visualViewport
 		if (!vv) return
 		const root = document.documentElement
+		// Tells index.css to size the app off `vh` instead of `dvh` — see the comment
+		// there. `navigator.standalone` is the iOS-only fallback for versions whose
+		// home-screen apps don't match the display-mode query.
+		if (matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone)
+			root.setAttribute('data-standalone', '')
 		// Visual-viewport height with no keyboard up, measured rather than assumed.
 		let rest = 0
 		let watchdog: ReturnType<typeof setInterval> | undefined
@@ -407,7 +410,6 @@ export function useSendPrompt() {
 	const failPending = useApp(s => s.failPending)
 	const removePending = useApp(s => s.removePending)
 	const markWorking = useApp(s => s.markWorking)
-	const clearDraftIfEqual = useApp(s => s.clearDraftIfEqual)
 
 	return useCallback(
 		async (opts: { id?: string; sessionId: string; workspaceId: string; text: string }): Promise<boolean> => {
@@ -421,9 +423,9 @@ export function useSendPrompt() {
 				if (r.ok) {
 					markWorking(sessionId)
 					queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
-					// An undeliverable prompt gets stashed into the draft; once it does go,
-					// that copy has to leave with it or the next tap sends it a second time.
-					clearDraftIfEqual(workspaceId, text)
+					// A send by hand supersedes any first prompt the relay was still holding, and
+					// the relay drops that entry — so re-read the list the queued bubble comes from.
+					queryClient.invalidateQueries({ queryKey: ['state'] })
 					// The confirmed row surfaces on the next poll and hides this bubble;
 					// purge it after a beat so a text-match miss can't leave a duplicate.
 					setTimeout(() => removePending(id), 4000)
@@ -435,7 +437,7 @@ export function useSendPrompt() {
 			}
 			return false
 		},
-		[addPending, failPending, removePending, markWorking, clearDraftIfEqual, queryClient]
+		[addPending, failPending, removePending, markWorking, queryClient]
 	)
 }
 
@@ -606,79 +608,4 @@ export function usePushRouting(): void {
 		navigator.serviceWorker.addEventListener('message', onMessage)
 		return () => navigator.serviceWorker.removeEventListener('message', onMessage)
 	}, [navigate])
-}
-
-/** Sends spent on a parked first prompt before it is handed back to the composer. */
-const FIRST_PROMPT_ATTEMPTS = 3
-/** A workspace that never turned ready this long ago is not going to — stop waiting on it. */
-const FIRST_PROMPT_MAX_AGE_MS = 24 * 60 * 60 * 1000
-
-/**
- * Deliver the first prompt of a workspace created from the phone, once its
- * worktree has finished setting up and its chat exists.
- *
- * Mounted on the app shell rather than in the session view, because that view is
- * the one place the phone reliably *isn't*: setup measured 30s+, and a locked
- * phone, a tap back to the list, or an iOS relaunch (which reopens at `/`, not
- * the workspace) all left a watcher scoped to that route waiting for a mount
- * that never came, with the prompt sitting invisibly in localStorage.
- *
- * Guarded on `last_user_message_at` being null: if the prompt already went —
- * because it was sent from the Mac, where the deep link left it pre-filled in the
- * composer — this must not send it a second time. That same guard is what makes
- * retrying safe, since an attempt whose read-back timed out but which actually
- * landed shows up as a user row before the next one goes.
- *
- * Nothing is ever dropped on the floor: after `FIRST_PROMPT_ATTEMPTS` failures
- * (or once the workspace is plainly never turning ready) the text is stashed in
- * that workspace's composer draft, so it is sitting in the chat box one tap from
- * going instead of disappearing.
- */
-export function useFirstPromptDelivery(): void {
-	const { data } = useWorkspaces()
-	const [parked, setParked] = useState<ParkedPrompt[]>(listFirstPrompts)
-	const sendPrompt = useSendPrompt()
-	const stashDraft = useApp(s => s.stashDraft)
-	const busy = useRef(false)
-
-	// One at a time, oldest first: keeps this to a single extra sessions poll, and
-	// there is realistically never more than one workspace mid-creation anyway.
-	const next = parked[0]
-	const ws = next ? data?.workspaces.find(w => w.id === next.workspaceId) : undefined
-	const { data: sessionsData } = useSessions(ws?.state === 'ready' ? ws.id : undefined)
-	const sessions = sessionsData?.sessions ?? []
-	const session = sessions.find(s => s.id === ws?.active_session_id) ?? sessions[0]
-
-	useEffect(() => {
-		if (!next || busy.current) return
-		const forget = () => {
-			clearFirstPrompt(next.workspaceId)
-			setParked(listFirstPrompts())
-		}
-		const retire = () => {
-			stashDraft(next.workspaceId, next.text)
-			forget()
-		}
-		if (Date.now() - next.createdAt > FIRST_PROMPT_MAX_AGE_MS) return retire()
-		// Deliberately no "workspace missing → give up": the list poll that would say
-		// so is up to 2.5s stale, and the freshly-created workspace is missing from it
-		// by definition, so acting on that would retire every prompt on the spot. A
-		// workspace that really is gone falls out via the age cap above.
-		if (ws?.state !== 'ready' || !session) return
-		if (session.last_user_message_at) return forget()
-
-		busy.current = true
-		const attempt = noteFirstPromptAttempt(next.workspaceId)
-		const target = { id: `first:${next.workspaceId}`, sessionId: session.id, workspaceId: next.workspaceId }
-		;(async () => {
-			// One pending id across attempts, so retries reuse the bubble instead of stacking.
-			// `sendPrompt` reports failure rather than throwing; the catch is the backstop
-			// that stops an unexpected throw from retrying this forever.
-			const ok = await sendPrompt({ ...target, text: next.text }).catch(() => false)
-			if (ok) forget()
-			else if (attempt >= FIRST_PROMPT_ATTEMPTS) retire()
-			else setParked(listFirstPrompts())
-			busy.current = false
-		})()
-	}, [next, ws, session, sendPrompt, stashDraft])
 }

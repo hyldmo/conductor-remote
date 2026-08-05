@@ -89,7 +89,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   git.ts          workspace diff vs target branch (incl. untracked via --no-index)
   merge.ts        merge the workspace's open PR via `gh pr merge` (mirrors Conductor's Merge button)
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
-  writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in)
+  writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
+  firstprompt.ts  persisted queue that delivers a new workspace's first prompt once it's ready
   notify.ts       status-transition watcher + subscription store (~/…/conductor-remote/push.json, 0600)
   webpush.ts      Web Push protocol: VAPID (ES256) + aes128gcm payloads, node:crypto only
   logbuf.ts       console capture (ring + stamped stdout) + log-file tail → GET /api/logs, token redacted

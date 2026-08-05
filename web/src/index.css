@@ -47,6 +47,37 @@
 		   is why the override is keyboard-gated, not permanent. */
 		height: var(--app-height, 100dvh);
 	}
+	/* The document itself must never scroll — every scroller in this app is an inner
+	   element. That isn't just tidiness: an installed iOS PWA lays the root element
+	   out in the *safe* box while viewport units resolve to the whole screen, so a
+	   full-height column overflows its own root by exactly the top inset and the page
+	   picks up that much phantom scroll. Dragging it slides the app off the top and
+	   opens a dead band at the bottom — the "I have to scroll up and down before it's
+	   full-screen" bug. Measured on iOS 26.5 (iPhone 17 Pro, 874pt screen): dvh 874,
+	   documentElement.clientHeight 812, scrollHeight 874. */
+	html,
+	body {
+		overflow: hidden;
+	}
+	/* Locking the overflow alone isn't enough: with nothing overflowing, WebKit falls
+	   back to the safe box and `dvh` itself collapses to 812, which would leave that
+	   same 62px dead band permanently. `vh` is the one unit that kept reporting the
+	   true screen height in *both* states, so the installed app sizes off vh. Browsers
+	   stay on dvh, where vh is the *large* viewport and would bury the composer behind
+	   Safari's toolbar with no way to scroll to it. data-standalone (set in hooks.ts
+	   from navigator.standalone) covers iOS versions that don't match the media query. */
+	@media (display-mode: standalone) {
+		html,
+		body,
+		#root {
+			height: var(--app-height, 100vh);
+		}
+	}
+	html[data-standalone],
+	html[data-standalone] body,
+	html[data-standalone] #root {
+		height: var(--app-height, 100vh);
+	}
 	html {
 		/* Paint the app bg on <html> too, so any sub-pixel gap in the safe area
 		   reads as the app color rather than a seam. */
@@ -61,7 +92,6 @@
 		/* Kill Chrome/Android's horizontal overscroll back-nav; the JS edge-swipe
 		   handler (useEdgeSwipeDrawer) is what suppresses iOS's edge gesture. */
 		overscroll-behavior: none;
-		overflow-x: hidden;
 	}
 	button {
 		font: inherit;
@@ -86,18 +116,24 @@
 	}
 	.dot {
 		@apply size-2.5 shrink-0 rounded-full bg-faint;
-		/* The colour a `.dot-pulse` halo mixes from; overridden inline per dot. */
-		--pulse-color: var(--color-working);
 	}
-	/* Pulsing halo in the dot's own colour — used while the agent is working. */
-	.dot-pulse {
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse-color) 60%, transparent);
-		animation: pulse 1.6s ease-out infinite;
-	}
-	.dot-working {
-		background: var(--color-working);
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-working) 60%, transparent);
-		animation: pulse 1.6s ease-out infinite;
+	/**
+	 * The "agent is working" indicator: a spinning ring in the dot's own colour,
+	 * standing in for the dot itself. A pulsing halo was too easy to miss on a
+	 * phone — motion around a fixed outline reads at a glance where a fading
+	 * shadow didn't. Wider than the `.dot` it replaces so the arc is legible;
+	 * `--spin-color` is set per instance (defaults to the working amber), and the
+	 * centre stays transparent so callers over a busy backdrop can fill it.
+	 */
+	.dot-spinner {
+		@apply size-3.5 shrink-0 animate-spin rounded-full border-2;
+		--spin-color: var(--color-working);
+		/* Two lit sides, not one: at this size a single bright quadrant is barely
+		   more ink than the dot was, and the dim track is what makes it read as a
+		   ring rather than a stray speck. */
+		border-color: color-mix(in srgb, var(--spin-color) 30%, transparent);
+		border-top-color: var(--spin-color);
+		border-right-color: var(--spin-color);
 	}
 	.dot-idle {
 		background: var(--color-idle);
@@ -227,18 +263,6 @@
 	}
 	.md input[type="checkbox"] {
 		margin-right: 0.4em;
-	}
-}
-
-@keyframes pulse {
-	0% {
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse-color) 55%, transparent);
-	}
-	70% {
-		box-shadow: 0 0 0 7px color-mix(in srgb, var(--pulse-color) 0%, transparent);
-	}
-	100% {
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse-color) 0%, transparent);
 	}
 }
 
