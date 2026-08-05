@@ -6,6 +6,7 @@ import { useSessions, useWorkspaces } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { shortModel, workspaceLabel } from '../lib/format.ts'
+import { isUnread, type ReadMarks } from '../lib/read.ts'
 import type { Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentBar } from './AgentBar.tsx'
@@ -13,7 +14,7 @@ import { Composer } from './Composer.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
 import { Transcript } from './Transcript.tsx'
-import { Badge, Spinner } from './ui.tsx'
+import { Spinner } from './ui.tsx'
 
 export function SessionView() {
 	const { workspaceId } = useParams<{ workspaceId: string }>()
@@ -24,6 +25,8 @@ export function SessionView() {
 	const { data, isLoading } = useWorkspaces()
 	const { data: sessionsData } = useSessions(workspaceId)
 	const workingHints = useApp(s => s.workingHints)
+	const readMarks = useApp(s => s.readMarks)
+	const markRead = useApp(s => s.markRead)
 
 	// A manual tab pick only applies to the workspace it was made in.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the pick when switching workspaces
@@ -39,6 +42,17 @@ export function SessionView() {
 		sessions[0]?.id ??
 		null
 	const activeSession = sessions.find(s => s.id === sessionId)
+
+	// Reading here can't clear Conductor's own unread flag (the relay's DB handle is
+	// read-only), so record what this phone has seen: the chat on screen is marked up to
+	// its current `updated_at`, and the poll keeps the mark moving while you watch it.
+	// Only the chat you're actually on — a sibling tab's badge is not yours to clear.
+	const activeUpdatedAt = activeSession?.updated_at
+	useEffect(() => {
+		if (!(sessionId && activeUpdatedAt)) return
+		if (document.visibilityState !== 'visible') return
+		markRead(sessionId, activeUpdatedAt)
+	}, [sessionId, activeUpdatedAt, markRead])
 
 	if (!ws) {
 		return (
@@ -99,6 +113,7 @@ export function SessionView() {
 					<SessionTabs
 						sessions={sessions}
 						activeId={sessionId}
+						readMarks={readMarks}
 						onSelect={setPickedSession}
 						onNewChat={createChat}
 						creating={creatingChat}
@@ -120,12 +135,14 @@ export function SessionView() {
 function SessionTabs({
 	sessions,
 	activeId,
+	readMarks,
 	onSelect,
 	onNewChat,
 	creating
 }: {
 	sessions: Session[]
 	activeId: string | null
+	readMarks: ReadMarks
 	onSelect: (id: string) => void
 	onNewChat: () => void
 	creating: boolean
@@ -142,7 +159,8 @@ function SessionTabs({
 					>
 						{s.status === 'working' ? <span className="dot-spinner size-3" /> : null}
 						<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
-						{s.unread_count ? <Badge>{s.unread_count}</Badge> : null}
+						{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
+						{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}
 					</button>
 				))}
 			</div>
