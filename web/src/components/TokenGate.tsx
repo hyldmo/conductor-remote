@@ -27,7 +27,9 @@ export function TokenGate() {
 	if (scanning) return <QRScanner onResult={accept} onClose={() => setScanning(false)} />
 
 	return (
-		<div className="pt-safe pb-safe flex h-full flex-col items-center justify-center gap-5 px-8 text-center">
+		// Its own scroller: the document can't scroll (index.css locks it), and with the
+		// keyboard up this column is taller than what's left of the screen.
+		<div className="pt-safe pb-safe flex h-full flex-col items-center justify-center gap-5 overflow-y-auto px-8 text-center">
 			<img src="/icon.svg" alt="" className="size-20 rounded-3xl" />
 			<div>
 				<h1 className="text-xl font-semibold">Conductor Remote</h1>

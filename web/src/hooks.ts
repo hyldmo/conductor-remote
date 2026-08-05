@@ -163,6 +163,11 @@ export function useVisualViewportHeight() {
 		const vv = window.visualViewport
 		if (!vv) return
 		const root = document.documentElement
+		// Tells index.css to size the app off `vh` instead of `dvh` — see the comment
+		// there. `navigator.standalone` is the iOS-only fallback for versions whose
+		// home-screen apps don't match the display-mode query.
+		if (matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone)
+			root.setAttribute('data-standalone', '')
 		// Visual-viewport height with no keyboard up, measured rather than assumed.
 		let rest = 0
 		let watchdog: ReturnType<typeof setInterval> | undefined

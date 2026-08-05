@@ -47,6 +47,37 @@
 		   is why the override is keyboard-gated, not permanent. */
 		height: var(--app-height, 100dvh);
 	}
+	/* The document itself must never scroll — every scroller in this app is an inner
+	   element. That isn't just tidiness: an installed iOS PWA lays the root element
+	   out in the *safe* box while viewport units resolve to the whole screen, so a
+	   full-height column overflows its own root by exactly the top inset and the page
+	   picks up that much phantom scroll. Dragging it slides the app off the top and
+	   opens a dead band at the bottom — the "I have to scroll up and down before it's
+	   full-screen" bug. Measured on iOS 26.5 (iPhone 17 Pro, 874pt screen): dvh 874,
+	   documentElement.clientHeight 812, scrollHeight 874. */
+	html,
+	body {
+		overflow: hidden;
+	}
+	/* Locking the overflow alone isn't enough: with nothing overflowing, WebKit falls
+	   back to the safe box and `dvh` itself collapses to 812, which would leave that
+	   same 62px dead band permanently. `vh` is the one unit that kept reporting the
+	   true screen height in *both* states, so the installed app sizes off vh. Browsers
+	   stay on dvh, where vh is the *large* viewport and would bury the composer behind
+	   Safari's toolbar with no way to scroll to it. data-standalone (set in hooks.ts
+	   from navigator.standalone) covers iOS versions that don't match the media query. */
+	@media (display-mode: standalone) {
+		html,
+		body,
+		#root {
+			height: var(--app-height, 100vh);
+		}
+	}
+	html[data-standalone],
+	html[data-standalone] body,
+	html[data-standalone] #root {
+		height: var(--app-height, 100vh);
+	}
 	html {
 		/* Paint the app bg on <html> too, so any sub-pixel gap in the safe area
 		   reads as the app color rather than a seam. */
@@ -61,7 +92,6 @@
 		/* Kill Chrome/Android's horizontal overscroll back-nav; the JS edge-swipe
 		   handler (useEdgeSwipeDrawer) is what suppresses iOS's edge gesture. */
 		overscroll-behavior: none;
-		overflow-x: hidden;
 	}
 	button {
 		font: inherit;

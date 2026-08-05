@@ -220,6 +220,30 @@ unit test.
   (2) The script lives in a **TS template literal** — a backtick in an AppleScript
   comment terminates it and `tsc` reports a nonsense error tens of lines away.
   Use quotes in those comments.
+- **The installed PWA's viewport is not the box iOS lays it out in, and `dvh`
+  reports whichever one it currently believes.** Measured in the iOS 26.5
+  Simulator (iPhone 17 Pro, 874pt screen, home-screen web app): `innerHeight`,
+  `100dvh`, `100vh` and `100lvh` all read 874 — but `documentElement.clientHeight`
+  is **812**, the screen minus the top inset. So a `100dvh` app column overflows
+  its own root by 62px and the *page* becomes draggable; dragging it slides the
+  app off the top and opens a dead band at the bottom, which is what "I have to
+  scroll up and down before it's full-screen" actually is. The catch is that the
+  two numbers are coupled: stop the overflow (`position:fixed`, or `height:100%`)
+  and WebKit re-lays-out in the safe box, `innerHeight`/`dvh` *become* 812, and the
+  dead band is now permanent. `100vh` was the only unit that stayed 874 in both
+  states, so `index.css` locks `html,body{overflow:hidden}` and sizes the
+  standalone app off `vh` (browsers keep `dvh` — there `vh` is the *large*
+  viewport and would bury the composer under Safari's toolbar). Corollary: **every
+  scroller must stay an inner element**; the document must never be one.
+- **Verify PWA layout in the iOS Simulator, not by reasoning.** None of this
+  reproduces in desktop Chrome or even simulator *Safari* (there `clientHeight ==
+  innerHeight` and the insets are 0) — only in a real home-screen web app. Recipe:
+  `xcrun simctl boot "iPhone 17 Pro"`, serve the build (`RELAY_PORT=879x yarn
+  start`), `simctl openurl` the token URL, then drive Safari's Share ▸ Add to Home
+  Screen with `cliclick` (map device points to screen with `x+760, y+124` for the
+  default window position; **one click per shell call** — batched clicks get eaten
+  by sheet animations), and read state back with `simctl io booted screenshot`.
+  Tapping the installed icon *resumes*; to load new HTML, re-add the icon.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."
