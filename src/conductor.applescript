@@ -253,28 +253,38 @@ on activateConductor()
 	set firstProbe to my windowProbe()
 	set refusal to my refusalReason(firstProbe)
 	if refusal is not "" then error refusal
-	set wasRunning to (item 1 of firstProbe) >= 0
 	try
 		tell application "Conductor" to activate
 	on error errText
 		error "couldn't bring Conductor to the front: " & errText
 	end try
 	delay 0.4
-	-- Patience sized to what we're waiting for. A running app only has to redraw a
-	-- window (~4s is plenty, and the caller's osascript timeout still needs room
-	-- for the send itself). A cold launch is a whole app start, so it gets ~9s —
-	-- still inside the 20s script budget once the send's own delays are counted.
-	-- Anything slower fails with the message above and finds a warm app on retry.
+	-- Patience sized to what we're waiting for. An app that already shows a window
+	-- returns from waitForWindow immediately, so the short budget only ever times a
+	-- redraw (~4s is plenty). Zero windows gets the cold-launch budget (~9s) even
+	-- when the process exists: the restart below is fire-and-forget, so the *next*
+	-- attempt arrives while Conductor is still drawing its first window — "process
+	-- exists, no window yet" — and a 4s wait there quits it again mid-launch,
+	-- which is how one restart becomes a loop that never lets it come up. ~9s
+	-- still fits the 28s script budget once the send's own delays are counted.
 	set patience to 16
-	if not wasRunning then set patience to 36
+	if (item 1 of firstProbe) < 1 then set patience to 36
 	if my waitForWindow(patience) then return
 	-- Running, readable, and still zero windows: reopen and the Dock click have
 	-- both drawn nothing, so a restart is the only thing left. "Open it on your
 	-- Mac" is not advice a phone can act on — that is the whole point of this app.
 	if (system attribute "RELAY_ALLOW_RESTART") is "1" and (item 1 of my windowProbe()) is 0 then
+		-- Evidence before the restart tears the state down: which processes match
+		-- Conductor and who owns a window is the one fact that separates "genuinely
+		-- windowless" (a locked or unattended Mac) from "we're addressing the wrong
+		-- process" — and after the relaunch it would describe the new process, not
+		-- the state that failed. windowFailure() already carries it; this branch
+		-- used to drop it, which made a repeating no-window failure undebuggable
+		-- from the log alone.
+		set ev to my windowEvidence()
 		set restartError to my restartConductor()
-		if restartError is not "" then error restartError
-		error "Conductor was running with no window and ignored both reopen and a Dock click, so the relay restarted it. Give it a few seconds and send again."
+		if restartError is not "" then error restartError & ev
+		error "Conductor was running with no window and ignored both reopen and a Dock click, so the relay restarted it. Give it a few seconds and send again." & ev
 	end if
 	my requireWindow()
 end activateConductor

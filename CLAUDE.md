@@ -115,8 +115,12 @@ Two asymmetric halves — keep them separate:
        late — all surfaced as "Can't get window 1 … Invalid index." from
        whichever handler ran first. So `activateConductor` checks permissions,
        then `activate`s (which **starts Conductor if it isn't running**), then
-       waits for a real window — ~4s if the app was already up, ~9s for a cold
-       launch — nudging with **`reopen`** (the dock-click event — `activate`
+       waits for a real window — ~4s if one is already up, ~9s when the probe
+       shows none, cold launch or not: the restart lever below is
+       fire-and-forget, so the next attempt can arrive while Conductor is still
+       drawing its first window, and a short wait there would quit it again
+       mid-launch, turning one restart into a loop that never lets it come up —
+       nudging with **`reopen`** (the dock-click event — `activate`
        alone won't recreate a closed window), and every `window 1` read stays
        behind `requireWindow`/`webArea` so a window closing mid-run says so in
        words. **"returned 0 windows" and "refused to answer" are different
