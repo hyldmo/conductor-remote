@@ -169,16 +169,32 @@ on serverWindowCount()
 	end try
 end serverWindowCount
 
+on screenLocked()
+	-- "locked" / "unlocked" / "unknown". CGSessionCopyCurrentDictionary carries
+	-- CGSSessionScreenIsLocked = 1 while the lock screen is up and omits the key
+	-- entirely when it is not — same stdlib JXA channel as serverWindowCount.
+	-- This matters because the lock screen is the product's home ground: sends
+	-- come from a phone precisely when nobody is at the Mac, so "is the lock up"
+	-- is the difference between a state a restart can fix and one it provably
+	-- makes worse (see the restart gate in activateConductor).
+	set jxa to "ObjC.import('CoreGraphics'); const d = ObjC.deepUnwrap($.CFBridgingRelease($.CGSessionCopyCurrentDictionary())) || {}; d.CGSSessionScreenIsLocked ? 'locked' : 'unlocked'"
+	try
+		return do shell script "osascript -l JavaScript -e " & quoted form of jxa
+	on error
+		return "unknown"
+	end try
+end screenLocked
+
 on windowEvidence()
 	-- Zero windows is a dead end without knowing what the AX tree *does* show, and
 	-- guessing the next thing to press has already cost a round trip (there is no
 	-- "New Window" item — Conductor is single-window). So the error carries the
-	-- evidence instead: who macOS thinks Conductor is, what its menus offer, and
-	-- how many windows the window server counts across all Spaces (AX only sees
-	-- the current one).
+	-- evidence instead: who macOS thinks Conductor is, what its menus offer, how
+	-- many windows the window server counts across all Spaces (AX only sees the
+	-- current one), and whether the lock screen is up.
 	set procs to my processWindowCounts()
 	set titles to my menuTitles()
-	set ev to " [window server: " & my serverWindowCount() & "]"
+	set ev to " [window server: " & my serverWindowCount() & "; screen: " & my screenLocked() & "]"
 	if (count of procs) > 0 then set ev to ev & " [processes: " & my joinList(procs, ", ") & "]"
 	if (count of titles) > 0 then set ev to ev & " [menus: " & my joinList(titles, ", ") & "]"
 	return ev
@@ -310,13 +326,22 @@ on activateConductor()
 		-- used to drop it, which made a repeating no-window failure undebuggable
 		-- from the log alone.
 		set ev to my windowEvidence()
+		set lockState to my screenLocked()
 		-- AX saying "no window" is not the same as there being no window: full
 		-- screen on another Space and the lock screen both hide a live window from
 		-- AX, and restarting then destroys a window the user left open (measured
 		-- live: exactly that loop wedged Conductor for a whole evening). Only the
 		-- window server can tell the difference, so a window it CAN see blocks the
 		-- restart — this is a human's problem, said in words, not the relay's.
-		if my serverWindowCount() > 0 then error "Conductor's window exists but is not reachable - it is probably full screen on another Space, or the Mac is locked. Unlock the Mac or take Conductor out of full screen, then send again." & ev
+		if my serverWindowCount() > 0 then
+			if lockState is "locked" then error "The Mac is locked - Conductor's window is open behind the lock screen, where the relay can't reach it. Unlock the Mac and send again." & ev
+			error "Conductor's window exists but is not reachable - it is probably full screen on another Space. Take Conductor out of full screen, then send again." & ev
+		end if
+		-- No window anywhere and the lock screen up: don't restart. Every relaunch
+		-- fired behind the lock screen in the live incident came up windowless, and
+		-- the last one came up wedged — answering deep links, hanging every AX
+		-- read. A restart here is not a lever, it is how the wreckage happened.
+		if lockState is "locked" then error "The Mac is locked and Conductor has no window. Relaunching behind the lock screen is what leaves it wedged, so the relay won't - unlock the Mac and send again." & ev
 		set restartError to my restartConductor()
 		if restartError is not "" then error restartError & ev
 		error "Conductor was running with no window and ignored both reopen and a Dock click, so the relay restarted it. Give it a few seconds and send again." & ev

@@ -155,8 +155,14 @@ Two asymmetric halves — keep them separate:
        left open and wedged the relaunch. So `serverWindowCount()` (CGWindowList
        via a stdlib `osascript -l JavaScript` shell-out — owner and layer need
        no Screen Recording grant, only titles do) gets a veto: a window it can
-       see blocks the restart and the error says to unlock the Mac or leave
-       full screen instead. Only then does `restartConductor` quit and
+       see blocks the restart, and `screenLocked()` (CGSessionCopyCurrentDictionary's
+       `CGSSessionScreenIsLocked`, same channel) picks the words — "unlock the
+       Mac" against the lock screen, "leave full screen" otherwise. **A locked
+       screen blocks the restart even when no window exists anywhere**: in the
+       live incident every relaunch fired behind the lock screen came up
+       windowless and the last came up wedged (deep links answered, every AX
+       read hung), so behind a lock the restart lever is not a lever — the
+       error says to unlock instead. Only then does `restartConductor` quit and
        relaunch — **the only remaining lever**, and the one step here that can
        destroy work, so it is gated on `RELAY_ALLOW_RESTART`, which `server.ts`
        sets from a live DB read (`no workspace is 'working'`) — writes.ts must
