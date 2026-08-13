@@ -73,10 +73,17 @@ on windowProbe()
 	-- count is -1 when macOS refused the read at all. Everything that wants to
 	-- know about windows goes through here, because "returned 0" and "refused to
 	-- answer" are different facts and only this handler still has both.
+	-- The timeout is load-bearing: a wedged Conductor (seen live after a restart
+	-- collided with a relaunch) answers deep links but hangs every AX read, and
+	-- without a cap this call blocks until the node-side ceiling kills the whole
+	-- run as "took too long" — 28s of silence instead of a named cause. 6s turns
+	-- that into error -1712, which refusalReason maps to words.
 	try
-		tell application "System Events" to tell process "Conductor"
-			set winCount to (count of windows)
-		end tell
+		with timeout of 6 seconds
+			tell application "System Events" to tell process "Conductor"
+				set winCount to (count of windows)
+			end tell
+		end timeout
 		return {winCount, 0, ""}
 	on error errText number errNum
 		return {-1, errNum, errText}
@@ -99,6 +106,7 @@ on refusalReason(probe)
 	set errText to item 3 of probe
 	if errText contains "assistive access" then return "the relay is not trusted for Accessibility - grant it to the node binary running the relay in System Settings > Privacy & Security > Accessibility, then restart the relay (upgrading node silently revokes it). macOS said: " & errText
 	if errNum is -1743 or errText contains "Not authorized" then return "macOS blocked the relay from controlling the UI - grant Automation permission to the node binary running the relay in System Settings > Privacy & Security > Automation. macOS said: " & errText
+	if errNum is -1712 then return "Conductor stopped answering UI reads (the Accessibility query timed out) - the app looks wedged even though it may still process deep links. Force-quit Conductor on your Mac and open it again; if it repeats with a healthy Conductor, System Events is stuck - run: killall 'System Events'"
 	return ""
 end refusalReason
 
@@ -143,14 +151,34 @@ on menuTitles()
 	end try
 end menuTitles
 
+on serverWindowCount()
+	-- Second opinion from the window server, because the Accessibility tree only
+	-- shows windows on the *current* Space: a full-screen Conductor (which owns its
+	-- own Space) or a Mac sitting at the lock screen reads as "no window" from AX
+	-- while the window very much exists — and acting on the AX answer alone once
+	-- quit a Conductor whose window the user had left open all along.
+	-- CGWindowListCopyWindowInfo(kCGWindowListOptionAll) sees every Space; owner
+	-- name and layer are readable without the Screen Recording grant (only window
+	-- *titles* are gated). Layer 0 keeps it to real windows. -1 = the probe itself
+	-- failed, which callers must treat as "no opinion", never as "no window".
+	set jxa to "ObjC.import('CoreGraphics'); const w = ObjC.deepUnwrap($.CFBridgingRelease($.CGWindowListCopyWindowInfo(0, 0))) || []; w.filter(x => x.kCGWindowOwnerName === 'Conductor' && x.kCGWindowLayer === 0).length"
+	try
+		return (do shell script "osascript -l JavaScript -e " & quoted form of jxa) as integer
+	on error
+		return -1
+	end try
+end serverWindowCount
+
 on windowEvidence()
 	-- Zero windows is a dead end without knowing what the AX tree *does* show, and
 	-- guessing the next thing to press has already cost a round trip (there is no
 	-- "New Window" item — Conductor is single-window). So the error carries the
-	-- evidence instead: who macOS thinks Conductor is, and what its menus offer.
+	-- evidence instead: who macOS thinks Conductor is, what its menus offer, and
+	-- how many windows the window server counts across all Spaces (AX only sees
+	-- the current one).
 	set procs to my processWindowCounts()
 	set titles to my menuTitles()
-	set ev to ""
+	set ev to " [window server: " & my serverWindowCount() & "]"
 	if (count of procs) > 0 then set ev to ev & " [processes: " & my joinList(procs, ", ") & "]"
 	if (count of titles) > 0 then set ev to ev & " [menus: " & my joinList(titles, ", ") & "]"
 	return ev
@@ -282,6 +310,13 @@ on activateConductor()
 		-- used to drop it, which made a repeating no-window failure undebuggable
 		-- from the log alone.
 		set ev to my windowEvidence()
+		-- AX saying "no window" is not the same as there being no window: full
+		-- screen on another Space and the lock screen both hide a live window from
+		-- AX, and restarting then destroys a window the user left open (measured
+		-- live: exactly that loop wedged Conductor for a whole evening). Only the
+		-- window server can tell the difference, so a window it CAN see blocks the
+		-- restart — this is a human's problem, said in words, not the relay's.
+		if my serverWindowCount() > 0 then error "Conductor's window exists but is not reachable - it is probably full screen on another Space, or the Mac is locked. Unlock the Mac or take Conductor out of full screen, then send again." & ev
 		set restartError to my restartConductor()
 		if restartError is not "" then error restartError & ev
 		error "Conductor was running with no window and ignored both reopen and a Dock click, so the relay restarted it. Give it a few seconds and send again." & ev

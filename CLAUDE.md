@@ -133,21 +133,34 @@ Two asymmetric halves — keep them separate:
        Automation), never on `UI elements enabled` — that flag **can report
        true for a process that isn't itself trusted**, which is why it was
        dropped. An unrecognised refusal is reported verbatim with its number
-       rather than mapped to the nearest known cause. If `reopen` has drawn
+       rather than mapped to the nearest known cause. The probe itself is capped
+       at 6s (`with timeout`): a wedged Conductor — seen live after a restart
+       collided with its own relaunch — still answers deep links while hanging
+       every AX read, and without the cap that surfaced as 28s of silence killed
+       by the node-side ceiling ("took too long") instead of the `-1712` that
+       refusalReason maps to "force-quit Conductor". If `reopen` has drawn
        nothing by ~3s the app isn't answering that event, so `dockClick`
        clicks the real Dock tile — delivered by the Dock through Conductor's own
        event loop, not as an Apple event we send. **There is no "New Window" to
        press**: Conductor is single-window and single-instance, so once reopen
        and the Dock click have both drawn nothing, restarting the app is the
        only lever left. That branch reports `windowEvidence()` — every process
-       matching `Conductor` with its window count, plus the menu bar titles —
-       because *which* process owns the on-screen window is the one fact that
-       separates "genuinely windowless" from "we're addressing the wrong
-       process". Then `restartConductor` quits and relaunches — **the only
-       remaining lever**, and the one step here that can destroy work, so it is
-       gated on `RELAY_ALLOW_RESTART`, which `server.ts` sets from a live DB
-       read (`no workspace is 'working'`) — writes.ts must never decide this
-       itself. It is **fire-and-forget**: a cold launch doesn't fit the phone's
+       matching `Conductor` with its window count, the menu bar titles, and the
+       window server's own count — because *which* process owns the on-screen
+       window is the one fact that separates "genuinely windowless" from "we're
+       addressing the wrong process". **"AX sees no window" is not "there is no
+       window"**: the AX tree only shows the current Space, so a full-screen
+       Conductor (its own Space) or a locked Mac reads 0 while the window
+       exists — which is how the restart lever once quit a window the user had
+       left open and wedged the relaunch. So `serverWindowCount()` (CGWindowList
+       via a stdlib `osascript -l JavaScript` shell-out — owner and layer need
+       no Screen Recording grant, only titles do) gets a veto: a window it can
+       see blocks the restart and the error says to unlock the Mac or leave
+       full screen instead. Only then does `restartConductor` quit and
+       relaunch — **the only remaining lever**, and the one step here that can
+       destroy work, so it is gated on `RELAY_ALLOW_RESTART`, which `server.ts`
+       sets from a live DB read (`no workspace is 'working'`) — writes.ts must
+       never decide this itself. It is **fire-and-forget**: a cold launch doesn't fit the phone's
        budget alongside the send, so it returns as soon as the relaunch starts
        and tells the phone to send again. "Open it on your Mac" is not advice a
        phone can act on.
