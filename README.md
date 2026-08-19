@@ -367,6 +367,14 @@ arming takes over from any other, including one you left running in a terminal. 
 politeness: two windows would each capture the *other's* already-flipped values and
 "restore" those on the way out, leaving a Mac that can never sleep again.
 
+Ending the window — "Let it sleep", or the timer running out — actually *sleeps* a
+lid-closed Mac rather than just re-allowing sleep. Clamshell sleep is an event macOS fires
+when the lid closes, and the lid closed while sleep was disabled, so restoring
+`disablesleep 0` on its own leaves the Mac sitting awake under a shut lid indefinitely.
+The relay checks the lid (`AppleClamshellState`) and runs `pmset sleepnow` — no root
+needed — a beat after answering, so the phone gets its confirmation before the Mac drops
+off the network. An open lid just gets sleep re-enabled, exactly as before.
+
 The same section carries a **fallback network**: pick a Wi-Fi network the Mac already knows
 (your phone's hotspot), and if the Mac loses its link entirely the funnel watchdog joins it
 and re-registers Funnel, whose ingress a change of public endpoint invalidates anyway. It

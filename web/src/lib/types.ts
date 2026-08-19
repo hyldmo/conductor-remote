@@ -335,6 +335,8 @@ export interface NoSleepState {
 export interface NoSleepResult {
 	ok: boolean
 	error?: string
+	/** Disarm only: the lid is shut, so the relay is about to put the Mac to sleep for real. */
+	willSleep?: boolean
 	state: NoSleepState
 }
 

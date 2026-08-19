@@ -400,9 +400,25 @@ Two asymmetric halves — keep them separate:
   (`autoupdate` exits to reload, and a plain child would die with it and quietly
   restore sleep), found again after a restart via `/var/run/…nosleep.pid`, and its
   liveness read through **EPERM, not success** — it runs as root, so `kill(pid,0)`
-  from the relay is refused, and that refusal is the proof it's alive. What none of
-  this buys is *delivery*: the lock screen still blocks every UI write, so a
-  lid-closed Mac serves reads and notifications while sends park (`src/parked.ts`).
+  from the relay is refused, and that refusal is the proof it's alive. **Ending the
+  window has to put a shut Mac to sleep itself**: clamshell sleep is a lid-close
+  *event*, not a state macOS re-checks, and the lid closed while `disablesleep` was
+  up — so the helper's restore re-allows sleep without causing any, and a lid-closed
+  Mac whose window ended (the phone's "Let it sleep", or the timer running out) sat
+  awake indefinitely, which from the phone read as the button doing nothing. The
+  relay follows the restore with `pmset sleepnow` — needs no root (only pmset
+  *settings* do), so it lives in `nosleep.ts` rather than the installed helper and
+  existing setups need no re-`setup` — gated on ioreg's `AppleClamshellState` (an
+  open lid, or a desktop that has none, keeps restore-only, since forcing sleep on a
+  Mac someone may be sitting at is worse than the bug) and fired ~2s *after* the
+  disarm response, so the phone hears the answer before the network suspends. The
+  expiry side (`watchNoSleepExpiry`) carries two guards of its own: a timer that
+  fires long past its schedule is discarded (Node timers don't run while the Mac
+  sleeps, so a late fire means someone just *woke* it — sleeping it again is the one
+  wrong move), and a pidfile still present at fire time is a takeover, never "sleep
+  anyway". What none of this buys is *delivery*: the lock screen still blocks every
+  UI write, so a lid-closed Mac serves reads and notifications while sends park
+  (`src/parked.ts`).
 - **The Mac's own Wi-Fi is readable only in the parts that don't matter.** The
   funnel watchdog can move this Mac onto a phone hotspot when its link dies
   (`src/wifi.ts`, opt-in via `src/settings.ts`), and the guards are the design: it

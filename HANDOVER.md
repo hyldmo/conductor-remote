@@ -107,7 +107,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   nosleep-helper.ts  the root half in one place: the shared POSIX-sh body, the helper file it is
                   installed as, the sudoers drop-in, and helperReady() (runs the real path under sudo -n -k)
   nosleep.ts      arming lid-closed wakefulness from the phone: detached spawn, pidfile discovery
-                  across relay restarts, liveness read through EPERM
+                  across relay restarts, liveness read through EPERM — and the `pmset sleepnow`
+                  that ends a window for real (a shut lid never replays its close event)
 web/              React PWA (Vite root)
   index.html      loads /self-heal.js synchronously (before the module bundle) so it can catch a dead shell
   src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)

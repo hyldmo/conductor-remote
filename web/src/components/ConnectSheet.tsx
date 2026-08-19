@@ -265,6 +265,10 @@ function MacRow() {
 	const [data, setData] = useState<SettingsResponse | null>(null)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
+	// The disarm answer said the lid is shut and the Mac is about to be *put* to sleep — the
+	// relay goes unreachable seconds after the tap, and copy that still read "stops the Mac
+	// sleeping when you shut the lid" made that look like the app breaking.
+	const [goingToSleep, setGoingToSleep] = useState(false)
 
 	const load = useCallback(async () => {
 		try {
@@ -307,7 +311,12 @@ function MacRow() {
 					<button
 						type="button"
 						disabled={busy}
-						onClick={() => void act(() => client.disarmNoSleep())}
+						onClick={() =>
+							void act(async () => {
+								const r = await client.disarmNoSleep()
+								setGoingToSleep(r.willSleep === true)
+							})
+						}
 						className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs active:bg-surface disabled:opacity-50"
 					>
 						Let it sleep
@@ -319,7 +328,12 @@ function MacRow() {
 								key={c.seconds}
 								type="button"
 								disabled={busy || !nosleep?.available}
-								onClick={() => void act(() => client.armNoSleep(c.seconds))}
+								onClick={() =>
+									void act(() => {
+										setGoingToSleep(false)
+										return client.armNoSleep(c.seconds)
+									})
+								}
 								className="rounded-lg border border-border px-2.5 py-1 text-xs active:bg-surface disabled:opacity-40"
 							>
 								{c.label}
@@ -335,7 +349,9 @@ function MacRow() {
 						? 'Run `conductor-remote nosleep setup` on the Mac once to enable this.'
 						: nosleep.armed
 							? `Awake ${untilLabel(nosleep.until)}, lid closed. Sends still park until you unlock.`
-							: 'Stops the Mac sleeping when you shut the lid. Reads and notifications keep working; sends park until you unlock.'}
+							: goingToSleep
+								? 'The lid is shut, so the Mac is going to sleep now — this app will be unreachable until you wake it.'
+								: 'Stops the Mac sleeping when you shut the lid. Reads and notifications keep working; sends park until you unlock.'}
 			</p>
 
 			<div className="border-t border-border pt-2.5">

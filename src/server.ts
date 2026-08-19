@@ -20,7 +20,13 @@ import {
 	tailLogFile
 } from './logbuf.ts'
 import { mergePr } from './merge.ts'
-import { armNoSleep, disarmNoSleep, MAX_SECONDS as NOSLEEP_MAX_SECONDS, nosleepState } from './nosleep.ts'
+import {
+	armNoSleep,
+	disarmNoSleep,
+	MAX_SECONDS as NOSLEEP_MAX_SECONDS,
+	nosleepState,
+	watchNoSleepExpiry
+} from './nosleep.ts'
 import { notifyAll, notifyDevice, pushConfig, startNotifier, subscribeDevice, unsubscribeDevice } from './notify.ts'
 import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './parked.ts'
 import { attachPrStatus } from './pr.ts'
@@ -908,4 +914,8 @@ server.listen(cfg.port, cfg.host, () => {
 	// Watch for turns ending and push them to subscribed phones. Idle (one small local
 	// query per tick) until a device subscribes; see notify.ts.
 	startNotifier(reads)
+	// Watch armed keep-awake windows for their recorded expiry: the helper's restore only
+	// re-allows sleep, so a lid still shut at expiry needs the relay's `pmset sleepnow`
+	// (see nosleep.ts). Also picks a window back up after the relay's own restarts.
+	watchNoSleepExpiry()
 })

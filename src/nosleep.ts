@@ -7,7 +7,7 @@
  * function below degrades to "not available" rather than failing loudly when the rule
  * isn't installed, because that is the normal state for anyone who hasn't opted in.
  *
- * Two properties matter and neither is obvious:
+ * Three properties matter and none is obvious:
  *
  *  - **The armed window must outlive this process.** `autoupdate` deliberately
  *    `exit()`s to reload and launchd restarts us; if the helper were an ordinary child
@@ -19,6 +19,16 @@
  *    `kill(pid, 0)` from this process raises EPERM rather than succeeding. EPERM means
  *    it is alive and not ours; ESRCH means it is gone. Treating EPERM as dead would
  *    report every armed window as idle.
+ *  - **Ending a window has to put a shut Mac to sleep itself.** Clamshell sleep is a
+ *    lid-close *event*, not a state macOS keeps re-checking, and the lid closed while
+ *    `disablesleep` was up — so the helper's restore re-allows sleep without causing
+ *    any, and a lid-closed Mac that ended its window (the phone's "Let it sleep", or
+ *    the timer running out) just sat there awake indefinitely. The relay follows the
+ *    restore with `pmset sleepnow` — which needs no root (only pmset *settings* do),
+ *    so it lives here and not in the installed helper, and existing setups need no
+ *    re-`setup` — gated on ioreg's AppleClamshellState: an open lid, or a desktop Mac
+ *    that has none, keeps the restore-only behaviour, because forcing sleep on a Mac
+ *    someone may be sitting at is worse than the bug.
  *
  * Stdlib only, strip-clean — see CLAUDE.md.
  */
@@ -100,7 +110,62 @@ export async function nosleepState(): Promise<NoSleepState> {
 export interface NoSleepResult {
 	ok: boolean
 	error?: string
+	/** Disarm only: the lid is shut, so the relay is about to `pmset sleepnow` the Mac. */
+	willSleep?: boolean
 	state: NoSleepState
+}
+
+/**
+ * Whether the lid is physically shut. `null` means the probe couldn't say — a desktop Mac
+ * has no clamshell and no such key — and callers must read that as "don't force anything",
+ * never as either lid state.
+ */
+async function clamshellClosed(): Promise<boolean | null> {
+	try {
+		const { stdout } = await execFileP('ioreg', ['-r', '-k', 'AppleClamshellState', '-d', '1'], { timeout: 5000 })
+		const m = stdout.match(/"AppleClamshellState"\s*=\s*(Yes|No)/)
+		return m ? m[1] === 'Yes' : null
+	} catch {
+		return null
+	}
+}
+
+/** Ask macOS to sleep now. Unprivileged on purpose: `sleepnow` is the one pmset verb that needs no root. */
+async function sleepNow(): Promise<{ ok: boolean; error?: string }> {
+	try {
+		await execFileP('pmset', ['sleepnow'], { timeout: 10_000 })
+		return { ok: true }
+	} catch (err) {
+		return { ok: false, error: err instanceof Error ? err.message : String(err) }
+	}
+}
+
+/**
+ * How long a disarm answer gets to leave the Mac before the network suspends with it. The
+ * phone's tap awaits the DELETE and immediately re-reads /api/settings (~90ms of concurrent
+ * subprocesses plus one funnel round trip), so 2s covers both with room, and nobody watches
+ * a lid-closed Mac take two extra seconds to sleep.
+ */
+const SLEEP_AFTER_REPLY_MS = 2000
+
+/**
+ * Sleep the Mac in a moment, unless a new window arms in the meantime — a tap pair of
+ * "Let it sleep" then "1h" must end with a Mac that stays awake, not one that sleeps
+ * two seconds into its fresh window.
+ */
+function sleepSoon(why: string): void {
+	const t = setTimeout(() => {
+		void (async () => {
+			if (armedRecord()) {
+				console.info(`nosleep: not sleeping the Mac (${why}) — a new keep-awake window armed first`)
+				return
+			}
+			const res = await sleepNow()
+			if (res.ok) console.info(`nosleep: lid is closed — putting the Mac to sleep (${why})`)
+			else console.error(`nosleep: pmset sleepnow failed (${why}): ${res.error}`)
+		})()
+	}, SLEEP_AFTER_REPLY_MS)
+	t.unref()
 }
 
 function unavailable(): NoSleepResult {
@@ -136,13 +201,24 @@ export async function armNoSleep(seconds: number): Promise<NoSleepResult> {
 	const deadline = Date.now() + 10_000
 	while (Date.now() < deadline) {
 		const rec = armedRecord()
-		if (rec) return { ok: true, state: armedState(rec) }
+		if (rec) {
+			// Watch this window's own end: the helper's restore re-allows sleep but causes
+			// none, so a lid still shut at expiry needs the nudge below.
+			rescanExpiry()
+			return { ok: true, state: armedState(rec) }
+		}
 		await new Promise(r => setTimeout(r, 200))
 	}
 	return { ok: false, error: 'nosleep did not report itself armed within 10s', state: await nosleepState() }
 }
 
-/** Disarm. Goes through the helper because the armed process is root and we can't signal it. */
+/**
+ * Disarm. Goes through the helper because the armed process is root and we can't signal it.
+ * A shut lid then gets `pmset sleepnow` a beat later — restoring `disablesleep 0` re-allows
+ * sleep without causing any (see the module note), and "Let it sleep" tapped from a phone
+ * means exactly that. The caller is answered `willSleep` first, so the phone hears the
+ * confirmation before the network goes down with the Mac.
+ */
 export async function disarmNoSleep(): Promise<NoSleepResult> {
 	if (!(await helperReady())) return unavailable()
 	try {
@@ -152,8 +228,87 @@ export async function disarmNoSleep(): Promise<NoSleepResult> {
 	}
 	const deadline = Date.now() + 8000
 	while (Date.now() < deadline) {
-		if (!armedRecord()) return { ok: true, state: { available: true, armed: false, until: null, pid: null } }
+		if (!armedRecord()) {
+			cancelExpiryWatch()
+			const willSleep = (await clamshellClosed()) === true
+			if (willSleep) sleepSoon('the keep-awake window was ended from the phone')
+			else console.info('nosleep: window ended with the lid open (or unreadable) — sleep re-enabled, not forced')
+			return { ok: true, willSleep, state: { available: true, armed: false, until: null, pid: null } }
+		}
 		await new Promise(r => setTimeout(r, 200))
 	}
 	return { ok: false, error: 'nosleep is still armed after --stop', state: await nosleepState() }
+}
+
+// --- The window's own expiry -------------------------------------------------------------
+//
+// "Awake until 12:30" promises a Mac that sleeps at 12:30, and the helper alone cannot keep
+// that promise on a shut lid (its restore re-allows sleep, nothing more). Teaching the
+// *installed* helper to sleepnow would strand every existing setup on the old behaviour —
+// the root copy deliberately never self-updates — so the relay watches the recorded expiry
+// instead, which also covers windows armed from a terminal.
+
+/** Slack after the recorded expiry for the helper's own restore to land before we look. */
+const EXPIRY_GRACE_MS = 15_000
+/** A timer this far past its schedule fired on wake-from-sleep, not on schedule. */
+const EXPIRY_LATE_MS = 60_000
+/** How often to re-read the pidfile for windows this process didn't arm (CLI, pre-restart). */
+const EXPIRY_RESCAN_MS = 60_000
+
+let expiryTimer: ReturnType<typeof setTimeout> | null = null
+/** Identity of the window the timer is armed for — `pid:until`, so a takeover reschedules. */
+let expiryKey: string | null = null
+
+function cancelExpiryWatch(): void {
+	if (expiryTimer) clearTimeout(expiryTimer)
+	expiryTimer = null
+	expiryKey = null
+}
+
+function rescanExpiry(): void {
+	const rec = armedRecord()
+	const key = rec && rec.until !== null ? `${rec.pid}:${rec.until}` : null
+	if (key === expiryKey) return
+	cancelExpiryWatch()
+	if (!rec || rec.until === null) return
+	expiryKey = key
+	const fireAt = rec.until + EXPIRY_GRACE_MS
+	expiryTimer = setTimeout(
+		() => {
+			expiryTimer = null
+			expiryKey = null
+			void windowExpired(fireAt)
+		},
+		Math.max(0, fireAt - Date.now())
+	)
+	// A 12h timer must not hold the process open, and it survives nothing anyway — a
+	// restarted relay rebuilds it from the pidfile in watchNoSleepExpiry's first rescan.
+	expiryTimer.unref()
+}
+
+async function windowExpired(plannedAt: number): Promise<void> {
+	// Node timers don't run while the Mac sleeps; one that fires long after its schedule
+	// fired because something woke the Mac, and sleeping a Mac someone just woke is the one
+	// wrong move here. On schedule ± a minute is the only firing that means "expiry".
+	const lateMs = Date.now() - plannedAt
+	if (lateMs > EXPIRY_LATE_MS) {
+		console.info(`nosleep: expiry check ran ${Math.round(lateMs / 1000)}s late (Mac was asleep?) — leaving it awake`)
+		return
+	}
+	// A record still (or again) present is a takeover or a helper mid-restore — not ours to end.
+	if (armedRecord()) return
+	if ((await clamshellClosed()) !== true) {
+		console.info('nosleep: keep-awake window expired with the lid open (or unreadable) — leaving the Mac awake')
+		return
+	}
+	const res = await sleepNow()
+	if (res.ok) console.info('nosleep: keep-awake window expired with the lid closed — putting the Mac to sleep')
+	else console.error(`nosleep: pmset sleepnow failed at window expiry: ${res.error}`)
+}
+
+/** Start watching for armed windows reaching their recorded expiry. Called once at relay startup. */
+export function watchNoSleepExpiry(): void {
+	rescanExpiry()
+	const iv = setInterval(rescanExpiry, EXPIRY_RESCAN_MS)
+	iv.unref()
 }

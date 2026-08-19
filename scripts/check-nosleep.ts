@@ -180,6 +180,29 @@ reset()
 	process.kill(ghostPid, 'SIGKILL')
 }
 
+// --- --stop against a live armed window — the phone's "Let it sleep" path ---------------
+// The relay TERMs through the helper and then polls the pidfile away. What it is owed is
+// the same property as every other exit: the captured values restored, the record cleared.
+reset()
+{
+	spawnSync('sh', ['-c', '"$1" 60 1m >/dev/null 2>&1 & sleep 1.5', 'x', helperPath], { env, encoding: 'utf8' })
+	check('window armed before --stop', state() === FLIPPED, state())
+	const armedPid = Number(fs.readFileSync(pidfile, 'utf8').trim().split(/\s+/)[0])
+
+	const r = run('--stop')
+	check(
+		'--stop answers stopped',
+		r.code === 0 && r.stdout.trim() === 'stopped',
+		`exit ${r.code}, stdout ${JSON.stringify(r.stdout)}`
+	)
+	// The TERM lands asynchronously — give the window's trap a moment to run its restore.
+	const deadline = Date.now() + 5000
+	while (isAlive(armedPid) && Date.now() < deadline) spawnSync('sleep', ['0.1'])
+	check('--stop stops the armed window', !isAlive(armedPid), `pid ${armedPid} still alive`)
+	check('--stop restores the captured values', state() === ORIGINAL, state())
+	check('--stop clears the pidfile', !fs.existsSync(pidfile), 'pidfile still present')
+}
+
 // --- --stop on a stale record must not signal a stranger either ------------------------
 reset()
 {
