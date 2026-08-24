@@ -90,6 +90,24 @@ export function statusDot(w: Workspace): { color: string; working: boolean } {
 }
 
 /**
+ * Has this workspace's PR landed? Read off `pr_status`, which the relay resolves
+ * from `gh pr list` per repo (src/pr.ts) — **not** off Conductor's own status,
+ * and the two genuinely disagree:
+ *  - Conductor derives its status from a PR it sometimes never links (one opened
+ *    and merged inside its poll window is invisible to it afterwards), so merged
+ *    work sits in "In progress" indefinitely. And its `done` isn't a merge claim
+ *    in the other direction either — it can be set by hand on work that never
+ *    landed, so folding it in here would hide unmerged branches.
+ *  - Ours lags too, just briefly and in the safe direction: the PR map is cached
+ *    for 60s and degrades to `null` whenever `gh` is missing or unauthenticated.
+ *    So a just-merged (or unresolvable) workspace stays *visible* for a moment
+ *    rather than vanishing — the only lag a hide filter can afford.
+ */
+export function isMerged(w: Workspace): boolean {
+	return w.pr_status === 'merged'
+}
+
+/**
  * The workspace lifecycle status the desktop sidebar groups by — a manual
  * override beats the derived one (same precedence as the app).
  */

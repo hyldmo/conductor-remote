@@ -17,12 +17,17 @@ export interface ViewPrefs {
 	/** Repo name to filter to, or null for all repos. */
 	repo: string | null
 	sortBy: SortBy
+	/**
+	 * Drop workspaces whose PR has landed (see `isMerged`). Off by default — a
+	 * filter that hides rows has to be asked for, never inherited.
+	 */
+	hideMerged: boolean
 	/** Collapsed group keys (e.g. 'status:done', 'repo:auk-store'). */
 	collapsed: string[]
 }
 
 const VIEW_KEY = 'conductor-remote-view'
-const defaultView: ViewPrefs = { groupBy: 'status', repo: null, sortBy: 'updated', collapsed: [] }
+const defaultView: ViewPrefs = { groupBy: 'status', repo: null, sortBy: 'updated', hideMerged: false, collapsed: [] }
 
 /**
  * A prompt shown optimistically in the transcript before the relay confirms it.

@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router'
 import { useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
+	isMerged,
 	isSettingUp,
 	RECENT_BUCKETS,
 	recentBucket,
@@ -94,7 +95,11 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 
 	const repos = [...new Set(workspaces.map(w => w.repo_name).filter((r): r is string => !!r))].sort()
 	if (view.repo && !repos.includes(view.repo)) repos.push(view.repo)
-	const shown = view.repo ? workspaces.filter(w => w.repo_name === view.repo) : workspaces
+	const inRepo = view.repo ? workspaces.filter(w => w.repo_name === view.repo) : workspaces
+	// The workspace you're *in* is never hidden: the list is the way back to the chat on
+	// screen, and a filter that swallows it reads as the app having lost your place.
+	const shown = view.hideMerged ? inRepo.filter(w => !isMerged(w) || w.id === selectedId) : inRepo
+	const hiddenMerged = inRepo.length - shown.length
 	const groups = groupWorkspaces(sortWorkspaces(shown, view.sortBy), view.groupBy)
 
 	// A search result names the chat its excerpt came from, so opening one lands on that
@@ -105,11 +110,17 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 		setSidebarOpen(false)
 	}
 
+	// The dot marks the *setting*; the subtitle only speaks up once a filter actually
+	// took something out, or "Hide merged" with nothing merged would read as "40 of 40".
+	const filtered = !!view.repo || view.hideMerged
+	const narrowed = !!view.repo || hiddenMerged > 0
 	const subtitle = searching
 		? `Searching every workspace, archived included`
 		: workspaces.length
-			? view.repo
-				? `${shown.length} of ${workspaces.length} · ${view.repo}`
+			? narrowed
+				? [`${shown.length} of ${workspaces.length}`, view.repo, hiddenMerged ? `${hiddenMerged} merged hidden` : null]
+						.filter(Boolean)
+						.join(' · ')
 				: `${workspaces.length} active`
 			: undefined
 
@@ -136,7 +147,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 								className="relative flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
 							>
 								<SlidersHorizontal size={18} />
-								{view.repo ? <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-accent" /> : null}
+								{filtered ? <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-accent" /> : null}
 							</button>
 							<button
 								type="button"
@@ -170,7 +181,10 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 				) : workspaces.length === 0 ? (
 					<Empty>No active workspaces. Start one in Conductor and it’ll appear here.</Empty>
 				) : shown.length === 0 ? (
-					<Empty>No workspaces in {view.repo}.</Empty>
+					<Empty>
+						{view.repo ? `No workspaces in ${view.repo}` : 'No workspaces'}
+						{hiddenMerged ? ` — ${hiddenMerged} merged ${hiddenMerged === 1 ? 'one is' : 'ones are'} hidden.` : '.'}
+					</Empty>
 				) : (
 					groups.map(g => {
 						const collapsed = !!g.label && view.collapsed.includes(g.key)
@@ -322,8 +336,58 @@ function ViewControls({ repos, view, onClose }: { repos: string[]; view: ViewPre
 						]}
 					/>
 				</ControlRow>
+				<ControlRow id="view-hide-merged" label="Hide merged">
+					<ViewSwitch
+						id="view-hide-merged"
+						checked={view.hideMerged}
+						label="Hide workspaces whose PR has merged"
+						onChange={v => setView({ hideMerged: v })}
+					/>
+				</ControlRow>
+				{/* Whose merge, exactly: ours, off `gh`, not Conductor's status — see `isMerged`.
+				    Worth one line here because the two disagree often enough that a workspace
+				    still sitting in "Done" after this is on looks like the toggle misfiring. */}
+				<p className="-mt-1 text-faint text-xs">
+					By the PR on GitHub, which can trail a merge by up to a minute — not by Conductor’s status.
+				</p>
 			</div>
 		</>
+	)
+}
+
+/** The popover's boolean row — same pill as the Connect sheet's, sized for this list. */
+function ViewSwitch({
+	id,
+	checked,
+	label,
+	onChange
+}: {
+	id: string
+	checked: boolean
+	label: string
+	onChange: (v: boolean) => void
+}) {
+	return (
+		<button
+			id={id}
+			type="button"
+			role="switch"
+			aria-checked={checked}
+			aria-label={label}
+			onClick={() => onChange(!checked)}
+			className={cn(
+				'relative h-6 w-11 shrink-0 rounded-full transition-colors',
+				checked ? 'bg-accent' : 'border border-border bg-surface-2'
+			)}
+		>
+			{/* `left-0.5` is load-bearing — see the note on the Connect sheet's twin. */}
+			<span
+				className={cn(
+					'absolute left-0.5 top-0.5 size-5 rounded-full bg-white transition-transform',
+					checked ? 'translate-x-5' : 'translate-x-0'
+				)}
+			/>
+		</button>
 	)
 }
 
