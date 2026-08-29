@@ -471,7 +471,7 @@ function WorkspaceCard({ w, unread, selected }: { w: Workspace; unread: number; 
 				<div className="flex items-center gap-2">
 					<span
 						className={cn(
-							'min-w-0 flex-1 truncate',
+							'min-w-0 flex-1 truncate leading-none',
 							unread ? 'font-bold' : 'font-medium',
 							unread || selected ? 'text-text' : 'text-muted'
 						)}
