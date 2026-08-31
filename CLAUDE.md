@@ -1142,6 +1142,44 @@ bind trap below), not by unit test.
     and coming back clears it — which is why it reads as a relay bug and is not one.
     Skipping a tick costs nothing: the cursor hasn't moved, so the next fetch carries
     what the skipped one would have.
+  - **A tool's output is a different row from the tool call, so the pairing is the
+    phone's job** (`web/src/lib/transcript-merge.ts`). Conductor writes the call in an
+    assistant frame and the result in a later `type:"user"` one, and the transcript is
+    polled by rowid — so anything the 1s tick outruns, which is every command worth
+    watching, lands in a *later* fetch than the row it belongs to. A relay-side join
+    would therefore only ever catch the fast tools. So the result travels as its own
+    entry carrying the SDK's `tool_use` id (`toolUseId`, the only thing that pairs
+    them) and `mergeEntries` folds it onto the call already on screen, which is what
+    lets one row hold `rg -n needle src` and what it printed. Three properties.
+    **Identity survives**: an untouched entry comes back as the same object, or the
+    fold would re-render the whole backlog on every tick and undo the memoisation
+    above. **An unpaired failure still shows** on its own — the old behaviour, and a
+    dropped error reads as a step that worked — while an unpaired success is output
+    with nothing to attach it to and goes. And **output is capped at 2,000 characters**
+    (`MAX_OUTPUT_CHARS`), because a chat's first fetch carries its whole backlog:
+    measured on the largest chat on this Mac, 664 results / 1,732 kB raw becomes
+    569 kB, and the transcript goes from 703 kB to 1,482 kB (200 kB → 413 kB gzipped,
+    which is what the phone actually pulls). Only the *phone* gets any of this.
+    `renderTranscript` and `read_chat` print the call and leave the output behind, on
+    the same measurement that keeps tool churn out of a fork: outputs are 799 MB of
+    the 3,106 MB in `session_messages.content` and the least re-readable part of it.
+  - **A result arrives in whatever shape its tool answered in, and three of the five
+    shapes used to render as nothing.** Measured over the 40,000 most recent result
+    blocks here: 35,709 plain strings and 753 text blocks were read, while **3,917
+    results showed as an empty step** — 3,120 of them Conductor's own edit result
+    (`{status, diffString}`), 205 a `tool_reference` list, 80 an image. So an edit now
+    shows its **diff**, coloured by the same `Patch` the workspace diff uses (extracted
+    to `web/src/components/Patch.tsx`, because a patch that reads differently in two
+    places reads as two different changes), a tool search names what it found, and an
+    unknown shape falls back to its own JSON rather than to silence, which is what keeps
+    Conductor drift visible. **Images are the one output that stays behind a route**
+    (`routes.ts` ▸ `toolImage`, `<message rowid>.<image number in that row>`): each is
+    ~100 kB of base64 sitting in the row, so shipping them inside a transcript that
+    already carries a whole chat is the one thing the cap above exists to prevent. The
+    entry carries references, `ToolEntry` holds its own open state, and the fetch happens
+    only for a step someone opened. That numbering is why `parseMessage` and `toolImageAt`
+    live in one file: they must walk a row's image blocks in the same order, or the
+    reference finds the wrong picture.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."

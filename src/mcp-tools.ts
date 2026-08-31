@@ -28,7 +28,7 @@
 
 import { chatCursor, parseChatCursor } from './chat-cursor.ts'
 import { routes } from './routes.ts'
-import { HIT_CLOSE, HIT_OPEN, workspaceTitle } from './shared.ts'
+import { HIT_CLOSE, HIT_OPEN, isToolResult, workspaceTitle } from './shared.ts'
 import type { TranscriptEntry } from './transcript.ts'
 import type {
 	AgentResult,
@@ -246,9 +246,15 @@ export function createTools(call: RelayCall): Tool[] {
 				if (anchor !== null && !data.entries.some(entry => entry.rowid === anchor)) {
 					throw new Error('near cursor is not in that session')
 				}
-				const wanted = data.entries.filter(e =>
-					e.role === 'thinking' ? includeThinking : e.role === 'tool' ? includeTools : true
-				)
+				const wanted = data.entries.filter(e => {
+					if (e.role === 'thinking') return includeThinking
+					// A successful result carries the call's output, which is the churn `include_tools`
+					// exists to keep out of a context window — the call above it already says what ran.
+					// A failed one stays: one line, and it is why the turn changed course.
+					if (isToolResult(e) && !e.error) return false
+					if (e.role === 'tool') return includeTools
+					return true
+				})
 				if (!wanted.length) return `no messages in session ${sessionId}`
 
 				let selected: TranscriptEntry[]

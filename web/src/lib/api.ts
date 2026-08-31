@@ -189,6 +189,8 @@ export const client = {
 	repoIcon: (repoName: string): Promise<string> => cachedObjectUrl(routes.repoIcon.path(repoName)),
 	/** A local temporary image from chat Markdown. The relay validates the path before it reads it. */
 	localImage: (filePath: string): Promise<string> => cachedObjectUrl(routes.localImage.path(filePath)),
+	/** One image a tool returned, as an object URL. Asked for only when its step is opened. */
+	toolImage: (reference: string): Promise<string> => cachedObjectUrl(routes.toolImage.path(reference)),
 	/** A bounded source preview for an absolute `path:line` link in chat Markdown. */
 	filePreview: (reference: string) => api<FilePreviewResponse>(routes.filePreview.path(reference)),
 	/** Keep a file on the relay until the workspace it belongs to exists. */

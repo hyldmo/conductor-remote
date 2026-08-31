@@ -9,6 +9,8 @@
  * plain-text rows. Never render an SDK user frame as a user bubble.
  */
 
+import { isToolResult } from './shared.ts'
+
 export interface TranscriptEntry {
 	id: string
 	rowid: number
@@ -20,6 +22,17 @@ export interface TranscriptEntry {
 	tool?: string
 	/** Full mono secondary detail for tool rows (command, path, pattern, …). */
 	detail?: string
+	/**
+	 * The SDK's `tool_use` id. Carried by the call and by the result answering it — the
+	 * only thing that pairs the two, which sit in different `session_messages` rows.
+	 */
+	toolUseId?: string
+	/** A tool result's output, clipped. The phone folds it onto the call row. */
+	output?: string
+	/** True when `output` is a unified diff (an edit's result), so the phone colours it. */
+	diff?: boolean
+	/** Images the result carried, as `GET /api/tool-images/:reference` references. */
+	images?: string[]
 	/** True when this row is a failed tool result. */
 	error?: boolean
 	ts: string
@@ -46,6 +59,20 @@ interface SdkBlock {
 	input?: unknown
 	content?: unknown
 	is_error?: boolean
+	/** On a `tool_use` block: the id its `tool_result` answers with. */
+	id?: string
+	/** On a `tool_result` block: the `tool_use` it answers. */
+	tool_use_id?: string
+}
+
+/** One block of a `tool_result`'s content array. */
+interface ResultBlock {
+	type?: string
+	text?: unknown
+	/** `tool_reference`: the tool a search or a registry answered with. */
+	tool_name?: unknown
+	/** `image`: base64 bytes plus, usually, their media type. */
+	source?: { type?: string; media_type?: unknown; data?: unknown }
 }
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
@@ -76,15 +103,114 @@ function summarizeToolUse(name: string, input: unknown, worktree: string | null)
 	return { text, detail: stripWorktree(detail, worktree) }
 }
 
-function resultText(content: unknown): string {
-	let s = ''
-	if (typeof content === 'string') s = content
-	else if (Array.isArray(content)) {
-		s = content
-			.map(c => (c && typeof c === 'object' && 'text' in c ? String((c as { text: unknown }).text) : ''))
-			.join('')
+/**
+ * How much of a tool's output travels to the phone.
+ *
+ * Output is the largest thing in the history — 799 MB of the 3,106 MB in
+ * `session_messages.content` (see src/search.ts) — and a chat's first transcript fetch
+ * carries the whole backlog at once, so this cap is what keeps opening a chat from
+ * paying for every file the agent ever read. Measured over the two biggest chats on
+ * this Mac: 335 results / 271 kB raw and 664 results / 1,732 kB raw, which this cap
+ * brings down to 193 kB and 569 kB. What is past it is worth reading in Conductor.
+ */
+const MAX_OUTPUT_CHARS = 2000
+
+/** What one `tool_result` says, in the three forms a phone can show. */
+interface ResultOutput {
+	text: string
+	/** `text` is a unified diff, so it is rendered as one rather than as prose. */
+	diff: boolean
+	/** How many image blocks the result carried, in the order this row holds them. */
+	images: number
+}
+
+/**
+ * Read a tool result, whatever shape it came in.
+ *
+ * Measured over the 40,000 most recent result blocks on this Mac: 35,709 are a plain
+ * string, 3,120 are Conductor's own edit result (`{status, diffString}`), 753 are text
+ * blocks, 205 are `tool_reference` lists and 80 carry an image. Only the first and third
+ * used to be read, so **3,917 results rendered as nothing at all** — an edit's diff, the
+ * tools a search found, and every screenshot, each of them a step that looked like it
+ * did nothing. An unknown shape falls back to its own JSON rather than to silence, which
+ * is what keeps Conductor drift visible instead of blank.
+ */
+function resultOutput(content: unknown, worktree: string | null): ResultOutput {
+	const plain = (text: string, diff = false): ResultOutput => ({
+		text: clip(text.replace(/<\/?tool_use_error>/g, '').trim(), MAX_OUTPUT_CHARS),
+		diff,
+		images: 0
+	})
+
+	if (typeof content === 'string') return plain(content)
+
+	if (Array.isArray(content)) {
+		const said: string[] = []
+		const tools: string[] = []
+		let images = 0
+		for (const raw of content as ResultBlock[]) {
+			if (!raw || typeof raw !== 'object') continue
+			if (raw.type === 'image') images++
+			else if (str(raw.tool_name)) tools.push(str(raw.tool_name) as string)
+			else if (typeof raw.text === 'string') said.push(raw.text)
+		}
+		// A tool_reference list is the whole answer of a tool search; naming them beats the
+		// count, because which tools came back is the thing worth reading later.
+		if (tools.length) said.push(`${plural(tools.length, 'tool')}: ${tools.join(', ')}`)
+		return { ...plain(said.join('')), images }
 	}
-	return clip(s.replace(/<\/?tool_use_error>/g, '').trim(), 400)
+
+	if (content && typeof content === 'object') {
+		const o = content as Record<string, unknown>
+		// Conductor's edit result. The status names the file it wrote, so it is worth a line
+		// of its own above the hunks — worktree-relative, like every other path here.
+		const patch = str(o.diffString)
+		if (patch) {
+			const status = str(o.status)
+			const head = status ? `${stripWorktree(status, worktree)}\n` : ''
+			return plain(head + patch, true)
+		}
+		return plain(JSON.stringify(content))
+	}
+
+	return plain('')
+}
+
+/**
+ * The images one row's tool results carry, in the order the transcript numbered them.
+ *
+ * The reference on an entry is `<rowid>.<n>`, and `n` counts image blocks across every
+ * `tool_result` in that row — so this walk and the one in `parseMessage` must stay the
+ * same walk, which is why they live in one file.
+ */
+export function toolImageAt(content: string, index: number): { mediaType: string; data: string } | null {
+	let parsed: { message?: { content?: SdkBlock[] } }
+	try {
+		parsed = JSON.parse(content)
+	} catch {
+		return null
+	}
+	let seen = 0
+	for (const b of parsed.message?.content ?? []) {
+		if (b.type !== 'tool_result' || !Array.isArray(b.content)) continue
+		for (const raw of b.content as ResultBlock[]) {
+			if (raw?.type !== 'image') continue
+			if (seen++ !== index) continue
+			const data = str(raw.source?.data)
+			if (!data) return null
+			return { mediaType: str(raw.source?.media_type) ?? sniffImageType(data), data }
+		}
+	}
+	return null
+}
+
+/** Base64 magic bytes, for the image blocks that carry no `media_type`. */
+function sniffImageType(base64: string): string {
+	if (base64.startsWith('iVBOR')) return 'image/png'
+	if (base64.startsWith('/9j/')) return 'image/jpeg'
+	if (base64.startsWith('R0lGOD')) return 'image/gif'
+	if (base64.startsWith('UklGR')) return 'image/webp'
+	return 'application/octet-stream'
 }
 
 export function parseMessage(row: RawRow, worktree: string | null = null): TranscriptEntry[] {
@@ -130,6 +256,9 @@ export function parseMessage(row: RawRow, worktree: string | null = null): Trans
 	const push = (e: Pick<TranscriptEntry, 'role' | 'text'> & Partial<TranscriptEntry>) =>
 		entries.push({ ...base, ...e, id: `${row.id}:${entries.length}` })
 
+	// Images are numbered per row, because that is all a reference needs to find one again
+	// (`toolImageAt`) and a row may hold several results.
+	let imageIndex = 0
 	let pending: string[] = []
 	const flush = () => {
 		const text = pending.join('\n').trim()
@@ -147,11 +276,31 @@ export function parseMessage(row: RawRow, worktree: string | null = null): Trans
 			if (text) push({ role: 'thinking', text })
 		} else if (b.type === 'tool_use' && typeof b.name === 'string') {
 			flush()
-			push({ role: 'tool', tool: b.name, ...summarizeToolUse(b.name, b.input, worktree) })
-		} else if (b.type === 'tool_result' && b.is_error) {
-			// Successful results are noise on a phone; surface only failures.
+			push({ role: 'tool', tool: b.name, toolUseId: str(b.id), ...summarizeToolUse(b.name, b.input, worktree) })
+		} else if (b.type === 'tool_result') {
+			// A result is written to a later row than the call it answers — anything slower than
+			// the 1s poll lands a tick or more behind it — so it travels as its own entry naming
+			// that call, and the phone folds the two together (web/src/lib/transcript-merge.ts).
+			// Only a failure repeats the output as `text`, which is what an unpaired one renders
+			// as. Repeating it for a success would send the biggest thing here twice: on the
+			// largest chat on this Mac that second copy was 569 kB of a 2.0 MB transcript.
 			flush()
-			push({ role: 'tool', error: true, text: resultText(b.content) || '(tool error)' })
+			const read = resultOutput(b.content, worktree)
+			// Bytes stay behind: a screenshot is ~100 kB of base64 in this row, and the phone
+			// fetches one only when the step it belongs to is opened (routes ▸ toolImage).
+			const images = Array.from({ length: read.images }, () => `${row.rowid}.${imageIndex++}`)
+			const output = read.text || (b.is_error ? '(tool error)' : '')
+			if (!output && !images.length) continue
+			const result: Pick<TranscriptEntry, 'role' | 'text'> & Partial<TranscriptEntry> = {
+				role: 'tool',
+				text: b.is_error ? output : '',
+				output,
+				toolUseId: str(b.tool_use_id)
+			}
+			if (read.diff) result.diff = true
+			if (images.length) result.images = images
+			if (b.is_error) result.error = true
+			push(result)
 		}
 	}
 	flush()
@@ -237,6 +386,12 @@ export function renderTranscript(
 	}
 
 	for (const e of entries) {
+		// A successful result is the output of the call printed just above it, and output is
+		// the biggest half of a chat (src/search.ts) as well as the least re-readable. So a
+		// render carries the call and leaves the file dumps behind — this is not an elision
+		// of a tool *call*, so it is not counted as one. A failure still prints: one line,
+		// and it is often why the answer changed course.
+		if (isToolResult(e) && !e.error) continue
 		if (e.role === 'thinking' && !format.thinking) {
 			pending.thinking++
 			elided.thinking++

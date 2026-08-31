@@ -1160,6 +1160,24 @@ const server = http.createServer(async (req, res) => {
 			const localImage = routeParam(routes.localImage, req.method, pathname)
 			if (localImage) return serveLocalImage(req, res, localImage)
 
+			// GET /api/tool-images/:reference — a screenshot or other image a tool returned. Held
+			// back from the transcript itself (~100 kB of base64 each) and fetched only for a step
+			// the reader opened, with the phone's auth header, like every other image route here.
+			const toolImageRef = routeParam(routes.toolImage, req.method, pathname)
+			if (toolImageRef) {
+				const image = reads.toolImage(toolImageRef)
+				if (!image) return json(req, res, 404, { error: 'image not found' })
+				const bytes = Buffer.from(image.data, 'base64')
+				// Immutable: a transcript row is written once, so the reference names one picture
+				// forever and re-opening the step costs nothing.
+				res.writeHead(200, {
+					'content-type': image.mediaType,
+					'content-length': String(bytes.length),
+					'cache-control': 'private, max-age=86400, immutable'
+				})
+				return void res.end(bytes)
+			}
+
 			// GET /api/files/:reference — source linked from an agent reply. The Markdown component
 			// intercepts the browser navigation and fetches this endpoint with its auth header.
 			const fileReference = routeParam(routes.filePreview, req.method, pathname)

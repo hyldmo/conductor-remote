@@ -1,7 +1,6 @@
-import { useMemo } from 'react'
 import { useDiff, useWorkspaces } from '../hooks.ts'
-import { cn } from '../lib/cn.ts'
 import { MergeBanner } from './MergeBanner.tsx'
+import { Patch } from './Patch.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
 export function DiffView({ workspaceId }: { workspaceId: string }) {
@@ -46,31 +45,7 @@ function DiffBody({ workspaceId }: { workspaceId: string }) {
 					</li>
 				))}
 			</ul>
-			<Patch patch={data.patch} truncated={data.truncated} />
+			<Patch patch={data.patch} truncated={data.truncated} className="border-t border-border-soft px-3 py-3" />
 		</>
 	)
-}
-
-function Patch({ patch, truncated }: { patch: string; truncated: boolean }) {
-	const lines = useMemo(() => patch.split('\n'), [patch])
-	return (
-		<pre className="overflow-x-auto border-t border-border-soft px-3 py-3 font-mono text-[11.5px] leading-[1.5]">
-			{lines.map((line, i) => (
-				// biome-ignore lint/suspicious/noArrayIndexKey: patch lines are a static render list
-				<div key={i} className={cn('whitespace-pre', lineClass(line))}>
-					{line || ' '}
-				</div>
-			))}
-			{truncated ? <div className="mt-2 text-faint">… diff truncated …</div> : null}
-		</pre>
-	)
-}
-
-function lineClass(line: string): string {
-	if (line.startsWith('+') && !line.startsWith('+++')) return 'text-add'
-	if (line.startsWith('-') && !line.startsWith('---')) return 'text-del'
-	if (line.startsWith('@@')) return 'text-accent'
-	if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('+++') || line.startsWith('---'))
-		return 'text-faint'
-	return 'text-muted'
 }

@@ -6,7 +6,7 @@ import type { FirstPrompt } from './firstprompt.ts'
 import { describeRepoIcon, type RepoIcon, type ResolvedIcon, resolveRepoIcon } from './icons.ts'
 import type { ParkedPrompt } from './parked.ts'
 import { workspaceTitle } from './shared.ts'
-import { parseMessage, type TranscriptEntry } from './transcript.ts'
+import { parseMessage, type TranscriptEntry, toolImageAt } from './transcript.ts'
 
 export interface WorkspaceRow {
 	id: string
@@ -578,6 +578,27 @@ export class Reads {
 			}
 		}
 		return null
+	}
+
+	/**
+	 * One image a tool returned, by the reference its transcript entry carries.
+	 *
+	 * The bytes sit in `session_messages.content` as base64, so this is the same read-only
+	 * handle as everything else — nothing is written and nothing is cached to disk. The
+	 * reference names a row and the image's position in it, and `toolImageAt` does the
+	 * walk, because the numbering has to be the one `parseMessage` used.
+	 */
+	toolImage(reference: string): { mediaType: string; data: string } | null {
+		const dot = reference.lastIndexOf('.')
+		const rowid = Number(reference.slice(0, dot))
+		const index = Number(reference.slice(dot + 1))
+		if (dot < 0 || !Number.isInteger(rowid) || !Number.isInteger(index) || index < 0) return null
+		const rows = this.db.query<{ content: string | null }>(
+			'SELECT content FROM session_messages WHERE rowid = ? LIMIT 1',
+			[rowid]
+		)
+		const content = rows[0]?.content
+		return content ? toolImageAt(content, index) : null
 	}
 
 	/**

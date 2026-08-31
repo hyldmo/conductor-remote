@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router'
 import { ApiError, client } from './lib/api.ts'
 import type { PushSupport } from './lib/push.ts'
 import { currentSubscription, deviceLabel, pushSupport, subscribe, syncSubscription, toJson } from './lib/push.ts'
+import { mergeEntries } from './lib/transcript-merge.ts'
 import type { ModelCatalogResponse, Session, TranscriptEntry } from './lib/types.ts'
 import { useApp } from './store.ts'
 
@@ -535,7 +536,9 @@ export function useTranscript(sessionId: string | null, poll = true): Transcript
 				report(true)
 				if (entries.length) {
 					cursor.current = next
-					setState(prev => ({ entries: [...prev.entries, ...entries], loading: false, error: null }))
+					// Appended rather than replaced, and merged rather than concatenated: a tool's output
+					// arrives after the call it belongs to, so it lands on that row (lib/transcript-merge.ts).
+					setState(prev => ({ entries: mergeEntries(prev.entries, entries), loading: false, error: null }))
 				} else {
 					setState(prev => (prev.loading ? { ...prev, loading: false } : prev))
 				}

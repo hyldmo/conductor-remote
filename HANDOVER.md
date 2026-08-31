@@ -101,7 +101,11 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   db.ts           read-only node:sqlite handle to conductor.db
   reads.ts        workspaces / sessions / messages + worktree resolution
   transcript.ts   Claude Code SDK stream JSON → phone-renderable entries, and back out to
-                  markdown (renderTranscript: prose always, thinking/tools per flag)
+                  markdown (renderTranscript: prose always, thinking/tools per flag). A tool's
+                  output travels as its own entry naming the call (`toolUseId`), capped; the
+                  markdown render prints the call and leaves the output behind. Reads every
+                  result shape — text, edit diffs, tool_reference lists — and numbers a row's
+                  images for GET /api/tool-images/:reference (toolImageAt does that lookup)
   attachments.ts  writes a real Conductor attachment from outside Conductor: the file under
                   .context/attachments/<id>/, and the @⟦name⟧(path) token the composer parses
   search.ts       FTS5 index over chat prose in its OWN sidecar db (stateDir()/search.db);
@@ -137,7 +141,9 @@ web/              React PWA (Vite root)
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll) / useModels (model list, SWR)
                   useSendPrompt (applies the staged agent settings, then sends)
   src/lib/        api client, types, format helpers, cn, composer drafts, staged agent settings,
-                  model-list cache, read marks (unread the phone has seen), push (permission/subscribe/reconcile)
+                  model-list cache, read marks (unread the phone has seen), push (permission/subscribe/reconcile),
+                  transcript-merge (folds each tool result onto the call it answers, identity intact)
+  src/components/ Patch.tsx renders a unified diff (workspace diff + an edit step's result)
   src/store.ts    zustand: token + connection status + drafts + staged agent settings + read marks
                   + this device's push subscription
   src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer (AgentBar renders

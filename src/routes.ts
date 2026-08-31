@@ -73,6 +73,12 @@ export const routes = {
 	localImage: param('GET', '/api/local-images/:path'),
 	/** A source-file preview linked from agent Markdown. */
 	filePreview: param('GET', '/api/files/:reference'),
+	/**
+	 * One image a tool returned, addressed `<message rowid>.<image number in that row>`.
+	 * It is a route rather than a field because the bytes are ~100 kB of base64 each and a
+	 * transcript's first fetch carries a whole chat: the phone asks only for the ones it opens.
+	 */
+	toolImage: param('GET', '/api/tool-images/:reference'),
 	/** Temporarily hold a file while the phone creates the workspace it will belong to. */
 	stageAttachment: flat('POST', '/api/attachments'),
 	/** Drop a staged file the user removed before creating its workspace. */

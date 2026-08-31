@@ -226,3 +226,16 @@ export function isPreviewableSource(filePath: string): boolean {
 	const dot = name.lastIndexOf('.')
 	return dot !== -1 && SOURCE_EXTENSIONS.has(name.slice(dot).toLowerCase())
 }
+
+/**
+ * A transcript row that carries a tool's *output* rather than the call that produced it.
+ *
+ * The two are separate `session_messages` rows and reach the phone as separate entries
+ * (src/transcript.ts), so three places have to agree on which is which: the phone folds
+ * a result onto its call, a rendered transcript prints the call and leaves the output
+ * behind, and `read_chat` does the same for an agent. Structural, because each of them
+ * holds a slightly different view of the same row.
+ */
+export function isToolResult(e: { role: string; tool?: string; output?: string }): boolean {
+	return e.role === 'tool' && !e.tool && e.output !== undefined
+}
