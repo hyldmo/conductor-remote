@@ -507,6 +507,14 @@ export class AppleScriptActuator implements Actuator {
 		// Open the target workspace's own link, confirm its chat tab, fill the composer, send.
 		// Filling is an Accessibility write (no keystrokes, no clipboard); the
 		// clipboard paste is kept only as a fallback, and stashes/restores around it.
+		//
+		// The send is then read back rather than assumed (`submitComposer`): Conductor
+		// consumes the draft when it takes a prompt, so a composer that still holds the
+		// text is an Enter that went nowhere, and pressing again inside this run costs
+		// under a second. Left to `deliverPrompt` the same failure costs the 6s confirm
+		// window plus a whole second run, which is the ~10s of prompt-sitting-on-screen
+		// this Mac's logs recorded. A composer that survives three presses is stuck on
+		// something the script can't see, so it errors and lets that retry take over.
 		const script = `
 ${CONDUCTOR_HANDLERS}
 
@@ -514,19 +522,16 @@ my activateConductor()
 my focusWorkspace()
 my selectChatTab()
 set promptText to my normalizeNewlines(do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
-if not (my fillComposer(promptText)) then
+set textBox to my composerField()
+if not (my fillComposer(textBox, promptText)) then
 	set savedClipboard to the clipboard
 	my pasteComposer()
 	delay 0.1
 	set the clipboard to savedClipboard
 end if
-tell application "System Events"
-	if (system attribute "RELAY_QUEUE_PROMPT") is "1" then
-		key code 36 using {command down}
-	else
-		key code 36
-	end if
-end tell
+set presses to my submitComposer(textBox, promptText, (system attribute "RELAY_QUEUE_PROMPT") is "1")
+if presses is 0 then error "Conductor ignored Enter - the prompt is still sitting in its composer"
+return "presses:" & presses
 `.trim()
 		// Pass the prompt via a temp file + env to avoid AppleScript string escaping.
 		const os = await import('node:os')
@@ -535,7 +540,7 @@ end tell
 		const tmp = path.join(os.tmpdir(), `relay-prompt-${process.pid}-${Date.now()}.txt`)
 		await fs.writeFile(tmp, text, 'utf8')
 		try {
-			await withTargetEnvironment(target, targetEnvironment =>
+			const { stdout } = await withTargetEnvironment(target, targetEnvironment =>
 				uiTurn(() =>
 					exec('osascript', ['-e', script], {
 						env: {
@@ -548,6 +553,12 @@ end tell
 					})
 				)
 			)
+			// A rescued send is otherwise indistinguishable from one that worked first
+			// time, so the failure would leave the log whether it was fixed or hidden.
+			const presses = Number(stdout.match(/presses:(\d+)/)?.[1] ?? 1)
+			if (presses > 1) {
+				console.warn(`[relay] Conductor ignored Enter — the composer cleared on press ${presses}`)
+			}
 			return { ok: true, strategy: this.name }
 		} catch (err) {
 			return { ok: false, strategy: this.name, error: osaError(err) }

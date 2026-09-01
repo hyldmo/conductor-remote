@@ -714,7 +714,39 @@ on normalizeNewlines(s)
 	return joined
 end normalizeNewlines
 
-on fillComposer(promptText)
+on composerField()
+	-- The composer's AXTextArea: an AXGroup named "composer" in the chat pane, one
+	-- text area inside it. Resolved once and handed to both the fill and the send
+	-- confirm below, because reaching it means walking the pane from the tab strip
+	-- and that walk measured ~0.5s on a live window. Returns missing value when the
+	-- composer isn't there at all, which is the caller's cue to fall back to pasting.
+	set strips to my tabGroups()
+	if (count of strips) is 0 then return missing value
+	try
+		tell application "System Events" to tell process "Conductor"
+			set pane to value of attribute "AXParent" of (item 1 of strips)
+			set composerBox to item 1 of (UI elements of pane whose name is "composer")
+			return item 1 of (UI elements of composerBox whose role is "AXTextArea")
+		end tell
+	end try
+	return missing value
+end composerField
+
+on composerTextOf(textBox)
+	-- What the box holds now, or missing value when it cannot be read at all. A pane
+	-- that re-rendered leaves the old reference pointing at a dead element, and
+	-- "can't read it" must never be reported as "still holding the prompt": that is
+	-- the one state that presses Enter again, and it would do so at the moment the
+	-- box may already be empty.
+	try
+		tell application "System Events" to tell process "Conductor"
+			return (value of textBox) as text
+		end tell
+	end try
+	return missing value
+end composerTextOf
+
+on fillComposer(textBox, promptText)
 	-- Write the prompt straight into the composer's AXTextArea instead of
 	-- stashing the clipboard, pressing Cmd+L and pasting. AXFocused and AXValue
 	-- are both settable, so this needs no keystrokes and no clipboard hijack.
@@ -722,13 +754,9 @@ on fillComposer(promptText)
 	-- *clears whatever it wrote first*: leaving half a prompt behind would make
 	-- the fallback paste append to it and send a garbled prompt.
 	if promptText is "" then return false
-	set strips to my tabGroups()
-	if (count of strips) is 0 then return false
+	if textBox is missing value then return false
 	try
 		tell application "System Events" to tell process "Conductor"
-			set pane to value of attribute "AXParent" of (item 1 of strips)
-			set composerBox to item 1 of (UI elements of pane whose name is "composer")
-			set textBox to item 1 of (UI elements of composerBox whose role is "AXTextArea")
 			set value of attribute "AXFocused" of textBox to true
 			set value of textBox to promptText
 			delay 0.25
@@ -739,22 +767,74 @@ on fillComposer(promptText)
 		end tell
 	on error
 		try
-			my clearComposer()
+			my clearComposer(textBox)
 		end try
 		return false
 	end try
 	return true
 end fillComposer
 
-on clearComposer()
-	set strips to my tabGroups()
-	if (count of strips) is 0 then return
+on clearComposer(textBox)
+	if textBox is missing value then return
 	tell application "System Events" to tell process "Conductor"
-		set pane to value of attribute "AXParent" of (item 1 of strips)
-		set composerBox to item 1 of (UI elements of pane whose name is "composer")
-		set value of (item 1 of (UI elements of composerBox whose role is "AXTextArea")) to ""
+		set value of textBox to ""
 	end tell
 end clearComposer
+
+on pressSend(queueIt)
+	-- Return sends, Command-Return queues the prompt behind the running answer.
+	-- The choice is made out here because inside a System Events tell an ordinary
+	-- parameter name can resolve as one of its own terms.
+	if queueIt then
+		tell application "System Events" to key code 36 using {command down}
+	else
+		tell application "System Events" to key code 36
+	end if
+end pressSend
+
+on submitComposer(textBox, promptText, queueIt)
+	-- Press Enter, then read the composer back. Conductor consumes the draft when it
+	-- accepts a prompt, so a box still holding the text is a keystroke that did
+	-- nothing — and that read is the only receipt a run can collect about its own
+	-- send.
+	--
+	-- Why it earns its place: the caller's other receipt is the transcript row, which
+	-- costs a 6s watch (CONFIRM_WINDOW_MS in server.ts) and then a whole second run
+	-- through activate, focus, tab and fill. Measured from this Mac's own relay logs,
+	-- a send whose single fault was a first Enter Conductor ignored took ~10s from the
+	-- prompt appearing in the composer to it being sent, with the text sitting on
+	-- screen the whole way. Exactly one user row was written, so the keystroke was
+	-- lost rather than delayed.
+	--
+	-- Pressing again is safe *because* of the read, not in spite of it: the prompt is
+	-- still in the box, so nothing was consumed, so there is nothing to duplicate.
+	-- A Conductor too busy to have handled the first Enter is also too busy to answer
+	-- an AX read, which blocks here rather than handing back stale text. Bounded at
+	-- three presses — a box that survives those is stuck on something this script
+	-- cannot see, and the caller's own retry, which re-focuses and re-fills, is the
+	-- better lever than a fourth keystroke.
+	--
+	-- Returns the press that cleared the box, or 0 for a box that never cleared. The
+	-- count is the point: a rescued send is otherwise indistinguishable from one that
+	-- worked first time, so the failure this handler exists for would stop appearing
+	-- in the log the day it stopped costing 10s, and nobody could tell whether it was
+	-- fixed or merely hidden.
+	if promptText is "" then
+		my pressSend(queueIt)
+		return 1
+	end if
+	repeat with pressCount from 1 to 3
+		my pressSend(queueIt)
+		if textBox is missing value then return pressCount
+		repeat with tick from 1 to 6
+			delay 0.2
+			set seen to my composerTextOf(textBox)
+			if seen is missing value then return pressCount
+			if seen does not contain promptText then return pressCount
+		end repeat
+	end repeat
+	return 0
+end submitComposer
 
 on pasteComposer()
 	-- Fallback for when the composer isn't reachable: Cmd+L focuses it (after the

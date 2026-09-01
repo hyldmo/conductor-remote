@@ -297,6 +297,24 @@ Two asymmetric halves — keep them separate:
        verify, then Enter. No clipboard hijack, no Cmd+L/Cmd+V. Clipboard paste
        survives only as a fallback — and `fillComposer` **clears whatever it wrote
        before falling back**, or the paste appends and sends a garbled prompt.
+    5. **Read the composer back after Enter** (`submitComposer`) — Conductor
+       consumes the draft when it takes a prompt, so a box still holding the text
+       is a keystroke that went nowhere, and that is the only receipt a run can
+       collect about its own send. It is worth collecting because the other
+       receipt, the transcript row, costs `CONFIRM_WINDOW_MS` (6s) and then a
+       whole second run through activate/focus/tab/fill: measured from this Mac's
+       relay logs, a send whose single fault was a first Enter Conductor ignored
+       took **~10s** from the prompt appearing in the composer to it being sent,
+       with the text on screen the whole way and exactly one user row written, so
+       the keystroke was lost rather than late. Pressing again is safe *because*
+       of the read — the prompt is still there, so nothing was consumed, so there
+       is nothing to duplicate — and a Conductor too busy to have handled the
+       first Enter is also too busy to answer an AX read, which blocks rather than
+       returning stale text. Bounded at three presses, then it errors and hands
+       back to `deliverPrompt`'s retry, which re-focuses and re-fills. The box is
+       resolved once (`composerField`) and passed to both halves: finding it is a
+       ~0.5s walk of the pane, while reading it back off the reference is ~10ms,
+       so the whole confirm adds ~0.2s to a send that works.
 
     Landing in the wrong agent is worse than not sending, so every step errors out
     rather than guessing. No private protocol, nothing to rebreak on a Conductor
