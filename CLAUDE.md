@@ -887,6 +887,16 @@ Two asymmetric halves — keep them separate:
     after `VIEWING_FRESH_MS` (10s) — the stamp lives in a plain Map, never in
     `push.json`, because a once-a-second write would rewrite that file at that rate and
     a claim means nothing after a restart.
+    **What that cannot reach is a notification already delivered**, which is the one
+    sitting on the lock screen when you open the chat from it. So the phone takes it
+    down itself (`web/src/lib/push.ts` ▸ `closeNotifications`, driven by
+    `useClearChatNotification`): the notifier tags per chat, so the tag *is* the session
+    id and a sibling chat's own notification is left alone. It runs on the session's
+    `updated_at` as well as on becoming visible — a turn ending here while the relay's
+    claim had gone stale is exactly the notification that slips through, and resuming a
+    backgrounded web app fires `visibilitychange` rather than remounting the view.
+    `getNotifications` is absent in some browsers that can still *show* a notification,
+    so a missing method is a no-op.
 
   Web Push is written out of
   `node:crypto` in `src/webpush.ts` (VAPID ES256 + `aes128gcm`) to keep the

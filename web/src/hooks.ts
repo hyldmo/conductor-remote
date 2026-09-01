@@ -5,7 +5,15 @@ import { useNavigate } from 'react-router'
 import { ApiError, client } from './lib/api.ts'
 import { localPrefsGeneration, localPrefsSnapshot, mergeRemotePrefs, subscribeLocalPrefs } from './lib/prefs.ts'
 import type { PushSupport } from './lib/push.ts'
-import { currentSubscription, deviceLabel, pushSupport, subscribe, syncSubscription, toJson } from './lib/push.ts'
+import {
+	closeNotifications,
+	currentSubscription,
+	deviceLabel,
+	pushSupport,
+	subscribe,
+	syncSubscription,
+	toJson
+} from './lib/push.ts'
 import { hasSelection, overSelection } from './lib/selection.ts'
 import { mergeEntries } from './lib/transcript-merge.ts'
 import type { ModelCatalogResponse, Session, TranscriptEntry } from './lib/types.ts'
@@ -1000,4 +1008,28 @@ export function usePushRouting(): void {
 			document.removeEventListener('visibilitychange', onVisible)
 		}
 	}, [navigate])
+}
+
+/**
+ * Clear the lock screen of the chat now on screen.
+ *
+ * The relay leaves a device out of a notification for the chat it is reading, but one
+ * delivered *before* the chat was opened is already on the phone, and it says a turn
+ * ended in a conversation you are looking at. `at` is the session's `updated_at`, so
+ * this also runs when a turn ends here — which is the one case the relay's own
+ * suppression can miss, its claim having gone stale while the app was away.
+ */
+// biome-ignore lint/correctness/useExhaustiveDependencies: `at` re-runs this when a turn lands here; the body doesn't read it
+export function useClearChatNotification(sessionId: string | null, at: string | undefined): void {
+	useEffect(() => {
+		if (!sessionId) return
+		const clear = () => {
+			if (document.visibilityState === 'visible') void closeNotifications(sessionId)
+		}
+		clear()
+		// Resuming a backgrounded web app fires this rather than remounting, and that is
+		// exactly when the notification to clear is the one already sitting there.
+		document.addEventListener('visibilitychange', clear)
+		return () => document.removeEventListener('visibilitychange', clear)
+	}, [sessionId, at])
 }

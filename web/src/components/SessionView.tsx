@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { FileDiff, Plus, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
-import { useAnyWorkspace, useSessions, useWorkspaceFiles, useWorkspaces } from '../hooks.ts'
+import { useAnyWorkspace, useClearChatNotification, useSessions, useWorkspaceFiles, useWorkspaces } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { buildResolver, MentionResolverProvider } from '../lib/fileMentions.ts'
@@ -84,6 +84,10 @@ export function SessionView() {
 		if (document.visibilityState !== 'visible') return
 		markRead(sessionId, activeUpdatedAt)
 	}, [ws, sessionId, activeUpdatedAt, markRead])
+	// And take down the notification this chat already put on the lock screen: the relay
+	// keeps quiet about a chat being read, which cannot reach one delivered before it was
+	// opened.
+	useClearChatNotification(sessionId, activeUpdatedAt)
 
 	if (!ws) {
 		if (anyWorkspace) return <ArchivedChat workspace={anyWorkspace.workspace} />

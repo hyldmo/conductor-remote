@@ -94,6 +94,25 @@ async function registration(): Promise<ServiceWorkerRegistration | null> {
 	])
 }
 
+/**
+ * Close any notification already on the lock screen for one chat. The relay stops
+ * *sending* for a chat being read (src/notify.ts), but one delivered before it was
+ * opened is already there, and it outlives the news it carried.
+ *
+ * The notifier tags per chat, so `tag` is the session id and a sibling chat's own
+ * notification is left alone. `getNotifications` is not in every browser that can show
+ * a notification, so a missing method is a no-op rather than a throw.
+ */
+export async function closeNotifications(tag: string): Promise<void> {
+	const reg = await registration()
+	if (typeof reg?.getNotifications !== 'function') return
+	try {
+		for (const shown of await reg.getNotifications({ tag })) shown.close()
+	} catch {
+		// Permission was never granted, or the browser refuses to enumerate. Nothing to clear.
+	}
+}
+
 export async function currentSubscription(): Promise<PushSubscription | null> {
 	const reg = await registration()
 	return (await reg?.pushManager.getSubscription()) ?? null
