@@ -31,7 +31,7 @@ Dial a number from a locked phone in a pocket. Hear "two working, five need you,
 
 - **P1** Native app voice modes can't host this today (verified: ChatGPT voice has no MCP; Claude voice supports only first-party integrations). Future Claude-voice custom connectors = free upgrade; recheck quarterly.
 - **P2** Buy the voice layer only: `gpt-realtime` accepts a remote MCP URL in session config and handles tool calls; start on `gpt-realtime-mini` (~$0.02–0.05/min cached; flagship ~$0.06–0.11/min). Named fallback if the brain is too weak: compose LiveKit/Pipecat + Claude brain. Cost at daily commute use: roughly $9–50/month, dominated by model audio, transport is noise.
-- **P3** Transport is a SIP call into OpenAI's EU endpoint (`sip:<project>@sip.api.openai.com`, TLS). Softphone-direct first (zero cost, zero paperwork; Linphone dials bare SIP URIs). Optional rented Norwegian number via Twilio trunk later (~$2–6/mo, zero mobile data, tunnel-proof carrier QoS, regulatory paperwork) — same webhook, config only. Audio: all telephony is G.711 narrowband; WebRTC is the wideband path, foreground-only. Data use: ~25–30 MB per 20-min SIP call, ~6–10 MB on WebRTC.
+- **P3** Transport is a SIP call into OpenAI's EU endpoint (`sip:<project>@sip.api.openai.com`, TLS). **Revised after the live probe (2026-09-01):** direct SIP works, verified from a real UA (baresip on the Mac: 180 Ringing in 0.5s, webhook, accept, call answered) — but the softphone-as-phone-client path is demoted, because project ids are case-sensitive in the SIP user part and Linphone lowercases them (rings 15s → 400 Bad Request; known bug family, linphone-iphone #296; no bypass found on iOS). Primary phone client is therefore the **Twilio number** (trunk or TwiML `<Dial><Sip>`, case pinned in config; ~$2–6/mo, zero mobile data, native dialer; Norwegian number needs the regulatory bundle). Audio: all telephony is G.711 narrowband; WebRTC is the wideband path, foreground-only. Data use: ~25–30 MB per 20-min SIP call, ~6–10 MB on WebRTC.
 - **P4** The durable build is deterministic, voice-capped briefing reads in the relay, tested offline against real chat history. No LLM in the relay, in any version.
 - **P5** Free OSS feature; per-call cost logged and documented from measurement, not estimates.
 - **P6** The voice model routes, never thinks: capped briefs for breadth; depth is forwarded to the workspace agent that owns the context (`send_prompt` → its final message is the answer); read-back before every send. Working agents are a special case: forwarding into a running turn is steering, so the orchestrator says so and asks before touching one.
@@ -65,10 +65,9 @@ New pieces:
 ## Open Questions
 
 - Is `gpt-realtime-mini` a good enough presenter, or does brief delivery need the flagship? (Escape hatches ordered: flagship → Pipecat+Claude brain.)
-- Does direct softphone TLS dialing to `sip.api.openai.com` work in practice from Norwegian mobile networks? Docs imply yes ("a SIP softphone can be used for testing"); unverified live. **This is the assignment.**
-- Caller screening strength: SIP `From` is spoofable; worst case is someone burning API credits until rejected. Investigate a secret in the dialed URI / early-media PIN if it matters.
+- ~~Does direct SIP dialing to `sip.api.openai.com` work?~~ **Resolved 2026-09-01, the assignment ran:** yes over TLS from a real UA; the webhook event is `realtime.call.incoming` exactly as documented; a lowercased project id rings ~15s then 400s with no webhook. Webhook delivery verified via a plain-443 tunnel; delivery to a nonstandard `:8443` Funnel port remains untested.
+- Caller screening strength: SIP `From` is spoofable; worst case is someone burning API credits until rejected. Investigate a secret in the dialed URI / early-media PIN if it matters. (Moot on the Twilio path: only the number routes to the trunk.)
 - Nudge injection mechanics: confirm the broker can attach to a SIP-originated session over WebSocket and inject items mid-call.
-- Linphone lock-screen/CallKit behavior on iOS during long outgoing calls.
 - When Claude voice mode opens custom connectors, what carries over? (Everything except the broker, by design.)
 
 ## Success Criteria
@@ -84,10 +83,10 @@ Ships inside the existing `conductor-remote` npm package (trusted publishing pip
 
 ## Next Steps
 
-1. **The assignment first (30 min, no code):** place one bare Linphone call to a hello-world `gpt-realtime` SIP session from the Norwegian mobile network. This de-risks the only unverified load-bearing assumption before any build.
-2. Milestone 1 (= approach A): `voice_roll_call` + `voice_next_decision` + fixtures over real history; broker webhook + narrow prompt; `voice_send_preview` gate; cost log; softphone demo call.
+1. ~~The assignment~~ **Done 2026-09-01.** Pipeline proven from the Mac (baresip → OpenAI → webhook → accept → answered); Linphone eliminated as the phone client (lowercasing bug). Probe artifacts torn down; `.context/sip-probe/` keeps the throwaway server and the 0600 key file for milestone 1. Note: the dashboard webhook still points at a dead `trycloudflare.com` URL and must be repointed when the broker exists.
+2. Milestone 1 (= approach A): `voice_roll_call` + `voice_next_decision` + fixtures over real history; broker webhook + narrow prompt; `voice_send_preview` gate; cost log — **plus the Twilio number setup** (trunk or TwiML pointing at the OpenAI SIP URI), which is now the demo call path from a phone.
 3. Milestone 2: cursor TTL + redial resume; forward-to-owner + turn-end nudges; artifact push hook.
-4. Milestone 3: grooming + snooze store + end-of-call tally + "needs a screen" list in the PWA; Twilio-number config docs.
+4. Milestone 3: grooming + snooze store + end-of-call tally + "needs a screen" list in the PWA; Norwegian-number regulatory bundle docs.
 5. Re-measure cost from logs; update README table.
 
 ## What I noticed about how you think
