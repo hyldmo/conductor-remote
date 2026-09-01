@@ -2,6 +2,7 @@
 // `src/shared.ts`). `routes.ts` is stdlib-free for precisely this reason, and
 // `scripts/check-imports.ts` keeps it that way.
 import { routes } from '../../../src/routes.ts'
+import { VIEWING_HEADER } from '../../../src/shared.ts'
 import type {
 	AgentPatch,
 	AgentResult,
@@ -213,8 +214,15 @@ export const client = {
 	/** One workspace by id, archived included — how an archived chat is opened for reading. */
 	workspace: (workspaceId: string) => api<WorkspaceResponse>(routes.workspace.path(workspaceId)),
 	sessions: (workspaceId: string) => api<SessionsResponse>(routes.sessions.path(workspaceId)),
-	messages: (sessionId: string, after: number) =>
-		api<MessagesResponse>(`${routes.messages.path(sessionId)}?after=${after}`),
+	/**
+	 * `readingAs` is this device's push id, sent only while the chat is actually on
+	 * screen. It makes the poll double as a heartbeat, so the relay can leave this
+	 * device out of the notification for a turn ending in front of it (src/notify.ts).
+	 */
+	messages: (sessionId: string, after: number, readingAs?: string | null) =>
+		api<MessagesResponse>(`${routes.messages.path(sessionId)}?after=${after}`, {
+			headers: readingAs ? { [VIEWING_HEADER]: readingAs } : {}
+		}),
 	/** Stage one phone file in the selected workspace, then add its returned token to a prompt. */
 	uploadAttachment: (sessionId: string, workspaceId: string, file: File) =>
 		upload<UploadAttachmentResult>(

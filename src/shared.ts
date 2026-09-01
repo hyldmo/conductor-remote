@@ -275,3 +275,15 @@ export function isLockedError(error: string | null | undefined): boolean {
 export function withoutWindowEvidence(error: string): string {
 	return error.replace(/\s*\[window server:.*$/s, '').trim()
 }
+
+/**
+ * Header naming the push device that sent a request, so the relay can tell which chat
+ * that device has on screen and skip notifying it about that one chat (src/notify.ts).
+ *
+ * It rides the transcript poll, which is already a per-second heartbeat for exactly the
+ * chat being read and for no other, so this costs no request and no timer. Declared here
+ * rather than spelled twice because a typo would be silent in both directions: the relay
+ * would simply never learn what is on screen, and every notification would keep arriving
+ * as it does today.
+ */
+export const VIEWING_HEADER = 'x-relay-device'

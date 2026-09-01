@@ -87,6 +87,14 @@ const TTL_SECONDS = 3600
 const BODY_CHARS = 180
 /** Consecutive failures before a device is dropped. A `gone` response drops it immediately, regardless. */
 const MAX_FAILURES = 20
+/**
+ * How long a "this device is reading that chat" stamp counts for. The stamp is refreshed
+ * by the transcript poll, which runs once a second, so anything past a few seconds means
+ * the phone stopped polling: the app was closed, the screen went away, iOS suspended it.
+ * Ten seconds is short enough that a phone put down mid-turn gets its notification, and
+ * long enough to survive a slow tunnel dropping a handful of ticks.
+ */
+const VIEWING_FRESH_MS = 10_000
 
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n).trimEnd()}…` : s)
 
@@ -143,6 +151,36 @@ function save(): void {
 /** Short, stable, non-reversible handle for an endpoint — safe to show and to address a device by. */
 function deviceId(endpoint: string): string {
 	return crypto.createHash('sha256').update(endpoint).digest('hex').slice(0, 16)
+}
+
+/**
+ * The chat each device last had on screen. Deliberately *not* part of `Store`: it is
+ * stamped by the transcript poll once a second, so persisting it would rewrite
+ * `push.json` at that rate, and a stamp is worthless the moment the relay restarts.
+ */
+const viewing = new Map<string, { sessionId: string; at: number }>()
+
+/**
+ * Record that a device is reading a chat right now. The phone sends this along its
+ * transcript poll only while the page is visible — the same test that moves its read
+ * mark — so "reading" here means on screen, not merely left open in the background.
+ */
+export function noteViewing(id: string, sessionId: string): void {
+	const now = Date.now()
+	// The id is whatever the header carried, so nothing here bounds the key space but the
+	// token on the request. A device that stopped polling is already ignored; drop it too,
+	// rather than keep a row per id anybody ever sent.
+	if (viewing.size > 16) for (const [key, seen] of viewing) if (now - seen.at >= VIEWING_FRESH_MS) viewing.delete(key)
+	viewing.set(id, { sessionId, at: now })
+}
+
+/**
+ * Is this device looking at this chat? Suppression is per device on purpose: the phone
+ * in a pocket still buzzes for a chat the tablet happens to be showing.
+ */
+export function isReading(id: string, sessionId: string, now = Date.now()): boolean {
+	const seen = viewing.get(id)
+	return !!seen && seen.sessionId === sessionId && now - seen.at < VIEWING_FRESH_MS
 }
 
 function info(d: Device): DeviceInfo {
@@ -205,6 +243,7 @@ export function unsubscribeDevice(endpoint: string): boolean {
 	const before = s.devices.length
 	s.devices = s.devices.filter(d => d.endpoint !== endpoint)
 	if (s.devices.length === before) return false
+	viewing.delete(deviceId(endpoint))
 	console.info(`[push] device unsubscribed — ${s.devices.length} left`)
 	save()
 	return true
@@ -213,6 +252,7 @@ export function unsubscribeDevice(endpoint: string): boolean {
 function drop(endpoint: string, why: string): void {
 	const s = load()
 	s.devices = s.devices.filter(d => d.endpoint !== endpoint)
+	viewing.delete(deviceId(endpoint))
 	console.info(`[push] dropped a dead subscription (${why}) — ${s.devices.length} left`)
 	save()
 }
@@ -248,12 +288,26 @@ async function deliver(device: Device, message: PushMessage): Promise<boolean> {
 	return false
 }
 
-/** Fan a message out to every subscribed device. Returns how many took it. */
-export async function notifyAll(message: PushMessage): Promise<number> {
+/**
+ * Fan a message out to every subscribed device. Returns how many took it.
+ *
+ * `unlessReading` names a chat: a device with that chat on screen is skipped, because
+ * buzzing about a message already in front of someone is noise. The drop has to happen
+ * here rather than in the service worker — Safari treats a push that resolves without a
+ * notification as abuse and can revoke the subscription (see public/push-sw.js), so the
+ * phone's only way to stay quiet is for nothing to be sent.
+ */
+export async function notifyAll(message: PushMessage, unlessReading?: string): Promise<number> {
 	const s = load()
 	if (!s.devices.length) return 0
 	// Snapshot: `deliver` can prune the live array mid-flight.
-	const results = await Promise.all(s.devices.slice().map(d => deliver(d, message)))
+	const targets = s.devices.slice().filter(d => !(unlessReading && isReading(deviceId(d.endpoint), unlessReading)))
+	const held = s.devices.length - targets.length
+	// "Nothing arrived" and "nothing was sent, on purpose" are the same silence on a
+	// phone, and only one of them is a fault. /api/logs is where that question is asked.
+	if (held) console.info(`[push] held back from ${held} device${held === 1 ? '' : 's'} reading that chat`)
+	if (!targets.length) return 0
+	const results = await Promise.all(targets.map(d => deliver(d, message)))
 	return results.filter(Boolean).length
 }
 
@@ -443,17 +497,20 @@ async function fire(
 			: said
 				? oneLine(said)
 				: 'Finished its turn.'
-	const sent = await notifyAll({
-		title: state.repoName ? `${where} — ${state.repoName}` : where,
-		body,
-		// Per chat, so a chatty agent replaces its own notification instead of stacking —
-		// and two chats in one workspace stay separately tappable, since each now lands
-		// somewhere different.
-		tag: sessionId,
-		url: chatRoute(state.workspaceId, sessionId),
-		kind,
-		ts: Date.now()
-	})
+	const sent = await notifyAll(
+		{
+			title: state.repoName ? `${where} — ${state.repoName}` : where,
+			body,
+			// Per chat, so a chatty agent replaces its own notification instead of stacking —
+			// and two chats in one workspace stay separately tappable, since each now lands
+			// somewhere different.
+			tag: sessionId,
+			url: chatRoute(state.workspaceId, sessionId),
+			kind,
+			ts: Date.now()
+		},
+		sessionId
+	)
 	if (sent) console.info(`[push] ${kind} in ${where} → ${sent} device${sent === 1 ? '' : 's'}`)
 }
 

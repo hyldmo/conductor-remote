@@ -869,6 +869,25 @@ Two asymmetric halves — keep them separate:
     every time, because with no evidence either way, silence is the dangerous default. The
     state machine is `TurnWatcher`, split out of the poll loop so `tests/notify.test.ts`
     can drive it a tick at a time.
+  - **A fourth one: the chat already in front of you.** A turn ending on the screen you
+    are reading is not news, and the drop has to happen on the relay. The service worker
+    cannot swallow it — Safari treats a push that resolves without a notification as
+    abuse and can revoke the subscription, which is why `push-sw.js` has no "suppress if
+    the app is open" branch. So the phone tells the relay what it is looking at:
+    `client.messages` carries this device's push id in `VIEWING_HEADER` (`src/shared.ts`,
+    declared once because a misspelled header fails *silently* in both directions), the
+    messages route stamps it (`noteViewing`), and `notifyAll` skips a device that
+    `isReading` the chat it is about to announce. It rides the transcript poll rather
+    than a heartbeat of its own: that poll already runs once a second for the chat on
+    screen and for no other, so this costs no request and no timer. Three properties.
+    The claim is **per device**, so a phone in a pocket still buzzes for a chat the
+    tablet happens to be showing. It is sent **only while the page is visible**, the
+    same test that moves the read mark, so a chat left on screen behind a locked phone
+    is one you walked away from and its notification is the point. And it **expires**
+    after `VIEWING_FRESH_MS` (10s) — the stamp lives in a plain Map, never in
+    `push.json`, because a once-a-second write would rewrite that file at that rate and
+    a claim means nothing after a restart.
+
   Web Push is written out of
   `node:crypto` in `src/webpush.ts` (VAPID ES256 + `aes128gcm`) to keep the
   tarball's **zero runtime deps** — the traps there are that ES256 needs raw
@@ -1099,8 +1118,12 @@ handler scan, and the relay/web import boundary.
   has stopped and looks exactly like a Mac with nothing to report. Covers the baseline,
   the confirm-on-the-next-tick, a chat archived mid-turn, and the loop rule from both
   sides — the lap you asked for still fires, the laps the agent gave itself do not, and
-  a chat with no turn head keeps the old behaviour. Rows are injected, so no push store
-  and no network. Portable, so the ubuntu job runs it.
+  a chat with no turn head keeps the old behaviour. It also pins the reading claim
+  (`noteViewing`/`isReading`): scoped to one device and one chat, moving with the reader
+  rather than accumulating, and expiring once the poll that refreshes it stops — a window
+  set too wide silently eats the notification for a phone put down mid-turn. Rows are
+  injected and the claim is a plain Map, so no push store and no network. Portable, so
+  the ubuntu job runs it.
 
 - `tests/push-click.test.ts` — what a tapped notification does
   (`public/push-sw.js` ▸ `notificationclick`). Nothing about a click happens by default,

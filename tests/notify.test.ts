@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { TurnWatcher } from '../src/notify.ts'
+import { isReading, noteViewing, TurnWatcher } from '../src/notify.ts'
 import type { SessionState } from '../src/reads.ts'
 
 function chat(
@@ -138,5 +138,43 @@ describe('turn watcher', () => {
 		const notifications = fired(watcher, [chat('idle', T1, 'looper'), chat('idle', T2, 'yours')])
 		expect(notifications).not.toContain('looper:done')
 		expect(notifications).toContain('yours:done')
+	})
+})
+
+/**
+ * The other rule about not buzzing a phone: the chat you are reading right now. Both
+ * ways of getting the window wrong are silent. Too long and a phone put down mid-turn
+ * never hears the turn end, which looks exactly like a notifier that has stopped; too
+ * short and the suppression simply never fires, which nobody reports either.
+ */
+describe('reading claims', () => {
+	const AT = 1_772_000_000_000
+
+	test('covers only the chat that device has on screen', () => {
+		noteViewing('device-a', 'chat-1')
+		expect(isReading('device-a', 'chat-1')).toBe(true)
+		expect(isReading('device-a', 'chat-2')).toBe(false)
+	})
+
+	test('leaves every other device alone', () => {
+		noteViewing('device-a', 'chat-1')
+		expect(isReading('device-b', 'chat-1')).toBe(false)
+	})
+
+	test('expires once the poll that refreshes it has stopped', () => {
+		noteViewing('device-c', 'chat-1')
+		expect(isReading('device-c', 'chat-1', Date.now() + 9_000)).toBe(true)
+		expect(isReading('device-c', 'chat-1', Date.now() + 30_000)).toBe(false)
+	})
+
+	test('moves with the reader rather than accumulating chats', () => {
+		noteViewing('device-d', 'chat-1')
+		noteViewing('device-d', 'chat-2')
+		expect(isReading('device-d', 'chat-1')).toBe(false)
+		expect(isReading('device-d', 'chat-2')).toBe(true)
+	})
+
+	test('never claims a chat for a device that has not polled', () => {
+		expect(isReading('device-never', 'chat-1', AT)).toBe(false)
 	})
 })

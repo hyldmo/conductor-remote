@@ -35,6 +35,7 @@ import {
 } from './nosleep.ts'
 import {
 	chatRoute,
+	noteViewing,
 	notifyAll,
 	notifyDevice,
 	pushConfig,
@@ -50,7 +51,7 @@ import { isRoute, routeParam, routes } from './routes.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
 import { SendOnce } from './sendonce.ts'
 import { readSettings, writeSettings } from './settings.ts'
-import { withoutWindowEvidence } from './shared.ts'
+import { VIEWING_HEADER, withoutWindowEvidence } from './shared.ts'
 import {
 	discardStagedAttachment,
 	materializeStagedAttachments,
@@ -1440,6 +1441,12 @@ const server = http.createServer(async (req, res) => {
 			// GET /api/sessions/:id/messages?after=<rowid>
 			const messagesOf = routeParam(routes.messages, req.method, pathname)
 			if (messagesOf) {
+				// The phone's 1s transcript poll doubles as its "I am reading this chat" heartbeat,
+				// which is what keeps a turn ending on screen from also buzzing the lock screen
+				// (src/notify.ts). Only this route is a claim: it is the one read that runs for the
+				// chat on screen and for no other.
+				const device = req.headers[VIEWING_HEADER]
+				if (typeof device === 'string' && device) noteViewing(device, messagesOf)
 				const after = Number(url.searchParams.get('after') ?? 0)
 				return json(req, res, 200, reads.getMessages(messagesOf, Number.isFinite(after) ? after : 0))
 			}

@@ -645,6 +645,13 @@ export function useTranscript(sessionId: string | null, poll = true): Transcript
 	const report = useOnline()
 	const [state, setState] = useState<TranscriptState>({ entries: [], loading: true, error: null })
 	const cursor = useRef(0)
+	// This poll is also the "I am reading this chat" heartbeat the relay uses to keep a
+	// turn ending on screen off the lock screen. Held in a ref rather than in the effect's
+	// deps: the id arrives after mount (usePushSync reconciles the subscription), and
+	// restarting the effect would reset the cursor and re-fetch the whole chat.
+	const readingAs = useApp(s => s.push.deviceId)
+	const readingRef = useRef(readingAs)
+	readingRef.current = readingAs
 
 	useEffect(() => {
 		if (!sessionId) {
@@ -660,7 +667,11 @@ export function useTranscript(sessionId: string | null, poll = true): Transcript
 			if (inFlight) return
 			inFlight = true
 			try {
-				const { entries, cursor: next } = await client.messages(sessionId, cursor.current)
+				// Claimed only while the page is visible — the same test that moves the read mark
+				// (SessionView). A chat left on screen behind a locked phone is one you walked away
+				// from, and its notification is the point.
+				const reading = document.visibilityState === 'visible' ? readingRef.current : null
+				const { entries, cursor: next } = await client.messages(sessionId, cursor.current, reading)
 				if (!alive) return
 				report(true)
 				if (entries.length) {
