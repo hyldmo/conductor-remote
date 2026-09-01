@@ -440,7 +440,9 @@ Two asymmetric halves — keep them separate:
     and an open menu dies the moment someone clicks elsewhere — so a run that fails
     while the user is at the Mac is contention, not a bug, and the answer is the
     ask-first rule below (Traps), never a re-run. Uncontended it is 6/6 at
-    ~11s; typing in Conductor at the same time made it look flaky.
+    ~11s; typing in Conductor at the same time made it look flaky. That 11s was
+    measured while `findSidebarRow` alone cost 11.8s (see the `whose`-clause trap
+    under Traps), so re-measure before quoting it.
 
     **Stopping a turn** (`stopTurn`, `POST /api/sessions/:id/stop`) is the one
     write here that is a **keystroke on purpose**, against the file's own
@@ -1109,6 +1111,22 @@ bind trap below), not by unit test.
   the tell and reach in via one-line helpers (`tabLabel`, `paneLabels`), or name
   variables `strip`/`pane`/`parentEl`. Nothing else in the toolchain reads this
   language, so run `yarn verify` after every edit.
+  - **A `whose` clause is a *reference*, not a list, and reading elements out of
+    one re-runs the filter per element.** So `repeat with l in (UI elements of b
+    whose role is "AXLink")` is quadratic in the number of hits, and it looks
+    exactly like the linear version. Measured on a 45-row sidebar: **10.8s** for
+    the reference walk against **0.9s** for `get UI elements of b whose role is
+    "AXLink"`, which forces the query once — ~220ms per element, all of it the
+    filter being re-evaluated. `findSidebarRow` was **11.8s** and is now 1.8s, and
+    that handler is the whole fallback focus path plus the only route to
+    `setWorkspaceStatus`, which has no other lever. Anything reading *names*
+    should also ask for them in bulk (`name of (UI elements of pane whose role is
+    …)` is one round trip for all of them) rather than a `name of` per element,
+    which is another ~18ms each — that is why `findSidebarRow` snapshots every row
+    name once ahead of its four title candidates instead of re-reading per
+    candidate. `get` on a query that yields one or two elements buys nothing
+    measurable (`tabGroups` is unchanged at ~450ms); it is there so a workspace
+    with twenty chat tabs doesn't discover the trap on its own.
   - **It is a real file, and that is load-bearing in two directions.** `writes.ts`
     reads it as a sibling of its own module (`import.meta.dirname`, the one place
     that may — see the `packageRoot()` rule below), so `yarn build:node` has to

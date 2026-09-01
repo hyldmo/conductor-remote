@@ -407,18 +407,22 @@ end webArea
 on sidebarLinks()
 	-- The sidebar rows are AXLinks named "<repo> <title> +adds -dels". They live
 	-- two levels under the web area; collect them wherever they are at that depth.
+	--
+	-- `get` in front of each `whose` clause is load-bearing, and it is the whole
+	-- cost of this handler. Without it the clause stays a *reference*, so pulling
+	-- the elements out of it one at a time re-runs the filter against the live tree
+	-- for each one: measured on a 45-row sidebar, walking the references cost
+	-- 10.8s against 0.9s for the same query forced to a list once. That is paid by
+	-- every send the deep link doesn't answer and by every status change, which has
+	-- no path but this one.
 	set wa to my webArea()
 	tell application "System Events" to tell process "Conductor"
 		set out to {}
 		repeat with a in (UI elements of wa)
 			try
-				repeat with l in (UI elements of a whose role is "AXLink")
-					set end of out to contents of l
-				end repeat
+				set out to out & (get UI elements of a whose role is "AXLink")
 				repeat with b in (UI elements of a)
-					repeat with l in (UI elements of b whose role is "AXLink")
-						set end of out to contents of l
-					end repeat
+					set out to out & (get UI elements of b whose role is "AXLink")
 				end repeat
 			end try
 		end repeat
@@ -435,17 +439,22 @@ on findSidebarRow()
 	if (count of titles) is 0 then return missing value
 	set repoName to system attribute "RELAY_WS_REPO"
 	set rows to my sidebarLinks()
+	-- Every name once, ahead of the candidates, rather than once per candidate: each
+	-- is its own round trip, and there are up to four candidates over 45 rows. It is
+	-- also one snapshot, so a row that renames between candidates can't match twice.
+	-- Guarded read: the sidebar re-renders constantly (every commit changes a row's
+	-- "+adds -dels"), and one row going stale mid-scan must not take the search down.
+	set rowNames to {}
+	repeat with entry in rows
+		set end of rowNames to my axName(contents of entry)
+	end repeat
 	repeat with candidate in titles
 		if (candidate as text) is not "" then
 			set matches to {}
-			repeat with entry in rows
-				set row to contents of entry
-				-- Guarded read: the sidebar re-renders constantly (every commit
-				-- changes a row's "+adds -dels"), and one row that goes stale
-				-- mid-scan must not take the whole search down with it.
-				set rowName to my axName(row)
+			repeat with i from 1 to (count of rows)
+				set rowName to item i of rowNames
 				if rowName contains (candidate as text) then
-					if repoName is "" or rowName contains repoName then set end of matches to row
+					if repoName is "" or rowName contains repoName then set end of matches to item i of rows
 				end if
 			end repeat
 			if (count of matches) is 1 then return item 1 of matches
@@ -563,10 +572,8 @@ on tabGroups()
 			repeat with entry in level
 				set node to contents of entry
 				try
-					repeat with h in (UI elements of node whose role is "AXTabGroup")
-						set end of found to contents of h
-					end repeat
-					set nextLevel to nextLevel & (UI elements of node)
+					set found to found & (get UI elements of node whose role is "AXTabGroup")
+					set nextLevel to nextLevel & (get UI elements of node)
 				end try
 			end repeat
 			if (count of found) > 0 then return found
@@ -592,9 +599,7 @@ on stripRadios(tg)
 				set end of acc to node
 			else
 				try
-					repeat with r in (UI elements of node whose role is "AXRadioButton")
-						set end of acc to contents of r
-					end repeat
+					set acc to acc & (get UI elements of node whose role is "AXRadioButton")
 				end try
 			end if
 		end repeat
@@ -910,7 +915,7 @@ end runStrip
 on runTaskButton(tg)
 	set matches to {}
 	tell application "System Events" to tell process "Conductor"
-		repeat with entry in (UI elements of tg whose role is "AXButton")
+		repeat with entry in (get UI elements of tg whose role is "AXButton")
 			set node to contents of entry
 			set label to my axName(node)
 			if label starts with "Run " or label starts with "Stop " then set end of matches to node
@@ -938,7 +943,7 @@ end runTaskName
 on openRunPorts(tg)
 	set found to {}
 	tell application "System Events" to tell process "Conductor"
-		repeat with entry in (UI elements of tg whose role is "AXButton")
+		repeat with entry in (get UI elements of tg whose role is "AXButton")
 			set label to my axName(contents of entry)
 			if label starts with "Open :" then set end of found to text 7 thru -1 of label
 		end repeat
@@ -1140,8 +1145,8 @@ on setModel(wanted)
 	set loose to {}
 	set wa to my webArea()
 	tell application "System Events" to tell process "Conductor"
-		repeat with m in (UI elements of wa whose role is "AXMenu")
-			repeat with mi in (UI elements of m whose role is "AXMenuItem")
+		repeat with m in (get UI elements of wa whose role is "AXMenu")
+			repeat with mi in (get UI elements of m whose role is "AXMenuItem")
 				set label to my firstLine(my tabLabel(mi))
 				if label is wanted then
 					set chosen to contents of mi
@@ -1186,8 +1191,8 @@ on listModels()
 	set labels to {}
 	set wa to my webArea()
 	tell application "System Events" to tell process "Conductor"
-		repeat with m in (UI elements of wa whose role is "AXMenu")
-			repeat with mi in (UI elements of m whose role is "AXMenuItem")
+		repeat with m in (get UI elements of wa whose role is "AXMenu")
+			repeat with mi in (get UI elements of m whose role is "AXMenuItem")
 				set end of labels to my firstLine(my tabLabel(mi))
 			end repeat
 		end repeat
