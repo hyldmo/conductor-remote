@@ -72,6 +72,7 @@ import {
 	lockBlocked,
 	newChat,
 	pickActuator,
+	restartConductorApp,
 	retryWontHelp,
 	type SendResult,
 	screenLocked,
@@ -1047,6 +1048,37 @@ const server = http.createServer(async (req, res) => {
 			if (isRoute(routes.disarmNoSleep, req.method, pathname)) {
 				const result = await disarmNoSleep()
 				return json(req, res, result.ok ? 200 : result.state.available ? 502 : 409, result)
+			}
+
+			// POST /api/conductor/restart { stopAgents? } — quit Conductor and start it again.
+			//
+			// The lever exists in the actuator already, but only as activateConductor's last
+			// resort, which fires exclusively for a *windowless* Conductor. This is for the
+			// other shape: window up, prompts landing as rows, and no agent output behind any
+			// of it (measured 2026-09-02 — 2h35m of user rows after the last agent frame).
+			// The running agents are counted from the DB before the UI is touched and refused
+			// unless the caller meant it, the same way archiving is: quitting ends every turn
+			// in flight. The lock screen is the actuator's own gate, since only it can ask.
+			if (isRoute(routes.restartConductor, req.method, pathname)) {
+				const body = JSON.parse((await readBody(req)) || '{}') as { stopAgents?: boolean }
+				const working = reads.listSessionStates().filter(state => state.status === 'working').length
+				if (working > 0 && body.stopAgents !== true) {
+					return json(req, res, 409, {
+						ok: false,
+						agentsRunning: true,
+						working,
+						error: `${working} chat${working === 1 ? ' is' : 's are'} mid-turn. Restarting Conductor ends ${working === 1 ? 'it' : 'them'}.`
+					})
+				}
+				const startedAt = Date.now()
+				const result = await restartConductorApp()
+				const ms = Date.now() - startedAt
+				if (!result.ok) {
+					console.warn(`[restart] Conductor restart failed after ${(ms / 1000).toFixed(1)}s: ${result.error}`)
+					return json(req, res, 502, { ok: false, ms, error: result.error })
+				}
+				console.log(`[restart] quit Conductor and relaunched it in ${(ms / 1000).toFixed(1)}s`)
+				return json(req, res, 200, { ok: true, ms })
 			}
 
 			// GET /api/logs?file=&limit= — the relay's own log, so a phone can diagnose a failed send

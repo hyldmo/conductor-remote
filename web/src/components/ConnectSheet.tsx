@@ -1,9 +1,10 @@
-import { Bell, Check, Copy, LogOut, Sun, Wifi, X } from 'lucide-react'
+import { Bell, Check, Copy, LogOut, RotateCcw, Sun, Wifi, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { usePush } from '../hooks.ts'
-import { client } from '../lib/api.ts'
+import { ApiError, client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { isLockedError } from '../lib/lock.ts'
 import type { SettingsResponse } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { QRCode } from './QRCode.tsx'
@@ -252,8 +253,8 @@ function untilLabel(until: number | null): string {
 }
 
 /**
- * The two things about the *Mac* a phone can usefully change: keep it awake with the lid
- * shut, and name a network to fall back to when it loses the one it's on.
+ * The three things about the *Mac* a phone can usefully change: keep it awake with the lid
+ * shut, name a network to fall back to when it loses the one it's on, and restart Conductor.
  *
  * Both are opt-in on the Mac side and say so rather than appearing broken. Keeping the Mac
  * awake needs `nosleep setup` (a scoped sudoers rule — a daemon has no TTY to answer a
@@ -271,6 +272,11 @@ function MacRow() {
 	// relay goes unreachable seconds after the tap, and copy that still read "stops the Mac
 	// sleeping when you shut the lid" made that look like the app breaking.
 	const [goingToSleep, setGoingToSleep] = useState(false)
+	// Restarting quits the app, so it is two taps like Disconnect above — and the second
+	// tap has a second form: 'agents' is the relay having refused because chats are
+	// mid-turn, which is a different sentence and a different consent.
+	const [restart, setRestart] = useState<'idle' | 'confirm' | 'agents'>('idle')
+	const [restartedMs, setRestartedMs] = useState<number | null>(null)
 
 	const load = useCallback(async () => {
 		try {
@@ -292,6 +298,25 @@ function MacRow() {
 			await fn()
 			await load()
 		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err))
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	const doRestart = async (stopAgents: boolean) => {
+		setBusy(true)
+		setError(null)
+		try {
+			const result = await client.restartConductor(stopAgents)
+			setRestartedMs(result.ms ?? 0)
+			setRestart('idle')
+			await load()
+		} catch (err) {
+			// 409 is this route's one refusal with a second half — agents are still working,
+			// and ending them is its own yes. The relay's sentence carries the count, which is
+			// why it is shown rather than a number this sheet would have to guess at.
+			if (err instanceof ApiError && err.status === 409) setRestart('agents')
 			setError(err instanceof Error ? err.message : String(err))
 		} finally {
 			setBusy(false)
@@ -414,7 +439,76 @@ function MacRow() {
 				) : null}
 			</div>
 
-			{error ? <p className="text-xs text-del">{error}</p> : null}
+			{/* Third, and the only one whose subject is Conductor rather than the machine. It is
+			    last because it is the heaviest: it quits the app. It exists because the failure it
+			    answers is invisible from everywhere else — chats keep accepting prompts and no
+			    agent answers, so nothing on screen looks broken (measured 2026-09-02: two and a
+			    half hours of prompts landing with no agent output behind any of them). */}
+			<div className="border-t border-border pt-2.5">
+				<div className="flex items-center justify-between gap-3">
+					<div className="flex min-w-0 items-center gap-2 text-sm">
+						<RotateCcw size={16} className="shrink-0 text-muted" />
+						<span>Restart Conductor</span>
+					</div>
+					{restart === 'idle' ? (
+						<button
+							type="button"
+							disabled={busy}
+							onClick={() => {
+								setRestartedMs(null)
+								setError(null)
+								setRestart('confirm')
+							}}
+							className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs active:bg-surface disabled:opacity-50"
+						>
+							Restart
+						</button>
+					) : null}
+				</div>
+				<p className="mt-1 text-xs text-muted">
+					{restartedMs !== null
+						? `Quit and reopened in ${(restartedMs / 1000).toFixed(1)}s. Send a prompt to check an agent answers.`
+						: 'Quits Conductor and opens it again — for when chats still take prompts but no agent answers.'}
+				</p>
+				{restart !== 'idle' ? (
+					<div className="fade-in mt-2 rounded-xl border border-del/40 bg-del/10 px-3 py-2.5 text-left">
+						<p className="text-sm font-medium">
+							{restart === 'agents' ? 'Agents are still working' : 'Restart Conductor?'}
+						</p>
+						<p className="mt-1 text-xs text-muted">
+							{restart === 'agents'
+								? 'Restarting ends their turns. Everything they have already written stays in the chat.'
+								: 'The app closes and opens again, which takes about ten seconds. Anything mid-turn stops.'}
+						</p>
+						<div className="mt-2.5 flex gap-2">
+							<button
+								type="button"
+								onClick={() => {
+									setRestart('idle')
+									setError(null)
+								}}
+								className="flex-1 rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm active:bg-surface"
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								disabled={busy}
+								onClick={() => void doRestart(restart === 'agents')}
+								className="flex-1 rounded-lg bg-del px-3 py-2 text-sm font-semibold text-black active:opacity-80 disabled:opacity-50"
+							>
+								{busy ? 'Restarting…' : restart === 'agents' ? 'Stop agents and restart' : 'Restart'}
+							</button>
+						</div>
+					</div>
+				) : null}
+			</div>
+
+			{error ? (
+				<p className="text-xs text-del">
+					{error} {isLockedError(error) ? <UnlockLink /> : null}
+				</p>
+			) : null}
 		</div>
 	)
 }
