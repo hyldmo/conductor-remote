@@ -594,6 +594,30 @@ Two asymmetric halves — keep them separate:
     workspace answers `alreadyArchived` rather than 404 — a phone whose answer went
     missing retries, and the chat it lands back on is `ArchivedChat`, which was
     already there for search hits.
+
+    **Restarting Conductor** (`restartConductorApp`, `POST /api/conductor/restart`) is
+    the same quit-and-relaunch `activateConductor` already used as its last resort —
+    the point is the *entry*, because that one fires only for a **windowless**
+    Conductor and the failure it can't reach looks perfectly healthy: window up,
+    sidebar drawing, composer taking prompts, and no agent output behind any of it.
+    Measured here 2026-09-02: the last agent frame in `session_messages` was 20:47:44
+    and prompts kept landing as user rows for the next 2h35m, each turn flipping
+    `working → idle` having written nothing — which reaches the phone as an empty
+    transcript and a notification saying "Finished its turn." (`notify.ts`'s fallback
+    when `lastAssistantText` finds none). Every read here is fine in that state and
+    nothing on the read side can fix it, so the phone needs the one lever that isn't a
+    read. Same two gates as the archive, in the same two places: the **working chats**
+    are counted from the DB by `server.ts` and refused with 409 unless `stopAgents`
+    says so out loud (the quit ends every turn in flight), and the **lock screen** is
+    asked by `restartApp` itself, because a relaunch fired behind it comes up
+    windowless and once came up wedged. `RELAY_ALLOW_RESTART` is deliberately *not*
+    consulted — that flag exists so the automatic fallback never destroys work nobody
+    asked about, and here the caller is a person pressing a button. Unlike the
+    fallback, which returns the moment the relaunch starts because it is spending a
+    send's budget, this waits for the new window (`RESTART_ATTEMPT_MS`, 45s) so the
+    phone hears what happened instead of "try again". The restart is *not* itself a
+    receipt that the runtime recovered: only an agent answering is, which is why the
+    sheet says to send a prompt and check.
   - `sidecar` (opt-in, `WRITE_STRATEGY=sidecar`): JSON-RPC over Conductor's unix
     socket, addresses a session by id. Precise in principle but speaks a private
     `-v2-` protocol — the most update-fragile surface here, and **currently

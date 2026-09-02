@@ -84,6 +84,12 @@ export const routes = {
 	/** Drop a staged file the user removed before creating its workspace. */
 	discardStagedAttachment: param('DELETE', '/api/attachments/:attachmentId'),
 	logs: flat('GET', '/api/logs'),
+	/**
+	 * Quit Conductor and start it again. Not a workspace route: it is about the app,
+	 * and its whole reason to exist is a Conductor that looks healthy from every other
+	 * route while nothing behind it runs (src/writes.ts ▸ restartConductorApp).
+	 */
+	restartConductor: flat('POST', '/api/conductor/restart'),
 	settings: flat('GET', '/api/settings'),
 	updateSettings: flat('PATCH', '/api/settings'),
 	/** Durable, device-independent PWA state. localStorage remains its offline-first mirror. */

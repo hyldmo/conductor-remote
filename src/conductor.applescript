@@ -293,6 +293,37 @@ on restartConductor()
 	return ""
 end restartConductor
 
+on restartApp()
+	-- The restart the phone asks for (POST /api/conductor/restart), as opposed to
+	-- the one activateConductor falls back to on its own. Same lever, different
+	-- entry, and the second entry is the whole point: that fallback fires only when
+	-- a *running* Conductor draws no window, so it is unreachable for the failure
+	-- this exists for — a Conductor whose window, sidebar and composer are all fine
+	-- while its agent runtime has stopped producing output. Measured live
+	-- (2026-09-02): prompts kept landing as `session_messages` rows for hours after
+	-- the last agent frame, so every window probe here would have said "healthy".
+	--
+	-- RELAY_ALLOW_RESTART is deliberately NOT consulted. That flag exists so the
+	-- fallback never destroys work the caller didn't ask about; here the caller is
+	-- a person who pressed a button, and server.ts has already counted the working
+	-- chats from the DB and refused without `stopAgents`.
+	set refusal to my refusalReason(my windowProbe())
+	if refusal is not "" then error refusal
+	-- Behind the lock screen a relaunch comes up windowless, and once came up
+	-- wedged (answering deep links, hanging every AX read) — the same reason the
+	-- fallback refuses there. The sentence starts with the phrase both sides match
+	-- on (MAC_LOCKED in src/shared.ts) so the phone draws its unlock link.
+	if my screenLocked() is "locked" then error "The Mac is locked - relaunching Conductor behind the lock screen is what leaves it wedged, so the relay won't. Unlock the Mac and try again." & my windowEvidence()
+	set restartError to my restartConductor()
+	if restartError is not "" then error restartError & my windowEvidence()
+	-- The fallback returns the moment the relaunch starts, because it is spending a
+	-- *send's* budget and a cold launch doesn't fit beside one. This run has nothing
+	-- else to do with its budget, so it waits for the window and the phone hears
+	-- what actually happened instead of "try again": ~5-10s for a cold launch here.
+	if not my waitForWindow(60) then error "Conductor was relaunched but hasn't drawn a window yet. Give it a few seconds, then try again." & my windowEvidence()
+	return "ok"
+end restartApp
+
 on waitForWindow(attempts)
 	-- "reopen" is the dock-click Apple event, and for most apps that is what
 	-- recreates a closed window ("activate" on its own does not). Nudge a few times

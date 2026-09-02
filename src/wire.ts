@@ -323,6 +323,22 @@ export interface ArchiveResult {
 	error?: string
 }
 
+/** POST /api/conductor/restart */
+export interface RestartConductorResult {
+	ok: boolean
+	/** How long the quit-and-relaunch took, once it got the UI lock. */
+	ms?: number
+	/**
+	 * The refusal was "agents are still working" — repeat with `stopAgents` to end
+	 * their turns and restart anyway. Same shape as `ArchiveResult.agentsRunning`,
+	 * because it is the same question and the phone asks it the same way.
+	 */
+	agentsRunning?: boolean
+	/** How many chats were mid-turn when it refused, so the dialog can name the cost. */
+	working?: number
+	error?: string
+}
+
 /** GET /api/logs */
 export interface LogsResponse {
 	/** 'live' = this relay process's captured console; otherwise the log file that was tailed. */

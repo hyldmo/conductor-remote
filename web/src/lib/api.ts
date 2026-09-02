@@ -26,6 +26,7 @@ import type {
 	PushTestResult,
 	RelaySettings,
 	ReposResponse,
+	RestartConductorResult,
 	SearchResponse,
 	SendResult,
 	SessionsResponse,
@@ -107,6 +108,11 @@ const SEND_TIMEOUT_MS = 75000
 // workspace port, then configure Tailscale Serve. Keep the phone alive through
 // the relay's complete answer so it never reports failure for a late success.
 const DEV_SERVER_TIMEOUT_MS = 75000
+// A restart is mostly waiting — the quit being honoured, a cold launch, then the first
+// window — and the relay caps its own attempt at 45s (writes.ts ▸ RESTART_ATTEMPT_MS).
+// Kept clear of that so the phone can never give up in the second the answer arrives,
+// with room for the UI lock holding the run behind a send already in flight.
+const RESTART_TIMEOUT_MS = 75000
 
 async function api<T>(path: string, opts: RequestInit = {}, timeoutMs = POLL_TIMEOUT_MS): Promise<T> {
 	const token = getToken()
@@ -454,5 +460,17 @@ export const client = {
 			ACTION_TIMEOUT_MS
 		),
 	disarmNoSleep: () =>
-		api<NoSleepResult>(routes.disarmNoSleep.path(), { method: routes.disarmNoSleep.method }, ACTION_TIMEOUT_MS)
+		api<NoSleepResult>(routes.disarmNoSleep.path(), { method: routes.disarmNoSleep.method }, ACTION_TIMEOUT_MS),
+	/**
+	 * Quit Conductor and open it again — for a Conductor that still takes prompts while
+	 * no agent answers, which no other control here can reach. `stopAgents` is the second
+	 * half of the question, as it is for archiving: without it the relay refuses (409)
+	 * rather than ending turns that are still running.
+	 */
+	restartConductor: (stopAgents = false) =>
+		api<RestartConductorResult>(
+			routes.restartConductor.path(),
+			{ method: routes.restartConductor.method, body: JSON.stringify({ stopAgents }) },
+			RESTART_TIMEOUT_MS
+		)
 }
