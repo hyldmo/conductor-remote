@@ -22,6 +22,8 @@
  * that window the id answers for itself, and outside it the bubble is already gone
  * by the time the transcript has painted, because its text is in the chat.
  */
+import { WORKFLOW_OBJECTIVE_HEADING } from '../../../src/shared.ts'
+
 const KEY = 'conductor-remote-pending'
 
 /** A backstop, not a policy — a bubble is per chat and every failed one is dismissible. */
@@ -47,6 +49,8 @@ export interface PendingMessage {
 	text: string
 	/** Keep a retry in Conductor's follow-up queue. */
 	queue?: boolean
+	/** Retry this first message through the server-owned planning-role workflow expansion. */
+	workflow?: boolean
 	status: 'sending' | 'error'
 	error?: string
 	/** Restored from storage as a send nobody is awaiting any more — see the header. */
@@ -97,6 +101,14 @@ export function promptIndicator(
  */
 export const isUnconfirmed = (p: PendingMessage): boolean => p.status === 'sending' || !!p.interrupted
 
+/** Workflow prompts gain server instructions, but retain the exact user objective after this heading. */
+export function pendingMatchesTranscript(pending: PendingMessage, transcriptText: string): boolean {
+	const expected = pending.text.trim()
+	const actual = transcriptText.trim()
+	if (!pending.workflow) return actual === expected
+	return actual.endsWith(`${WORKFLOW_OBJECTIVE_HEADING}\n\n${expected}`)
+}
+
 function isPending(value: unknown): value is PendingMessage {
 	const p = value as Partial<PendingMessage> | null
 	return (
@@ -106,6 +118,7 @@ function isPending(value: unknown): value is PendingMessage {
 		typeof p.workspaceId === 'string' &&
 		typeof p.text === 'string' &&
 		typeof p.createdAt === 'number' &&
+		(p.workflow === undefined || typeof p.workflow === 'boolean') &&
 		(p.status === 'sending' || p.status === 'error')
 	)
 }

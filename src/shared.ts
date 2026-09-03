@@ -23,6 +23,9 @@ export interface Titled {
 	directory_name: string | null
 }
 
+/** Stable delimiter around the user-authored part of a server-expanded Workflow prompt. */
+export const WORKFLOW_OBJECTIVE_HEADING = '## Workflow objective'
+
 /**
  * The branch minus its prefix, sentence-cased — Conductor's own fallback title while a
  * workspace is still in progress. Prefix-agnostic (github_username / custom / none): it
@@ -94,6 +97,61 @@ export function displayedModelPickerLabel(label: string): string {
 	return modelPickerLabel(label).replace(/^opencode-/i, '')
 }
 
+/** Compact model name: strip the `claude-`/date noise from Conductor's stored id. */
+export function shortModel(model: string | null): string {
+	if (!model) return ''
+	return model
+		.replace(/^claude-/, '')
+		.replace(/-\d{8}$/, '')
+		.replace(/-latest$/, '')
+}
+
+/** Letters and digits alone: a stored id and picker label agree on nothing else. */
+const modelAlnum = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+/** Drop the context-window suffix Conductor sometimes omits from a picker label. */
+const contextlessModel = (name: string) => modelAlnum(name.replace(/[\s\-_]\d+[mk]$/i, ''))
+
+/** `opus-4-8-1m` is one version, not two numbers: put the dot back. */
+function modelVersionParts(parts: string[]): string[] {
+	const out: string[] = []
+	for (const part of parts) {
+		const previous = out[out.length - 1]
+		if (previous !== undefined && /^\d+$/.test(part) && /^\d[\d.]*$/.test(previous)) {
+			out[out.length - 1] = `${previous}.${part}`
+		} else out.push(part)
+	}
+	return out
+}
+
+/** Best-effort picker spelling for a built-in stored model id. */
+function derivedModelLabel(id: string): string {
+	const parts = modelVersionParts(id.split('-'))
+	const title = (part: string) => {
+		if (!part) return ''
+		return part.toLowerCase() === '1m' ? '1M' : part[0].toUpperCase() + part.slice(1)
+	}
+	if (parts[0] === 'gpt' && parts[1]) return [parts[1], ...parts.slice(2).map(title)].join(' ')
+	if (/^(opus|sonnet|haiku|fable)$/.test(parts[0] ?? '')) return parts.map(title).join(' ')
+	return id
+}
+
+/** Resolve a stored model id to the exact label Conductor offered when possible. */
+export function modelLabel(model: string | null, catalog: string[] = []): string {
+	const raw = shortModel(model)
+	if (!raw) return ''
+	const pathTail = raw.split('/').pop() ?? raw
+	const id = pathTail.split(':').pop() ?? pathTail
+	const key = modelAlnum(id)
+	if (key) {
+		const exact = catalog.find(label => modelAlnum(label) === key)
+		if (exact) return exact
+		const near = catalog.filter(label => contextlessModel(label) === contextlessModel(id))
+		if (near.length === 1) return near[0]
+	}
+	return derivedModelLabel(id)
+}
+
 /** A labelled section in a model picker. */
 export interface ModelPickerGroup {
 	label: string
@@ -121,6 +179,22 @@ function modelProvider(model: string): string {
 	return 'Other'
 }
 
+/** The value Conductor persists in `sessions.agent_type` for a picker label. */
+export function modelAgentType(model: string): string | undefined {
+	const provider = modelProvider(model)
+	if (provider === 'Anthropic') return 'claude'
+	if (provider === 'OpenAI') return 'codex'
+	if (provider === 'Cursor') return 'cursor'
+	if (provider === 'OpenCode') return 'acp'
+	return undefined
+}
+
+/** Whether one exact picker label appears in any cached whole-menu snapshot. */
+export function modelCatalogIncludes(model: string, groups: readonly { models: readonly string[] }[]): boolean {
+	const wanted = modelPickerLabel(model)
+	return groups.some(group => group.models.some(candidate => modelPickerLabel(candidate) === wanted))
+}
+
 /** Stable, case-insensitive grouping shared by every model selector. */
 export function groupModelPickerLabels(models: string[]): ModelPickerGroup[] {
 	const grouped = new Map<string, string[]>()
@@ -135,6 +209,16 @@ export function groupModelPickerLabels(models: string[]): ModelPickerGroup[] {
 	return [...grouped]
 		.map(([label, entries]) => ({ label, models: entries.sort((a, b) => a.localeCompare(b)) }))
 		.sort((a, b) => a.label.localeCompare(b.label))
+}
+
+/** A route may return either the long-standing string error or a typed domain error. */
+export function responseErrorMessage(error: unknown, fallback: string): string {
+	if (typeof error === 'string' && error.trim()) return error
+	if (error && typeof error === 'object') {
+		const message = (error as { message?: unknown }).message
+		if (typeof message === 'string' && message.trim()) return message
+	}
+	return fallback
 }
 
 /**

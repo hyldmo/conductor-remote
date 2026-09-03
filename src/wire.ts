@@ -38,7 +38,7 @@ import type {
 	ProviderPlanUsage
 } from './plan-usage.ts'
 import type { DraftAttachment, Prefs, SyncedDraft } from './prefs.ts'
-import type { RepoRow, SearchWorkspace, SessionRow, Workspace } from './reads.ts'
+import type { Workspace as ReadWorkspace, RepoRow, SearchWorkspace, SessionRow } from './reads.ts'
 import type { DevRunConfig } from './run-configs.ts'
 import type { IndexStatus, SearchResult as SearchEvidence } from './search.ts'
 import type { Settings } from './settings.ts'
@@ -81,9 +81,157 @@ export type {
 	Settings as RelaySettings,
 	SyncedDraft,
 	TranscriptEntry,
-	UpdateStatus,
-	Workspace
+	UpdateStatus
 }
+
+// ── delegated roles ─────────────────────────────────────────────────────────────
+
+/** Stable effort keys accepted by the relay, independent of each provider's UI labels. */
+export type AgentEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode'
+
+/** One reusable cross-provider role. Plan mode is deliberately not part of this feature. */
+export interface DelegatedRole {
+	/** Exact label from Conductor's model picker. */
+	model: string
+	effort?: AgentEffort
+	fast?: boolean
+	/** Prepended to the attachment and delegated task. */
+	preamble?: string
+}
+
+/** A role frozen at intake with the provider encoded by its exact picker label. */
+export interface ResolvedDelegatedRole extends DelegatedRole {
+	agentType: string
+}
+
+/** The versioned document persisted at `stateDir()/roles.json`. */
+export interface RolesConfig {
+	version: 1
+	roles: Record<string, DelegatedRole>
+}
+
+export type DelegationReturnMode = 'queue' | 'steer'
+
+export type DelegationStatus =
+	| 'queued'
+	| 'opening'
+	| 'configuring'
+	| 'sending'
+	| 'running'
+	| 'returning'
+	| 'returned'
+	| 'failed'
+
+/** Codes are stable for the phone and MCP; `message` remains the useful human detail. */
+export type DelegationErrorCode =
+	| 'invalid_request'
+	| 'role_not_found'
+	| 'model_missing'
+	| 'provider_unknown'
+	| 'same_provider'
+	| 'workspace_not_found'
+	| 'session_not_found'
+	| 'delegation_not_found'
+	| 'worktree_unavailable'
+	| 'state_invalid'
+	| 'opening_failed'
+	| 'configuration_failed'
+	| 'send_failed'
+	| 'completion_failed'
+	| 'return_failed'
+
+export interface DelegationError {
+	code: DelegationErrorCode
+	message: string
+	/** A retry can make progress without changing the role or request. */
+	retryable: boolean
+}
+
+/** Only states Conductor actually exposes are represented; questions stay in Baton content. */
+export type DelegationOutcome =
+	| {
+			kind: 'success'
+			assistantRowid: number
+			text: string
+	  }
+	| {
+			kind: 'error'
+			assistantRowid?: number
+			text?: string
+			error: string
+	  }
+
+/** Durable identity for role chips; successful jobs may be gone while this remains. */
+export interface SessionRoleAssignment {
+	role: string
+	delegationId?: string
+	assignedAt: number
+}
+
+/** Active/failed job shape projected into `/api/state` and list responses. */
+export interface DelegationProjection {
+	id: string
+	workspaceId: string
+	parentSessionId: string
+	childSessionId?: string
+	role: string
+	resolvedRole: ResolvedDelegatedRole
+	prompt: string
+	returnMode: DelegationReturnMode
+	status: DelegationStatus
+	attempts: number
+	createdAt: number
+	updatedAt: number
+	outcome?: DelegationOutcome
+	failure?: DelegationError
+}
+
+/** The live workspace enriched by relay-owned orchestration state. */
+export type Workspace = ReadWorkspace & {
+	delegations?: DelegationProjection[]
+	session_roles?: Record<string, SessionRoleAssignment>
+	/** A malformed/unsupported worktree file is preserved and reported here. */
+	delegation_warning?: string
+}
+
+/** POST `/api/sessions/:id/delegate`; the path identifies the parent session. */
+export interface DelegateTaskRequest {
+	role: string
+	prompt: string
+	workspaceId?: string
+	throughRowid?: number
+	includeThinking?: boolean
+	returnMode?: DelegationReturnMode
+}
+
+export type DelegateTaskResult =
+	| {
+			ok: true
+			delegationId: string
+			role: string
+			model: string
+	  }
+	| {
+			ok: false
+			error: DelegationError
+	  }
+
+export interface RolesResponse extends RolesConfig {
+	/** Invalid templates stay editable and visible instead of being silently replaced. */
+	issues: Array<{ role: string; error: DelegationError }>
+	/** The on-disk document was preserved but could not be decoded. */
+	warning?: string
+}
+
+export type UpdateRolesResult =
+	| { ok: true; config: RolesConfig }
+	| { ok: false; error: DelegationError; issues?: Array<{ role: string; error: DelegationError }> }
+
+export interface DelegationsResponse {
+	delegations: DelegationProjection[]
+}
+
+export type DismissDelegationResult = { ok: true; delegationId: string } | { ok: false; error: DelegationError }
 
 /**
  * A prompt the relay is holding and will deliver itself: a workspace's first prompt
@@ -170,6 +318,8 @@ export interface WorkspaceResponse {
 /** GET /api/workspaces/:id/sessions */
 export interface SessionsResponse {
 	sessions: SessionRow[]
+	/** Worktree-owned role identity for chips/tool output. */
+	session_roles?: Record<string, SessionRoleAssignment>
 }
 
 /** GET /api/sessions/:id/messages?after= — `cursor` feeds the next poll. */
@@ -259,6 +409,16 @@ export interface DefaultModelResult {
 }
 
 /** POST /api/workspaces — returns as soon as the row exists; the prompt is delivered later. */
+export interface CreateWorkspaceRequest extends ParkedAgentPatch {
+	repo?: string
+	prompt?: string
+	send?: boolean
+	sendImmediately?: boolean
+	attachmentIds?: string[]
+	/** Configure and tag the first chat from the `planning` role; excludes explicit agent settings. */
+	workflow?: boolean
+}
+
 export interface CreateWorkspaceResult {
 	ok: boolean
 	workspaceId?: string
@@ -267,6 +427,8 @@ export interface CreateWorkspaceResult {
 	pendingPrompt?: string
 	/** The model requested for the new chat. The relay applies it before the first prompt. */
 	model?: string
+	/** Present when the first chat was accepted as a configured workflow root. */
+	workflow?: { role: string; model: string }
 	sent?: boolean
 	/** True when `send: true` waited for initial agent settings to finish. */
 	configured?: boolean
@@ -287,6 +449,16 @@ export interface StageAttachmentResult {
 }
 
 /** POST /api/sessions/:id/prompt — the relay retries inside the request, hence `attempts`. */
+export interface SendPromptRequest {
+	text: string
+	workspaceId?: string
+	agent?: ParkedAgentPatch
+	clientId?: string
+	queue?: boolean
+	/** Expand this first message into a configured planning root; mutually exclusive with agent/queue. */
+	workflow?: boolean
+}
+
 export interface SendResult extends ActuatorSendResult {
 	/** Runs the relay needed to land the prompt (it retries a failed send itself). */
 	attempts?: number

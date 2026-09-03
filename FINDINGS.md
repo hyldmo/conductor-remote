@@ -33,7 +33,7 @@ touching the app. Relevant tables:
 
 - `workspaces` — `id, directory_name, workspace_name, branch, state, derived_status, active_session_id, unread, intended_target_branch, …`. `state` is `ready` (live) or `archived`; the sidebar status is `manual_status` (user override) falling back to `derived_status` — values `backlog` / `in-progress` / `in-review` / `done` (the desktop sidebar's groups). **`unread` is dead** — declared, migrated, and 0 on all 1691 rows; unread lives on `sessions` now (below).
 - `sessions` — `id, status ('working'|'idle'), workspace_id, title, model, permission_mode, context_used_percent, unread_count, updated_at`. **Live agent status, for free.** `unread_count` is a 0/1 **flag**, set when an agent finishes a turn the app isn't showing (watched live: a session flipped `working:0` → `idle:1` the moment it finished unfocused) and cleared by opening that workspace on the Mac. `updated_at` tracks the last message to the second, so it doubles as "has anything happened since" — but it's SQLite's `YYYY-MM-DD HH:MM:SS` (UTC, no `T`/`Z`), so compare it with itself, never with `Date.parse`.
-- `session_messages` — `session_id, role, content, full_message, created_at, sent_at, queue_order, turn_id`. Assistant/system rows store raw Claude Code SDK stream JSON; user prompts store plain text. `queue_order` set + `sent_at` null ⇒ a queued-but-unsent message. **This is the full transcript.**
+- `session_messages` — `session_id, role, content, full_message, created_at, sent_at, queue_order, turn_id`. Assistant/system rows store raw Claude Code SDK stream JSON; user prompts store plain text. `queue_order` set + `sent_at` null identifies one queued-message representation, but it is not a universal queue receipt: a live `queue:true` Baton produced no pending row and its eventual dispatched user row had `queue_order = NULL` plus a fresh `turn_id`. Confirm that path from the eventual exact row/new turn. **This is the durable transcript, not every pending UI queue.**
 - `repos` — `id, name, root_path, default_branch`. `root_path` is the primary checkout; worktrees live at `<workspacesRoot>/<repo.name>/<directory_name>`.
 - `diff_comments`, `terminal_sessions`, `attachments`, `settings` — secondary.
 
@@ -57,6 +57,21 @@ the requested assignment and writes atomically, preserving comments, review
 levels and unknown future keys around it. Cursor Agent and OpenCode have provider
 cards in the same sheet but no invented effort setting: Conductor's user schema
 defines provider-specific defaults only for Claude Code and Codex.
+
+A provider-changing model selection rerenders the composer controls, so model and
+effort cannot safely share one AX pass. The verified sequence is model-only, DB
+confirmation of `model` plus `agent_type`, reacquire controls, delta-only
+effort/fast for a delegated role, then final DB confirmation. The generic legacy
+settings endpoint can still carry Plan independently. Codex's measured effort ring is
+`none` (an unnamed AX button), `low` (labelled “Light”), `medium`, `high`, `xhigh`
+(“Extra high”), `max`, and stored `ultra` (labelled “Ultra”). The relay normalizes
+that final stored value to its existing `ultracode` wire key. Claude retains its
+Low-through-Ultracode ring. Plan mode was not a reliable live control during this
+measurement and must not be used by delegated roles or as a completion signal.
+The implementation-time live check stopped at configuration on blank, unsent
+chats: it did not submit a delegated prompt or run a Fable/Claude worker. The
+end-to-end delegation state machine stays under injected fake-actuator coverage
+until a separate live smoke is explicitly wanted.
 
 Crucially, **Conductor's `sessions.id` equals the Claude Code `claude_session_id`** — the app is a GUI over Claude Code sessions.
 

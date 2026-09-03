@@ -93,7 +93,7 @@ export interface SessionRow {
 	/** 'plan' when the chat is in plan mode, else 'default'. */
 	permission_mode: string | null
 	/**
-	 * Normalized current effort: low | medium | high | xhigh | max | ultracode.
+	 * Normalized current effort: none | low | medium | high | xhigh | max | ultracode.
 	 * The legacy wire name stays for cached phone clients; Conductor stores Codex
 	 * values in `codex_thinking_level` and Claude values in this named column.
 	 */
@@ -139,9 +139,12 @@ interface SessionDbRow extends Omit<SessionRow, 'background_tasks'> {
 /** Keep the stable wire field in sync with whichever provider owns the chat. */
 function toSessionRow(row: SessionDbRow, background_tasks: BackgroundTask[]): SessionRow {
 	const { codex_thinking_level, ...session } = row
+	const effort = row.agent_type === 'codex' ? codex_thinking_level : row.claude_effort_level
 	return {
 		...session,
-		claude_effort_level: row.agent_type === 'codex' ? codex_thinking_level : row.claude_effort_level,
+		// Codex calls its top level `ultra`; the relay's long-lived wire value is
+		// `ultracode`, which is also Claude's stored spelling and the phone's key.
+		claude_effort_level: effort === 'ultra' ? 'ultracode' : effort,
 		background_tasks
 	}
 }
@@ -625,6 +628,26 @@ export class Reads {
 			const started = live.get(row.id)
 			return toSessionRow(row, started === undefined ? [] : this.openBackgroundTasks(row.id, started))
 		})
+	}
+
+	/** One delegated child, including its provider-specific open-task guard. */
+	getSession(sessionId: string): SessionRow | null {
+		const rows = this.db.query<SessionDbRow>(
+			`SELECT s.id, s.status, s.title, s.model, s.permission_mode,
+			        s.claude_effort_level, s.codex_thinking_level, s.fast_mode, s.agent_type,
+			        s.context_used_percent, s.unread_count,
+			        s.created_at, s.updated_at, s.last_user_message_at,
+			        (SELECT MAX(m.sent_at) FROM session_messages m
+			          WHERE m.session_id = s.id AND m.queue_order IS NOT NULL AND m.sent_at IS NOT NULL) AS turn_started_at
+			 FROM sessions s
+			 WHERE s.id = ? AND COALESCE(s.is_hidden, 0) = 0
+			 LIMIT 1`,
+			[sessionId]
+		)
+		const row = rows[0]
+		if (!row) return null
+		const started = this.liveAgents().get(row.id)
+		return toSessionRow(row, started === undefined ? [] : this.openBackgroundTasks(row.id, started))
 	}
 
 	/**

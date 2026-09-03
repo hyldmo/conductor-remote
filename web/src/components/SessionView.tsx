@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { FileDiff, Hourglass, LoaderCircle, Plus, X } from 'lucide-react'
+import { FileDiff, Hourglass, LoaderCircle, Plus, Workflow, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import {
@@ -17,13 +17,15 @@ import { shortModel, timestampMs, workspaceTitle } from '../lib/format.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
-import type { DiffStats, Session } from '../lib/types.ts'
+import type { DiffStats, Session, SessionRoleAssignment } from '../lib/types.ts'
 import { useApp, WORKING_HINT_MS } from '../store.ts'
 import { ArchivedChat } from './ArchivedChat.tsx'
 import { Composer } from './Composer.tsx'
+import { DelegationPipeline } from './DelegationPipeline.tsx'
 import { DevServerControls } from './DevServerControls.tsx'
 import { DiffFileViewer, type DiffReviewState, DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
+import { RoleChip, RolesSettings } from './RolesSettings.tsx'
 import type { SplitFormat } from './Transcript.tsx'
 import { Transcript } from './Transcript.tsx'
 import { PromptStatusDot, Spinner, UnlockLink } from './ui.tsx'
@@ -43,6 +45,8 @@ export function SessionView() {
 	const [selectedDiff, setSelectedDiff] = useState<{ workspaceId: string; path: string } | null>(null)
 	const [diffNavigatorOpen, setDiffNavigatorOpen] = useState(false)
 	const selectedDiffFile = selectedDiff && selectedDiff.workspaceId === workspaceId ? selectedDiff.path : null
+	const [rolesOpen, setRolesOpen] = useState(false)
+	const [delegationError, setDelegationError] = useState<string | null>(null)
 	const [creatingChat, setCreatingChat] = useState(false)
 	const [closingChat, setClosingChat] = useState<string | null>(null)
 	const [confirmingClose, setConfirmingClose] = useState<string | null>(null)
@@ -95,6 +99,8 @@ export function SessionView() {
 		sessions[0]?.id ??
 		null
 	const activeSession = sessions.find(s => s.id === sessionId)
+	const sessionRoles = { ...(sessionsData?.session_roles ?? {}), ...(ws?.session_roles ?? {}) }
+	const delegations = ws?.delegations ?? []
 
 	// Reading here can't clear Conductor's own unread flag (the relay's DB handle is
 	// read-only), so record what this phone has seen: the chat on screen is marked up to
@@ -244,7 +250,6 @@ export function SessionView() {
 		await queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
 		if (split.sessionId) pickSession(split.sessionId)
 	}
-
 	const closeDiff = () => {
 		setDiffOpen(false)
 		setSelectedDiff(null)
@@ -267,6 +272,17 @@ export function SessionView() {
 	}
 	const diffReview: DiffReviewState = { workspace: ws, query: diffQuery }
 
+	const dismissDelegation = async (delegationId: string) => {
+		setDelegationError(null)
+		try {
+			const result = await client.dismissDelegation(delegationId)
+			if (!result.ok) throw new Error(result.error.message)
+			await queryClient.invalidateQueries({ queryKey: ['state'] })
+		} catch (err) {
+			setDelegationError(err instanceof Error ? err.message : String(err))
+		}
+	}
+
 	return (
 		<MentionResolverProvider value={fileReferences}>
 			<div className="flex h-full min-w-0 overflow-hidden">
@@ -278,6 +294,14 @@ export function SessionView() {
 						right={
 							<>
 								<DevServerControls workspaceId={ws.id} />
+								<button
+									type="button"
+									onClick={() => setRolesOpen(true)}
+									aria-label="Open delegated roles"
+									className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2"
+								>
+									<Workflow size={18} />
+								</button>
 								<WorkspaceMenu workspace={ws} agentsRunning={sessions.filter(s => s.status === 'working').length} />
 								<DiffButton stats={ws.change_stats} open={diffOpen} onToggle={toggleDiff} />
 							</>
@@ -289,6 +313,7 @@ export function SessionView() {
 							activeId={sessionId}
 							readMarks={readMarks}
 							promptStates={promptStates}
+							roles={sessionRoles}
 							onSelect={pickSession}
 							onNewChat={createChat}
 							onClose={id => void closeChat(id)}
@@ -318,6 +343,12 @@ export function SessionView() {
 							</button>
 						</div>
 					) : null}
+					<DelegationPipeline jobs={delegations} activeSessionId={sessionId} onSelectSession={pickSession} />
+					{ws.delegation_warning || delegationError ? (
+						<div className="shrink-0 border-b border-del/30 bg-del/5 px-3 py-1.5 text-xs text-del">
+							{delegationError ?? ws.delegation_warning}
+						</div>
+					) : null}
 					<div className="relative min-h-0 flex flex-1 flex-col">
 						{/* The relay's undelivered prompt for this chat: one parked for the lock screen
 						    wins (it names its session; oldest first, since delivery is FIFO), else the
@@ -339,8 +370,12 @@ export function SessionView() {
 								workingSince={workingSince}
 								turnStartedAt={activeSession?.turn_started_at}
 								waiting={activeSession?.background_tasks}
+								delegations={delegations}
 								queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
 								onFork={forkChat}
+								onSelectSession={pickSession}
+								onDismissDelegation={delegationId => void dismissDelegation(delegationId)}
+								onOpenRoles={() => setRolesOpen(true)}
 							/>
 						)}
 						{diffOpen && (diffNavigatorOpen || !selectedDiffFile) ? (
@@ -362,6 +397,9 @@ export function SessionView() {
 						working={working}
 						actuator={actuator}
 						onFork={prompt => forkChat({ thinking: true, tools: false }, prompt)}
+						workflowStarted={
+							!!(sessionId && sessionRoles[sessionId]) || !!(ws.pending_prompt && sessionId === ws.active_session_id)
+						}
 						focusDraft={sessionId === focusComposerFor}
 						onDraftFocused={() => setFocusComposerFor(null)}
 					/>
@@ -376,6 +414,7 @@ export function SessionView() {
 						onClose={closeDiff}
 					/>
 				) : null}
+				{rolesOpen ? <RolesSettings onClose={() => setRolesOpen(false)} /> : null}
 			</div>
 		</MentionResolverProvider>
 	)
@@ -418,6 +457,7 @@ export function SessionTabs({
 	activeId,
 	readMarks,
 	promptStates,
+	roles = {},
 	onSelect,
 	onNewChat,
 	onClose,
@@ -429,6 +469,7 @@ export function SessionTabs({
 	activeId: string | null
 	readMarks: ReadMarks
 	promptStates: Record<string, PromptIndicatorState>
+	roles?: Record<string, SessionRoleAssignment>
 	onSelect: (id: string) => void
 	onNewChat: () => void
 	onClose: (id: string) => void
@@ -473,6 +514,7 @@ export function SessionTabs({
 									<Hourglass size={11} className="shrink-0 text-faint" aria-label="Waiting for a background task" />
 								) : null}
 								<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
+								{roles[s.id] ? <RoleChip name={roles[s.id].role} /> : null}
 								<ContextPercent used={s.context_used_percent} />
 								{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
 								{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}

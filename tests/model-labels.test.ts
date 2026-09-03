@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest'
-import { displayedModelPickerLabel, groupModelPickerLabels, modelPickerLabel } from '../src/shared.ts'
+import {
+	displayedModelPickerLabel,
+	groupModelPickerLabels,
+	modelAgentType,
+	modelCatalogIncludes,
+	modelPickerLabel
+} from '../src/shared.ts'
 
 describe('model picker labels', () => {
 	test.each([
@@ -37,5 +43,25 @@ describe('model picker labels', () => {
 			OpenCode: ['opencode-go/grok-4.5'],
 			Other: ['unknown-model']
 		})
+	})
+
+	test.each([
+		['Fable 5', 'claude'],
+		['5.6 Terra', 'codex'],
+		['Composer 2.5', 'cursor'],
+		['opencode-go/grok-4.5', 'acp'],
+		['unknown-model', undefined]
+	])('maps %s to its stored agent type', (model, expected) => {
+		expect(modelAgentType(model)).toBe(expected)
+	})
+
+	test('finds one label across repeated whole-picker cache snapshots', () => {
+		const models = ['Fable 5.1', '5.6 Sol']
+		const groups = [
+			{ agentType: 'claude', models },
+			{ agentType: 'codex', models }
+		]
+		expect(modelCatalogIncludes('Fable 5.1', groups)).toBe(true)
+		expect(modelCatalogIncludes('Opus 5', groups)).toBe(false)
 	})
 })

@@ -31,11 +31,15 @@ import { routes } from './routes.ts'
 import { HIT_CLOSE, HIT_OPEN, isToolResult, timestampMs, workspaceTitle } from './shared.ts'
 import type { TranscriptEntry } from './transcript.ts'
 import type {
+	AgentEffort,
 	AgentResult,
 	ArchiveResult,
 	CloseChatResult,
 	CreateWorkspaceResult,
 	DefaultModelResult,
+	DelegateTaskResult,
+	DelegationsResponse,
+	DismissDelegationResult,
 	LogsResponse,
 	MessagesResponse,
 	ModelCatalogResponse,
@@ -44,6 +48,8 @@ import type {
 	NoSleepStatus,
 	PlanUsageResponse,
 	ReposResponse,
+	RolesConfig,
+	RolesResponse,
 	SearchResponse,
 	SendResult,
 	SessionsResponse,
@@ -51,6 +57,7 @@ import type {
 	StateResponse,
 	StatusResult,
 	StopResult,
+	UpdateRolesResult,
 	WorkspaceDiff
 } from './wire.ts'
 
@@ -68,7 +75,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 export const SERVER_INFO = { name: 'conductor-remote', version: '1' }
 
 export const INSTRUCTIONS =
-	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. plan_usage, dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
+	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. delegate_task later drives the real Mac UI and launches another agent through a persisted cross-provider queue; use it only when the user explicitly asked for delegation. It never uses Conductor Plan mode. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. Its workflow option is itself an explicit delegation request: the configured planning role owns the root chat and may use delegate_task, still in ordinary chat mode and never Plan mode. plan_usage, dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
 
 /** Reads are quick; a UI write is measured in tens of seconds (writes.ts ▸ SEND_ATTEMPT_MS). */
 export const READ_TIMEOUT_MS = 10_000
@@ -332,9 +339,10 @@ export function createTools(call: RelayCall): Tool[] {
 				if (!shown.length) return status ? `no workspace is ${status}` : 'no live workspaces'
 				return shown
 					.map(w => {
+						const assigned = w.active_session_id ? w.session_roles?.[w.active_session_id] : undefined
 						const lines = [
 							`${w.session_status === 'working' ? '▶' : '·'} ${workspaceTitle(w)}`,
-							`    ${[w.repo_name, w.branch, w.model, w.pr_number ? `PR #${w.pr_number} ${w.pr_status ?? ''}`.trim() : null].filter(Boolean).join(' · ')}`,
+							`    ${[w.repo_name, w.branch, w.model, assigned ? `role ${assigned.role}` : null, w.pr_number ? `PR #${w.pr_number} ${w.pr_status ?? ''}`.trim() : null].filter(Boolean).join(' · ')}`,
 							`    workspace_id: ${w.id}${w.active_session_id ? `  session_id: ${w.active_session_id}` : ''}`
 						]
 						// An undelivered prompt is invisible from the DB — it lives in the relay's own
@@ -351,6 +359,12 @@ export function createTools(call: RelayCall): Tool[] {
 								`    ! prompt ${p.status} for session ${p.sessionId} (${p.reason}): ${clip(unmark(p.text), 120)}`
 							)
 						}
+						for (const job of w.delegations ?? []) {
+							lines.push(
+								`    ${job.status === 'failed' ? '!' : '→'} delegation ${job.role}: ${job.status} (${job.id})${job.failure ? ` — ${job.failure.message}` : ''}`
+							)
+						}
+						if (w.delegation_warning) lines.push(`    ! delegation state: ${w.delegation_warning}`)
 						return lines.join('\n')
 					})
 					.join('\n')
@@ -385,9 +399,158 @@ export function createTools(call: RelayCall): Tool[] {
 								`\n    waiting for task: ${t.description} (${Math.max(0, Math.round((Date.now() - timestampMs(t.since)) / 60_000))}m so far)`
 						)
 						const glyph = s.status === 'working' ? '▶' : waiting.length ? '⧗' : '·'
-						return `${glyph} ${s.title ?? '(untitled)'} — ${s.status ?? '?'} · ${s.model ?? '?'}${ctx}\n    session_id: ${s.id}${waiting.join('')}`
+						const role = data.session_roles?.[s.id]
+						return `${glyph} ${s.title ?? '(untitled)'} — ${s.status ?? '?'} · ${s.model ?? '?'}${role ? ` · role ${role.role}` : ''}${ctx}\n    session_id: ${s.id}${waiting.join('')}`
 					})
 					.join('\n')
+			}
+		},
+		{
+			name: 'list_roles',
+			description:
+				'List the relay’s picker-backed cross-provider roles. A role marked invalid cannot be delegated until its exact model is selected. Delegated roles never enable Conductor Plan mode.',
+			inputSchema: { type: 'object', properties: {} },
+			run: async () => {
+				const data = await call<RolesResponse>(routes.roles.path())
+				const issueByRole = new Map(data.issues.map(issue => [issue.role, issue.error]))
+				const lines = Object.entries(data.roles).map(([name, role]) => {
+					const settings = [role.model, role.effort, role.fast ? 'fast' : null].filter(Boolean).join(' · ')
+					const issue = issueByRole.get(name)
+					return `${issue ? '!' : '·'} ${name}: ${settings}${issue ? ` — ${issue.code}: ${issue.message}` : ''}`
+				})
+				if (data.warning) lines.unshift(`! ${data.warning}`)
+				return lines.join('\n') || 'no delegated roles are configured'
+			}
+		},
+		{
+			name: 'set_role',
+			description:
+				'Set one cross-provider delegated role using an exact label from list_models. This changes relay config only and does not drive Conductor. Plan mode is intentionally not a role option.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					role: { type: 'string', description: 'Lowercase role name, for example exploration.' },
+					model: { type: 'string', description: 'Exact picker label from list_models.' },
+					effort: {
+						type: 'string',
+						enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
+					},
+					fast: { type: 'boolean' },
+					preamble: { type: 'string', description: 'Optional instructions prepended to each delegated task.' }
+				},
+				required: ['role', 'model']
+			},
+			run: async args => {
+				const name = need(args, 'role')
+				const model = need(args, 'model')
+				const effort = str(args.effort)
+				const efforts: AgentEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
+				if (effort && !efforts.includes(effort as AgentEffort)) throw new Error('effort is invalid')
+				const current = await call<RolesResponse>(routes.roles.path())
+				const prior = current.roles[name]
+				const role = {
+					model,
+					...(effort ? { effort: effort as AgentEffort } : prior?.effort ? { effort: prior.effort } : {}),
+					...(typeof args.fast === 'boolean'
+						? { fast: args.fast }
+						: prior?.fast !== undefined
+							? { fast: prior.fast }
+							: {}),
+					...(typeof args.preamble === 'string'
+						? { preamble: args.preamble }
+						: prior?.preamble !== undefined
+							? { preamble: prior.preamble }
+							: {})
+				}
+				const config = { version: 1 as const, roles: { ...current.roles, [name]: role } } satisfies RolesConfig
+				const result = await call<UpdateRolesResult>(routes.updateRoles.path(), {
+					method: routes.updateRoles.method,
+					body: config
+				})
+				if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+				return `${name}: ${[role.model, role.effort, role.fast ? 'fast' : null].filter(Boolean).join(' · ')}`
+			}
+		},
+		{
+			name: 'delegate_task',
+			description:
+				'Queue work in a real sibling Conductor chat using a configured role on a different provider. The relay attaches this chat’s transcript, configures the child without Plan mode, sends the task, waits for a stable answer, and returns its Baton here. Returns immediately with a delegation id; use list_delegations to observe it. Only use it when the user asked for cross-provider delegation because the queue launches a real agent and drives the Mac UI after this call returns.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					session_id: { type: 'string', description: 'Parent chat that receives the eventual Baton.' },
+					workspace_id: { type: 'string', description: 'Optional assertion for the parent workspace.' },
+					role: { type: 'string', description: 'Exact role name from list_roles.' },
+					prompt: { type: 'string' },
+					through: { type: 'string', description: 'Optional cursor from read_chat; later rows are omitted.' },
+					include_thinking: { type: 'boolean', description: 'Include parent reasoning in the handoff (default true).' },
+					return_mode: {
+						type: 'string',
+						enum: ['queue', 'steer'],
+						description: 'Queue a new parent turn by default; steer explicitly injects into a running turn.'
+					}
+				},
+				required: ['session_id', 'role', 'prompt']
+			},
+			run: async args => {
+				const sessionId = need(args, 'session_id')
+				const through = str(args.through)
+				const throughRowid = through ? parseChatCursor(through) : undefined
+				if (through && throughRowid === null) throw new Error('through must be a cursor returned by read_chat')
+				const returnMode = str(args.return_mode)
+				if (returnMode && returnMode !== 'queue' && returnMode !== 'steer') throw new Error('return_mode is invalid')
+				const result = await call<DelegateTaskResult>(routes.delegateTask.path(sessionId), {
+					method: routes.delegateTask.method,
+					body: {
+						role: need(args, 'role'),
+						prompt: need(args, 'prompt'),
+						workspaceId: str(args.workspace_id),
+						throughRowid,
+						includeThinking: args.include_thinking === undefined ? undefined : args.include_thinking === true,
+						returnMode
+					}
+				})
+				if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+				return `delegation ${result.delegationId} queued · ${result.role} · ${result.model}`
+			}
+		},
+		{
+			name: 'list_delegations',
+			description:
+				'List active and failed delegated jobs. Successful jobs leave their chats and role chips, not a second history log.',
+			inputSchema: {
+				type: 'object',
+				properties: { workspace_id: { type: 'string', description: 'Optional workspace filter.' } }
+			},
+			run: async args => {
+				const workspaceId = str(args.workspace_id)
+				const suffix = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''
+				const data = await call<DelegationsResponse>(`${routes.delegations.path()}${suffix}`)
+				if (!data.delegations.length) return 'no active or failed delegations'
+				return data.delegations
+					.map(job => {
+						const child = job.childSessionId ? ` · child ${job.childSessionId}` : ''
+						const failure = job.failure ? ` · ${job.failure.code}: ${job.failure.message}` : ''
+						return `${job.status} · ${job.role} · ${job.resolvedRole.model} · ${job.id}${child}${failure}`
+					})
+					.join('\n')
+			}
+		},
+		{
+			name: 'dismiss_delegation',
+			description: 'Dismiss one failed delegation job. Its parent/child chats and role identity remain.',
+			inputSchema: {
+				type: 'object',
+				properties: { delegation_id: { type: 'string' } },
+				required: ['delegation_id']
+			},
+			run: async args => {
+				const id = need(args, 'delegation_id')
+				const result = await call<DismissDelegationResult>(routes.dismissDelegation.path(id), {
+					method: routes.dismissDelegation.method
+				})
+				if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+				return `dismissed delegation ${result.delegationId}`
 			}
 		},
 		{
@@ -443,7 +606,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'create_workspace',
 			description:
-				'Start a new Conductor workspace in a repo, optionally with a first prompt and agent settings. The workspace starts from a Conductor deep link, so creation itself needs no Accessibility. The relay applies requested model, effort, plan, and fast settings through Conductor’s UI after it creates the first chat and before it delivers the prompt. Returns as soon as the workspace row exists (~2s), before the worktree is built.',
+				'Start a new Conductor workspace in a repo, optionally with a first prompt and agent settings. The workspace starts from a Conductor deep link, so creation itself needs no Accessibility. The relay applies requested model, effort, plan, and fast settings through Conductor’s UI after it creates the first chat and before it delivers the prompt. Workflow mode instead configures the root from the planning role and explicitly authorizes cross-provider delegate_task calls; it never enables Conductor Plan mode. Returns as soon as the workspace row exists (~2s), before the worktree is built.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -456,11 +619,16 @@ export function createTools(call: RelayCall): Tool[] {
 					},
 					effort: {
 						type: 'string',
-						enum: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'],
+						enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'],
 						description: 'Reasoning effort applied before the first prompt.'
 					},
 					plan: { type: 'boolean', description: 'Start the first chat in Conductor’s Plan mode.' },
 					fast: { type: 'boolean', description: 'Set Fast mode before the first prompt.' },
+					workflow: {
+						type: 'boolean',
+						description:
+							'Start the first prompt as a delegated workflow rooted in the configured planning role. Requires a prompt and cannot be combined with model, effort, plan, or fast. Uses ordinary chat mode, never Conductor Plan mode.'
+					},
 					wait_for_send: {
 						type: 'boolean',
 						description:
@@ -481,19 +649,28 @@ export function createTools(call: RelayCall): Tool[] {
 				const effort = str(args.effort)
 				const plan = typeof args.plan === 'boolean' ? args.plan : undefined
 				const fast = typeof args.fast === 'boolean' ? args.fast : undefined
-				const configured = model !== undefined || effort !== undefined || plan !== undefined || fast !== undefined
+				const workflow = args.workflow === true
+				const explicitAgent = model !== undefined || effort !== undefined || plan !== undefined || fast !== undefined
+				if (workflow && explicitAgent) {
+					throw new Error('workflow cannot be combined with model, effort, plan, or fast')
+				}
+				if (workflow && !prompt) throw new Error('workflow needs a first prompt')
+				const configured = workflow || explicitAgent
 				const send = args.wait_for_send === true
 				// Default on, matching the relay: an omitted flag must never mean "wait".
 				const sendImmediately = args.send_immediately !== false
 				const data = await call<CreateWorkspaceResult>(routes.createWorkspace.path(), {
 					method: routes.createWorkspace.method,
-					body: { repo, prompt, model, effort, plan, fast, send, sendImmediately },
+					body: workflow
+						? { repo, prompt, workflow: true, send, sendImmediately }
+						: { repo, prompt, model, effort, plan, fast, send, sendImmediately },
 					timeoutMs: send ? WRITE_TIMEOUT_MS : 30_000
 				})
 				const lines = [
 					`created ${data.workspace ? workspaceTitle(data.workspace) : data.workspaceId}`,
 					`workspace_id: ${data.workspaceId}`
 				]
+				if (data.workflow) lines.push(`workflow root: ${data.workflow.role} · ${data.workflow.model}`)
 				if (data.warning) lines.push(`! ${data.warning}`)
 				else if (data.pendingPrompt && !data.sent)
 					lines.push('the first prompt is queued — the relay delivers it, so do not send it again')
@@ -766,7 +943,7 @@ export function createTools(call: RelayCall): Tool[] {
 						description: 'Strongly recommended: it is what the relay asserts against before pressing anything.'
 					},
 					model: { type: 'string', description: 'A label from list_models. An unambiguous prefix is enough.' },
-					effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] },
+					effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] },
 					plan: { type: 'boolean', description: 'Conductor’s Plan checkbox.' },
 					fast: {
 						type: 'boolean',

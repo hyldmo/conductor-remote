@@ -35,6 +35,9 @@ export function AgentControls({
 	onFastChange,
 	onEffortChange,
 	onPlanChange,
+	disabled = false,
+	hidePlan = false,
+	beforeModel,
 	status
 }: {
 	model: string
@@ -61,6 +64,12 @@ export function AgentControls({
 	onFastChange: () => void
 	onEffortChange: () => void
 	onPlanChange: () => void
+	/** Prevent every agent-setting write while another mode owns the configuration. */
+	disabled?: boolean
+	/** Workflow mode never exposes or applies Conductor Plan mode. */
+	hidePlan?: boolean
+	/** A mode switch placed before the agent settings it controls. */
+	beforeModel?: ReactNode
 	status?: ReactNode
 }) {
 	const planAvailable = supportsPlanMode(agentType, providerModel)
@@ -68,6 +77,7 @@ export function AgentControls({
 	return (
 		<div className="min-w-0 flex-1">
 			<div className="flex min-w-0 items-center gap-0.5">
+				{beforeModel}
 				{/* Only the model control opens a menu; the other settings stay one-tap ghost controls. */}
 				<div className="min-w-0">
 					<ModelPicker
@@ -84,12 +94,13 @@ export function AgentControls({
 						renderTrigger={({ picking, toggle }) => (
 							<button
 								type="button"
+								disabled={disabled}
 								onClick={toggle}
 								aria-label={`Change model, currently ${model}`}
 								aria-haspopup="menu"
 								aria-expanded={picking}
 								className={cn(
-									'flex h-8 max-w-full min-w-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted transition active:bg-surface-2 active:text-text',
+									'flex h-8 max-w-full min-w-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted transition active:bg-surface-2 active:text-text disabled:pointer-events-none disabled:opacity-40',
 									modelStaged && 'text-accent'
 								)}
 							>
@@ -101,11 +112,12 @@ export function AgentControls({
 				</div>
 				<button
 					type="button"
+					disabled={disabled}
 					onClick={onFastChange}
 					aria-label={`Fast mode ${fast === undefined ? 'default' : fast ? 'on' : 'off'}`}
 					aria-pressed={fast === true}
 					className={cn(
-						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text',
+						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:pointer-events-none disabled:opacity-40',
 						fast && 'text-text',
 						fastStaged && 'text-accent'
 					)}
@@ -115,10 +127,11 @@ export function AgentControls({
 				{effort || showEmptyEffort ? (
 					<button
 						type="button"
+						disabled={disabled}
 						onClick={onEffortChange}
 						aria-label={`Reasoning effort: ${effort ? EFFORT_LABELS[effort] : 'default'}`}
 						className={cn(
-							'flex h-8 shrink-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted transition active:bg-surface-2 active:text-text',
+							'flex h-8 shrink-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted transition active:bg-surface-2 active:text-text disabled:pointer-events-none disabled:opacity-40',
 							effortStaged && 'text-accent'
 						)}
 					>
@@ -126,14 +139,15 @@ export function AgentControls({
 						<span className="max-[340px]:hidden">{effort ? EFFORT_LABELS[effort] : 'Effort'}</span>
 					</button>
 				) : null}
-				{planAvailable ? (
+				{planAvailable && !hidePlan ? (
 					<button
 						type="button"
+						disabled={disabled}
 						onClick={onPlanChange}
 						aria-label={`Plan mode ${plan === undefined ? 'default' : plan ? 'on' : 'off'}`}
 						aria-pressed={plan === true}
 						className={cn(
-							'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text',
+							'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:pointer-events-none disabled:opacity-40',
 							plan && 'text-text',
 							planStaged && 'text-accent'
 						)}

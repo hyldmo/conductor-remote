@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ChevronDown, GitFork, Hourglass, Loader2, Waypoints } from 'lucide-react'
+import { ChevronDown, GitFork, Hourglass, Loader2, Waypoints } from 'lucide-react'
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
@@ -7,15 +7,17 @@ import { cn } from '../lib/cn.ts'
 import { elapsed, messagePreview, messageTime, timeAgo, timestampMs } from '../lib/format.ts'
 import { languageForTool, languageForToolOutput } from '../lib/highlight.ts'
 import { isLockedError } from '../lib/lock.ts'
-import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
+import { isUnconfirmed, type PendingMessage, pendingMatchesTranscript } from '../lib/pending.ts'
 import { assistantTurnEnds, latestAssistantForActions, turnOrigin } from '../lib/transcript-actions.ts'
 import { type TranscriptNode, transcriptTree } from '../lib/transcript-tree.ts'
-import type { BackgroundTask, PendingPrompt, TranscriptEntry } from '../lib/types.ts'
+import type { BackgroundTask, DelegationProjection, PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { Code } from './Code.tsx'
+import { DelegationBubbles } from './DelegationPipeline.tsx'
 import { ChatLink, Markdown, sourceReference } from './Markdown.tsx'
 import { MessageNav } from './MessageNav.tsx'
 import { Patch } from './Patch.tsx'
+import { QueueBubble } from './QueueBubble.tsx'
 import { CopyButton, Empty, Spinner, UnlockLink } from './ui.tsx'
 
 /** The transcript cuts the fork control exposes. */
@@ -38,8 +40,12 @@ export function Transcript({
 	turnStartedAt,
 	queued,
 	waiting,
+	delegations = [],
 	poll,
-	onFork
+	onFork,
+	onSelectSession,
+	onDismissDelegation,
+	onOpenRoles
 }: {
 	sessionId: string | null
 	workspaceId: string
@@ -50,6 +56,8 @@ export function Transcript({
 	 * the agent will be back.
 	 */
 	waiting?: BackgroundTask[]
+	/** Active/failed delegated jobs involving this workspace. */
+	delegations?: DelegationProjection[]
 	/** Epoch ms the current answer started (see SessionView) — the elapsed timer's origin. */
 	workingSince?: number | null
 	/**
@@ -65,6 +73,9 @@ export function Transcript({
 	poll?: boolean
 	/** Opens a new chat or workspace with a selected transcript cut staged as an attachment. */
 	onFork?: (format: SplitFormat) => Promise<void>
+	onSelectSession?: (sessionId: string) => void
+	onDismissDelegation?: (delegationId: string) => void
+	onOpenRoles?: () => void
 }) {
 	const { entries, loading, error } = useTranscript(sessionId, poll ?? true)
 	const pending = useApp(s => s.pending)
@@ -110,8 +121,11 @@ export function Transcript({
 	// This session's optimistic prompts, hiding any still-unconfirmed one whose text
 	// has already arrived as a real user row — the confirmed bubble replaces it.
 	const delivered = new Set(entries.filter(e => e.role === 'user').map(e => e.text.trim()))
+	const deliveredTexts = [...delivered]
 	const mine = pending.filter(p => p.sessionId === sessionId)
-	const visiblePending = mine.filter(p => !(isUnconfirmed(p) && delivered.has(p.text.trim())))
+	const visiblePending = mine.filter(
+		p => !(isUnconfirmed(p) && deliveredTexts.some(text => pendingMatchesTranscript(p, text)))
+	)
 
 	// The relay keeps the entry until delivery is *confirmed*, and its own send lands as
 	// a real user row up to a poll before /api/state drops it — so hide the queued bubble
@@ -119,15 +133,19 @@ export function Transcript({
 	const queuedText = queued?.text.trim() || null
 	const showQueued =
 		queuedText && !delivered.has(queuedText) && !mine.some(p => p.text.trim() === queuedText) ? queued : null
+	const hasDelegations =
+		!!sessionId && delegations.some(job => job.parentSessionId === sessionId || job.childSessionId === sessionId)
 
 	// Purge confirmed optimistic bubbles from the store once the real row shows (the
 	// send hook also purges on a timer; this catches the fast path so nothing lingers).
 	// It is also the only thing that retires a bubble restored from storage, whose send
 	// resolved while the app wasn't running to hear it (lib/pending.ts).
 	useEffect(() => {
-		const seen = new Set(entries.filter(e => e.role === 'user').map(e => e.text.trim()))
+		const seen = entries.filter(e => e.role === 'user').map(e => e.text.trim())
 		for (const p of pending) {
-			if (p.sessionId === sessionId && isUnconfirmed(p) && seen.has(p.text.trim())) removePending(p.id)
+			if (p.sessionId === sessionId && isUnconfirmed(p) && seen.some(text => pendingMatchesTranscript(p, text))) {
+				removePending(p.id)
+			}
 		}
 	}, [entries, pending, sessionId, removePending])
 
@@ -168,7 +186,7 @@ export function Transcript({
 	// waiting on that setup, showing it beats an empty pane that looks like a loss.
 	if (!sessionId && !showQueued) return <Empty>No active session in this workspace.</Empty>
 
-	const empty = entries.length === 0 && visiblePending.length === 0 && !showQueued
+	const empty = entries.length === 0 && visiblePending.length === 0 && !showQueued && !hasDelegations
 
 	return (
 		<div className="relative flex min-h-0 min-w-0 flex-1">
@@ -210,6 +228,15 @@ export function Transcript({
 								onFork={onFork}
 							/>
 						) : null}
+						{delegations.length && onSelectSession && onDismissDelegation && onOpenRoles ? (
+							<DelegationBubbles
+								jobs={delegations}
+								sessionId={sessionId}
+								onSelectSession={onSelectSession}
+								onDismiss={onDismissDelegation}
+								onOpenRoles={onOpenRoles}
+							/>
+						) : null}
 						{visiblePending.map(p => (
 							<PendingEntry
 								key={p.id}
@@ -220,7 +247,8 @@ export function Transcript({
 										sessionId: p.sessionId,
 										workspaceId: p.workspaceId,
 										text: p.text,
-										queue: p.queue
+										queue: p.queue,
+										workflow: p.workflow
 									})
 								}
 								onDismiss={() => removePending(p.id)}
@@ -405,65 +433,58 @@ function QueuedEntry({
 	// the parked one is held by the lock screen, only for as long as it hasn't given up.
 	const unlock = !failed && !!queued.sessionId
 	return (
-		<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(queued.text)} data-msg-state="queued">
-			<Bubble className={cn('max-w-[85%] bg-accent-soft text-text opacity-60', failed && 'border border-del/40')}>
+		<QueueBubble
+			state={failed ? 'failed' : 'pending'}
+			meta={
+				failed ? (
+					queued.error || 'Didn’t send'
+				) : (
+					<>
+						{queued.reason ?? 'The relay is sending this'}
+						{unlock ? <UnlockLink className="ml-1" /> : null}
+					</>
+				)
+			}
+			actions={
+				failed
+					? [
+							...(onRetry ? [{ label: 'Retry', onClick: onRetry, primary: true }] : []),
+							{ label: 'Dismiss prompt', onClick: onDismiss }
+						]
+					: []
+			}
+			dataUserMessage={messagePreview(queued.text)}
+			dataMessageState="queued"
+		>
+			<div>
 				<Markdown>{queued.text}</Markdown>
-			</Bubble>
-			{failed ? (
-				<div className="flex items-center gap-2 pr-1 text-[11px] text-del">
-					<AlertTriangle size={11} className="shrink-0" />
-					<span className="max-w-[55vw] truncate">{queued.error || 'Didn’t send'}</span>
-					{onRetry ? (
-						<button type="button" onClick={onRetry} className="font-semibold underline underline-offset-2">
-							Retry
-						</button>
-					) : null}
-					<button type="button" onClick={onDismiss} className="text-faint underline underline-offset-2">
-						Dismiss
-					</button>
-				</div>
-			) : (
-				<span className="flex items-center gap-1 pr-1 text-[11px] text-faint">
-					<Loader2 size={11} className="animate-spin" />
-					{queued.reason ?? 'The relay is sending this'}
-					{unlock ? <UnlockLink className="ml-1" /> : null}
-				</span>
-			)}
-		</div>
+			</div>
+		</QueueBubble>
 	)
 }
 
 /** An optimistic user prompt: greyed while `sending`, or a red bubble with Retry/Dismiss on failure. */
 function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: () => void; onDismiss: () => void }) {
-	if (p.status === 'error') {
-		return (
-			<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(p.text)} data-msg-state="failed">
-				<Bubble className="max-w-[85%] border border-del/40 bg-accent-soft text-text">
-					<Markdown>{p.text}</Markdown>
-				</Bubble>
-				<div className="flex items-center gap-2 pr-1 text-[11px] text-del">
-					<AlertTriangle size={11} className="shrink-0" />
-					<span className="max-w-[55vw] truncate">{p.error || 'Didn’t send'}</span>
-					<button type="button" onClick={onRetry} className="font-semibold underline underline-offset-2">
-						Retry
-					</button>
-					<button type="button" onClick={onDismiss} className="text-faint underline underline-offset-2">
-						Dismiss
-					</button>
-				</div>
-			</div>
-		)
-	}
+	const failed = p.status === 'error'
 	return (
-		<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(p.text)} data-msg-state="sending">
-			<Bubble className="max-w-[85%] bg-accent-soft text-text opacity-60">
+		<QueueBubble
+			state={failed ? 'failed' : 'pending'}
+			meta={failed ? p.error || 'Didn’t send' : 'Sending…'}
+			actions={
+				failed
+					? [
+							{ label: 'Retry', onClick: onRetry, primary: true },
+							{ label: 'Dismiss message', onClick: onDismiss }
+						]
+					: []
+			}
+			dataUserMessage={messagePreview(p.text)}
+			dataMessageState={failed ? 'failed' : 'sending'}
+		>
+			<div>
 				<Markdown>{p.text}</Markdown>
-			</Bubble>
-			<span className="flex items-center gap-1 pr-1 text-[11px] text-faint">
-				<Loader2 size={11} className="animate-spin" />
-				Sending…
-			</span>
-		</div>
+			</div>
+		</QueueBubble>
 	)
 }
 

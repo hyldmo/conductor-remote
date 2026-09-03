@@ -1,14 +1,16 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
+import { modelAgentType } from '../../../src/shared.ts'
 import { useModelCatalog, useModels } from '../hooks.ts'
 import { nextEffort, supportsPlanMode } from '../lib/agent.ts'
 import { client } from '../lib/api.ts'
 import { modelLabel } from '../lib/format.ts'
 import { isLockedError } from '../lib/lock.ts'
-import type { AgentPatch, Session } from '../lib/types.ts'
+import type { AgentPatch, DelegatedRole, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentControls } from './AgentControls.tsx'
 import { UnlockLink } from './ui.tsx'
+import { WorkflowModePill } from './WorkflowModePill.tsx'
 
 /**
  * Conductor's own composer controls, mirrored for the phone — and rendered
@@ -33,7 +35,23 @@ function change<T>(next: T, current: T): T | undefined {
 	return next === current ? undefined : next
 }
 
-export function AgentBar({ session, workspaceId }: { session: Session; workspaceId: string }) {
+export interface WorkflowAgentBar {
+	active: boolean
+	role?: DelegatedRole
+	loading: boolean
+	problem?: string
+	onChange: (active: boolean) => void
+}
+
+export function AgentBar({
+	session,
+	workspaceId,
+	workflow
+}: {
+	session: Session
+	workspaceId: string
+	workflow?: WorkflowAgentBar
+}) {
 	const [picking, setPicking] = useState(false)
 	const [settingDefault, setSettingDefault] = useState<string>()
 	const [defaultError, setDefaultError] = useState<string>()
@@ -49,7 +67,7 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 	// Caches written before default-model support have labels but no starred row;
 	// refresh those once instead of drawing a picker full of unstarred choices.
 	const cacheFresh = !!cachedGroup?.defaultModel && Date.now() - cachedGroup.updatedAt < MODEL_CATALOG_STALE_MS
-	const liveModels = useModels(session, workspaceId, picking && !cacheFresh)
+	const liveModels = useModels(session, workspaceId, picking && !workflow?.active && !cacheFresh)
 	const models = liveModels.data?.models ?? cachedGroup?.models ?? []
 	const defaultModel = liveModels.data?.defaultModel ?? modelCatalog.data?.defaultModel ?? cachedGroup?.defaultModel
 
@@ -68,6 +86,7 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 	const displayedModel = staged.model ?? (modelLabel(session.model, models) || 'Model')
 	const providerModel = staged.model ?? session.model
 	const planAvailable = supportsPlanMode(session.agent_type, providerModel)
+	const workflowModel = workflow?.role?.model ?? 'Planning role'
 
 	// A Plan choice can survive in synced/local drafts after switching away from
 	// Claude. Drop it as soon as the effective model no longer has Conductor's
@@ -100,9 +119,9 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 
 	return (
 		<AgentControls
-			model={displayedModel}
-			providerModel={providerModel}
-			agentType={session.agent_type}
+			model={workflow?.active ? workflowModel : displayedModel}
+			providerModel={workflow?.active ? (workflow.role?.model ?? null) : providerModel}
+			agentType={workflow?.active && workflow.role ? (modelAgentType(workflow.role.model) ?? null) : session.agent_type}
 			models={models}
 			modelPickerOpen={picking}
 			onModelPickerOpenChange={setPicking}
@@ -111,19 +130,41 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 			defaultModel={defaultModel}
 			onSetDefaultModel={model => void makeDefault(model)}
 			settingDefaultModel={settingDefault}
-			fast={fastOn}
-			effort={effort}
-			plan={planOn}
-			modelStaged={staged.model !== undefined}
-			fastStaged={staged.fast !== undefined}
-			effortStaged={staged.effort !== undefined}
-			planStaged={staged.plan !== undefined}
+			fast={workflow?.active ? workflow.role?.fast : fastOn}
+			effort={workflow?.active ? workflow.role?.effort : effort}
+			plan={workflow?.active ? undefined : planOn}
+			showEmptyEffort={workflow?.active}
+			modelStaged={!workflow?.active && staged.model !== undefined}
+			fastStaged={!workflow?.active && staged.fast !== undefined}
+			effortStaged={!workflow?.active && staged.effort !== undefined}
+			planStaged={!workflow?.active && staged.plan !== undefined}
 			onModelChange={model => stage({ model: change(model, staged.model) })}
 			onFastChange={() => stage({ fast: change(!fastOn, dbFast) })}
 			onEffortChange={() => stage({ effort: change(nextEffort(effort), dbEffort) })}
 			onPlanChange={() => stage({ plan: change(!planOn, dbPlan) })}
+			disabled={workflow?.active}
+			hidePlan={workflow?.active}
+			beforeModel={
+				workflow ? (
+					<WorkflowModePill
+						active={workflow.active}
+						onChange={active => {
+							setPicking(false)
+							workflow.onChange(active)
+						}}
+					/>
+				) : undefined
+			}
 			status={
-				defaultError ? (
+				workflow?.active ? (
+					workflow.problem ? (
+						<span className="text-del">{workflow.problem}</span>
+					) : workflow.loading ? (
+						'Loading the planning role…'
+					) : (
+						'Planning root · starts tracked sibling-chat delegation'
+					)
+				) : defaultError ? (
 					<span className="text-del">
 						{defaultError}
 						{isLockedError(defaultError) ? <UnlockLink className="ml-1" /> : null}

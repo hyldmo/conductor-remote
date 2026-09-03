@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowUp, GitFork, Info, LoaderCircle, Paperclip, Snowflake, Square, WifiOff, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useSendPrompt } from '../hooks.ts'
+import { useRoles, useSendPrompt } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { enterSubmits } from '../lib/keys.ts'
 import { isLockedError } from '../lib/lock.ts'
@@ -47,6 +47,7 @@ export function Composer({
 	working,
 	actuator,
 	onFork,
+	workflowStarted = false,
 	focusDraft = false,
 	onDraftFocused
 }: {
@@ -59,6 +60,8 @@ export function Composer({
 	actuator?: ActuatorInfo
 	/** Fork this full chat and keep the composed prompt in the new chat's draft. */
 	onFork?: (prompt: string) => Promise<void>
+	/** The relay already owns this chat as a workflow root (or delegated child). */
+	workflowStarted?: boolean
 	/** A newly forked chat asks to continue from the end of its staged handoff. */
 	focusDraft?: boolean
 	onDraftFocused?: () => void
@@ -80,6 +83,12 @@ export function Composer({
 	const [stopError, setStopError] = useState<string | null>(null)
 	const [forking, setForking] = useState(false)
 	const [forkError, setForkError] = useState<string | null>(null)
+	const [workflowChoice, setWorkflowChoice] = useState<{ sessionId: string | null; active: boolean }>({
+		sessionId: null,
+		active: false
+	})
+	const workflowMode = workflowChoice.sessionId === sessionId && workflowChoice.active
+	const setWorkflowMode = (active: boolean) => setWorkflowChoice({ sessionId, active })
 	const ref = useRef<HTMLTextAreaElement>(null)
 	const fileInput = useRef<HTMLInputElement>(null)
 	const cancelledUploads = useRef(new Set<string>())
@@ -93,6 +102,24 @@ export function Composer({
 	]
 	const uploading = activePendingAttachments.some(attachment => attachment.status === 'uploading')
 	const prompt = [...readyAttachments.map(attachment => attachment.token), text.trim()].filter(Boolean).join('\n')
+	const workflowSendPending = useApp(s => s.pending.some(p => p.sessionId === sessionId && !!p.workflow))
+	const workflowPristine =
+		!!session && !session.last_user_message_at && !working && !workflowStarted && !workflowSendPending
+	const workflowVisible = workflowMode || workflowPristine
+	const roles = useRoles(workflowVisible)
+	const planningRole = roles.data?.roles.planning
+	const planningIssue = roles.data?.issues.find(issue => issue.role === 'planning')
+	const workflowProblem =
+		session?.permission_mode === 'plan'
+			? 'Workflow needs ordinary chat mode. Turn Plan off first.'
+			: roles.isError
+				? 'Could not load delegated roles.'
+				: roles.data?.warning
+					? roles.data.warning
+					: roles.data && !planningRole
+						? 'Workflow mode needs a configured planning role.'
+						: planningIssue?.error.message
+	const workflowReady = !!planningRole && !workflowProblem
 
 	// Before chats had tabs, drafts used their workspace id. Move one across when
 	// that workspace first opens a chat, so an upgrade keeps text the user had typed.
@@ -134,8 +161,28 @@ export function Composer({
 	// Fire-and-forget: the optimistic bubble (and its inline error on failure) is the
 	// feedback now, so we clear the box immediately instead of awaiting the send.
 	const send = (queue = false) => {
-		if (!prompt || uploading || forking || !sessionId || !online) return
-		void sendPrompt({ sessionId, workspaceId, text: prompt, queue })
+		if (
+			!prompt ||
+			uploading ||
+			forking ||
+			!sessionId ||
+			!online ||
+			workflowSendPending ||
+			(workflowMode && !workflowReady)
+		)
+			return
+		const startingWorkflow = workflowMode
+		void sendPrompt({
+			sessionId,
+			workspaceId,
+			text: prompt,
+			queue: startingWorkflow ? false : queue,
+			workflow: startingWorkflow
+		}).then(accepted => {
+			if (accepted && startingWorkflow) {
+				setWorkflowChoice(current => (current.sessionId === sessionId ? { ...current, active: false } : current))
+			}
+		})
 		clearDraftContent(draftKey)
 		setPendingAttachments(current => current.filter(attachment => attachment.sessionId !== sessionId))
 	}
@@ -261,7 +308,11 @@ export function Composer({
 	const disabled = !sessionId
 	const precise = actuator?.precise && actuator.available
 	const canStop = working && !!sessionId
-	const canSend = (!!text.trim() || readyAttachments.length > 0) && !uploading
+	const canSend =
+		(!!text.trim() || readyAttachments.length > 0) &&
+		!uploading &&
+		!workflowSendPending &&
+		(!workflowMode || workflowReady)
 	const coldCache = !working && canSend && session && onFork ? coldPromptCache(session) : null
 
 	return (
@@ -368,7 +419,9 @@ export function Composer({
 					rows={1}
 					value={text}
 					disabled={disabled || forking}
-					placeholder={disabled ? 'No active session' : 'Send a prompt…'}
+					placeholder={
+						disabled ? 'No active session' : workflowMode ? 'What should the workflow accomplish?' : 'Send a prompt…'
+					}
 					// text-base is load-bearing: iOS auto-zooms the page when a field under 16px
 					// takes focus, and never zooms back out on blur.
 					className="block max-h-40 w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint disabled:opacity-50"
@@ -394,7 +447,25 @@ export function Composer({
 					}}
 				/>
 				<div className="mt-1 flex items-start gap-1">
-					{session ? <AgentBar session={session} workspaceId={workspaceId} /> : <span className="flex-1" />}
+					{session ? (
+						<AgentBar
+							session={session}
+							workspaceId={workspaceId}
+							workflow={
+								workflowVisible
+									? {
+											active: workflowMode,
+											role: planningRole,
+											loading: roles.isLoading,
+											problem: workflowProblem,
+											onChange: setWorkflowMode
+										}
+									: undefined
+							}
+						/>
+					) : (
+						<span className="flex-1" />
+					)}
 					<button
 						type="button"
 						onClick={() => fileInput.current?.click()}

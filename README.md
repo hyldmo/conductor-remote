@@ -277,6 +277,14 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 - ✅ **Attach images and files** — tap the paperclip or paste an image into the
   composer. Files up to 25 MB are stored in Conductor's own attachment layout
   before the prompt is sent.
+- ✅ **Cross-provider delegated roles** — configure picker-backed roles from the
+  phone, then turn on **Workflow** beside the model picker in New workspace or an
+  untouched **+ New chat**. The first message starts as the configured planning role
+  and may call `delegate_task`, which opens a real sibling chat, attaches the parent
+  transcript, applies the frozen model/effort/fast settings, and returns a Baton when
+  the child is stably finished. Role chips and a live pipeline remain visible on the
+  phone. Workflow roles are ordinary chats and never enable or depend on Conductor
+  Plan mode.
 - ✅ **Push notifications** when an agent finishes its turn or hits an error —
   see below.
 
@@ -285,16 +293,18 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 `conductor-remote mcp` is an MCP server on stdio. It gives a coding agent the same
 control the phone has, over the same relay.
 
-Two transports, same twenty tools.
+Two transports, same 25 tools.
 
 | | |
 |---|---|
 | `search_chats` · `read_chat` | full-text search every chat on this Mac, archived included, then read one |
 | `list_workspaces` · `list_chats` · `workspace_diff` · `list_repos` | what is running, and what it changed |
 | `plan_usage` | prompt-free Claude/Codex subscription allowances and reset times |
-| `create_workspace` | start work in a repo, with an optional first prompt and model/effort/plan/fast choices. Creation uses a deep link; selected agent settings apply before the prompt |
+| `create_workspace` | start work in a repo, with an optional first prompt and model/effort/plan/fast choices, or `workflow: true` to use the configured planning root and authorize delegation without Plan mode. Creation uses a deep link; selected settings apply before the prompt |
 | `send_prompt` · `stop_turn` · `close_chat` | talk to a running agent, cancel its turn, or hide a chat tab |
 | `split_chat` | move a tangent into a fresh tab, or set `new_workspace` to carry the transcript and current code into a separate worktree |
+| `list_roles` · `set_role` | inspect or edit exact-picker delegated roles (model, effort, fast, and preamble; no Plan setting) |
+| `delegate_task` · `list_delegations` · `dismiss_delegation` | run a task in a real sibling chat on another provider, observe its persisted queue, or dismiss a failed job |
 | `list_models` · `set_agent_options` · `set_default_model` | cached model labels (including the starred default), model, effort, plan, fast; starring a default also selects it for the target chat, matching Conductor |
 | `set_workspace_status` | move a workspace between the sidebar's status groups |
 | `archive_workspace` | put a finished workspace away (Conductor's ⌘⇧A) — deletes the worktree, keeps the chat |
@@ -305,7 +315,7 @@ Two transports, same twenty tools.
 **Name it `conductor-remote`, not `conductor`.** Conductor injects an MCP server of its
 own into every agent it runs, and that one is already called `conductor`. Register this
 under the same name and inside a Conductor workspace the two collide: Conductor's tools
-win, these tools vanish, and the only trace left is this server's instructions text —
+win, these 25 vanish, and the only trace left is this server's instructions text —
 so it reads as if the tools should be there.
 
 **stdio** — for an agent running on this Mac. The client spawns it as a child process;
@@ -349,20 +359,30 @@ of the time.
 | `read_chat` | a transcript by `session_id` — works for archived workspaces |
 | `list_workspaces` | what is running right now, with status and model |
 | `list_chats` | the chat tabs in a workspace |
+| `list_roles` | picker-backed cross-provider role definitions and validation issues |
+| `set_role` | add or change one delegated role without touching Conductor's UI |
+| `delegate_task` | enqueue a cross-provider sibling chat and return immediately with its job id |
+| `list_delegations` | active and failed delegated jobs |
+| `dismiss_delegation` | remove one failed job while retaining both chats and their role chips |
 | `workspace_diff` | a workspace's diff against its target branch |
 | `list_repos` | repos a workspace can be created in |
 | `plan_usage` | Claude/Codex rolling subscription limits, without sending a prompt |
-| `create_workspace` | start a new workspace, optionally with a first prompt and agent settings |
+| `create_workspace` | start a new workspace, optionally with a first prompt and agent settings, or as a configured delegated workflow |
 | `send_prompt` | send into an existing chat (drives the real UI) |
 | `stop_turn` | cancel a running answer (drives the real UI) |
 | `close_chat` | hide a chat tab without deleting its transcript (drives the real UI) |
 | `set_workspace_status` | set the sidebar status (drives the real UI) |
 | `archive_workspace` | archive a workspace (drives the real UI, deletes the worktree) |
 
-The read-only tools touch nothing. `create_workspace` opens a Conductor deep link, so
-creation needs no Accessibility and steals no focus. Requested model, effort, plan,
-and fast settings are applied later through Conductor's UI, before the relay sends
-the first prompt. The UI-writing tools drive Conductor's real window for a few seconds.
+Search, transcript, workspace/chat, diff, repo, role, delegation-status, dismiss,
+keep-awake-status, and log reads touch no Conductor UI. `create_workspace` opens a
+Conductor deep link, so creation itself needs no Accessibility and steals no focus;
+requested model, effort, plan, and fast settings are applied later before the first
+prompt. Its `workflow` option instead freezes the configured `planning` role, tags the
+first chat as that role, and explicitly authorizes that root to use `delegate_task`;
+it cannot be combined with explicit agent settings and never touches Plan mode. `delegate_task`
+persists and returns immediately, then its background queue opens/configures/sends
+through the same serialized UI path as phone writes. It never changes Plan mode.
 
 The HTTP transport is deliberately minimal: the server never initiates a message, so
 there is no SSE stream and `GET /mcp` answers 405, which the spec allows. It keeps no
@@ -382,6 +402,19 @@ working **steers that agent** rather than starting a new turn, and `stop_turn`
 destroys work in flight. `close_chat` keeps the transcript and is reversible with
 Conductor's ⌘⇧T; a working chat is refused until `close_running` explicitly confirms
 the desktop's own warning. The tool descriptions surface each of those choices.
+
+The workflow icon in either workspace header opens **Roles**. Models there are
+choices previously read from Conductor's real picker; a missing or ambiguous label
+stays red and delegation is refused before the relay opens a tab. The shipped
+`exploration` placeholder is intentionally invalid when several Spark rows exist,
+so choose the exact one once. Accepted jobs keep a frozen copy of the role even if
+you edit its definition later. In **New workspace** and the composer of an untouched
+**+ New chat**, the **Workflow** pill beside the model picker is the kickoff switch:
+while active, the planning role's settings are shown read-only and the generic Plan
+control disappears. The first send creates or claims and tags the root before its
+prompt is delivered. Its root instruction starts tracked sibling-chat delegation and
+explicitly rules out provider-native Task/subagent machinery as well as Conductor Plan
+mode. Once a chat has a first message or any delegated role, the kickoff pill is gone.
 
 ## Notifications
 

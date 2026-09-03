@@ -1,6 +1,7 @@
 import type { DefaultEfforts } from './types.ts'
 
 export const EFFORT_LABELS: Record<string, string> = {
+	none: 'None',
 	low: 'Low',
 	medium: 'Medium',
 	high: 'High',
@@ -9,7 +10,8 @@ export const EFFORT_LABELS: Record<string, string> = {
 	ultracode: 'Ultracode'
 }
 
-export const EFFORT_ORDER = Object.keys(EFFORT_LABELS)
+/** Phone taps keep their existing Low→Ultracode cycle; a stored Codex None advances to Low. */
+export const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
 
 export function nextEffort(effort: string | undefined): string {
 	return EFFORT_ORDER[(EFFORT_ORDER.indexOf(effort ?? '') + 1) % EFFORT_ORDER.length]

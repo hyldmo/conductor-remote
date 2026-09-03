@@ -68,7 +68,7 @@ const ACTIVE_BARS: Record<string, number> = {
 	ultracode: 6
 }
 
-/** A six-step meter, matching the six effort levels and Conductor's ascending-bar treatment. */
+/** A six-step meter for reasoning strength; Codex's explicit None lights no bars. */
 export function EffortBars({ effort, className }: { effort: string; className?: string }) {
 	const active = ACTIVE_BARS[effort] ?? 0
 	return (

@@ -38,7 +38,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   relay's matching regex, so the two cannot drift
   shared.ts       what both sides must compute identically (workspaceTitle, query tokens,
                   the locked-Mac phrase) — the one module web/ may import as a *value*
-  mcp-tools.ts    the 20 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
+  mcp-tools.ts    the 25 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
                   the relay through an injected `call`, so both transports share one path
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively
@@ -58,17 +58,31 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops;
                   merged-workspace Continue delegates the branch/store/chat transition to Conductor
+  agent-config.ts two-pass cross-provider config: model-only write + DB receipt, then
+                  reacquired effort/fast controls + final receipt (generic Plan support stays
+                  available to existing callers but delegated roles never pass it)
   model-cache.ts  the picker labels and starred default Conductor has shown us, keyed by
                   harness, so a workspace with no chat yet can still show the effective model
   conductor-settings.ts  surgical, atomic reads/writes of Claude/Codex new-chat effort
                   defaults in ~/.conductor/settings.toml; preserves every unrelated TOML line
   plan-usage.ts   prompt-free Claude/Codex CLI allowance reads → normalized rolling windows;
                   concurrent, single-flight and cached (Cursor/OpenCode report unavailable)
+  roles.ts        strict v1 global role config in stateDir()/roles.json; exact picker/provider
+                  validation, immutable resolved snapshots, no Plan field
+  workflow.ts     validates/freezes the planning role and wraps a workflow's first objective
+                  with explicit delegation authority; emits no Plan setting
+  delegations.ts  strict worktree-local job/session-role codecs + guarded persisted queue;
+                  active jobs live under .context/delegations/ and successful jobs are removed
+                  after their Baton receipt while session role identity remains
+  session-poller.ts one two-second live-session read fanned out synchronously to notifications
+                  and delegation progress; async listener work cannot hold the clock
   sendonce.ts     the send memo: answers a repeated clientId with the first send's outcome
-  firstprompt.ts  persisted queue that delivers a new workspace's first prompt, from setup on
+  firstprompt.ts  persisted queue that tags a workflow root, applies its frozen settings, and
+                  delivers a new workspace's first prompt, from setup on
   parked.ts       persisted queue for prompts that hit the lock screen — delivers on unlock, pushes the receipt
   dev-server.ts   URL-first Conductor Run previews + per-port tailnet-only HTTPS forwards
-  notify.ts       status-transition watcher + subscription store (~/…/conductor-remote/push.json, 0600)
+  notify.ts       status-transition watcher subscribed to SessionPoller + subscription store
+                  (~/…/conductor-remote/push.json, 0600)
   webpush.ts      Web Push protocol: VAPID (ES256) + aes128gcm payloads, node:crypto only
   logbuf.ts       console capture (ring + stamped stdout) + log-file tail → GET /api/logs, token redacted
   autoupdate.ts   self-update from npm; exit()s to reload, so both queues persist to disk
@@ -93,7 +107,7 @@ web/              React PWA (Vite root)
   src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
   src/app.tsx     routes (/ list, /w/:id session) + token gate; mounts ReloadPrompt above the gate
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll) / useModels (model list, SWR)
-                  useSendPrompt (applies the staged agent settings, then sends)
+                  / useRoles; useSendPrompt applies staged agent settings, then sends
   src/lib/        api client, types (re-export of src/wire.ts), format helpers, cn, composer
                   drafts (draft.ts), ready attachments and staged agent settings (agentDraft.ts), local-first host
                   preference sync (prefs.ts), read marks (read.ts, the unread this phone has
@@ -108,6 +122,7 @@ web/              React PWA (Vite root)
                   behind the Copy on a response and on every fenced block)
   src/components/ Header, WorkspaceList, SessionView, Transcript, Markdown + Code, DiffView,
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
+                  RolesSettings, WorkflowModePill, DelegationPipeline, QueueBubble,
                   WorkspaceMenu (the status groups, plus Archive), MergeBanner (merge + continue), MessageNav,
                   DevServerControls, SearchSheet + SearchPane, ArchivedChat (a hit whose
                   worktree is gone), NewWorkspaceSheet, PlanUsageSheet (the Models panel:
@@ -132,6 +147,45 @@ tests/           Vitest unit, contract, concurrency, filesystem and shell integr
 dist/            built PWA (gitignored) — what the relay serves
 dist-node/       compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball
 ```
+
+## Delegated role chats
+
+Roles and jobs deliberately have different lifetimes. `roles.json` is global relay
+configuration. Intake requires one exact label from the deduplicated cached picker,
+derives its provider from that label, rejects the parent's provider, and freezes the
+complete role onto a job under the workspace worktree. Cache groups name the harness
+where a whole picker snapshot was observed; they do not claim ownership of its rows.
+Editing the role later therefore changes only future jobs.
+
+The one `DelegationQueue` advances jobs through `queued → opening → configuring →
+sending → running → returning → returned`. UI stages are background-priority clients
+of the existing process-local `uiTurn`; there is no second scheduler. A locked screen
+or saturated UI queue costs no attempt, while three real failures leave an actionable
+`failed` file. Side effects are at-least-once across relay restarts. In particular, a
+queued Baton persists its pre-dispatch transcript cursor/text and subsequent ticks
+only seek that exact eventual user row instead of dispatching a second copy.
+
+Completion needs the child to be idle, have no process-gated background task, and
+contain a fresh assistant row after the delegated prompt. The same observation must
+survive two poll ticks. `error` is the only other outcome; a question is ordinary
+successful Baton prose for the parent to interpret. Conductor Plan mode is neither
+stored nor applied nor read as completion state by this subsystem.
+
+Successful job files disappear after the parent receipt. The worktree's separate
+`.context/delegations/sessions.json` remains, which is why role chips survive on both
+tabs until the workspace itself is archived.
+
+Workflow mode is only an entry point into that same machinery. Both New workspace and
+an untouched `+` chat send `workflow: true` instead of any explicit
+model/effort/plan/fast patch. `workflow.ts` validates and freezes the global `planning`
+role and builds a root prompt that records the user's delegation authorization. For a
+new workspace that happens before the deep link creates anything; the first-prompt
+queue persists the role alongside the prompt, waits for the real session and worktree,
+writes the root assignment to `sessions.json`, then applies model/effort/fast and sends.
+For an existing pristine chat, the send route checks that it is idle and has no user
+row, writes the same assignment, then configures and sends inside the request's
+idempotent send intent. Both orderings make the planning chip durable before work
+becomes visible. Neither sets nor reads Conductor Plan mode.
 
 ## Re-deriving Conductor internals (if a Conductor update breaks something)
 

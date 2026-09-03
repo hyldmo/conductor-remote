@@ -164,7 +164,14 @@ interface AppState {
 	 */
 	clearWorking: (sessionId: string) => void
 	/** Add (or reset, by id — used by Retry) the bubble and status-ring `sending` state. */
-	addPending: (m: { id: string; sessionId: string; workspaceId: string; text: string; queue?: boolean }) => void
+	addPending: (m: {
+		id: string
+		sessionId: string
+		workspaceId: string
+		text: string
+		queue?: boolean
+		workflow?: boolean
+	}) => void
 	failPending: (id: string, error: string) => void
 	removePending: (id: string) => void
 	setDraft: (chatId: string, text: string) => void

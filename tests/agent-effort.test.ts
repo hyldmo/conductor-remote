@@ -7,7 +7,7 @@ const rawSessions = [
 		id: 'codex-chat',
 		agent_type: 'codex',
 		claude_effort_level: 'high',
-		codex_thinking_level: 'max',
+		codex_thinking_level: 'ultra',
 		prompt_cache_ttl_ms: null
 	},
 	{
@@ -37,7 +37,7 @@ describe('session effort reads', () => {
 	})
 
 	test('uses the Codex effort instead of the stale Claude column', () => {
-		expect(sessions.find(session => session.id === 'codex-chat')?.claude_effort_level).toBe('max')
+		expect(sessions.find(session => session.id === 'codex-chat')?.claude_effort_level).toBe('ultracode')
 	})
 
 	test('keeps Claude effort and the stable wire shape', () => {
