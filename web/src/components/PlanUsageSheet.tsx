@@ -1,8 +1,9 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, RefreshCw, X } from 'lucide-react'
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { usePlanUsage } from '../hooks.ts'
+import { useModelDefaults, usePlanUsage } from '../hooks.ts'
+import { EFFORT_LABELS, EFFORT_ORDER } from '../lib/agent.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import type {
@@ -14,7 +15,6 @@ import type {
 	ProviderPlanUsage
 } from '../lib/types.ts'
 import { planName, resetLabel } from '../lib/usage.ts'
-import { EFFORT_LABELS, EFFORT_ORDER } from './AgentControls.tsx'
 import { ProviderMark } from './AgentIcons.tsx'
 import { Empty } from './ui.tsx'
 
@@ -142,12 +142,7 @@ function clockTime(at: number): string {
 /** Global model defaults and provider allowances. */
 export function PlanUsageSheet({ onClose }: { onClose: () => void }) {
 	const usage = usePlanUsage(true)
-	const defaults = useQuery({
-		queryKey: ['model-defaults'],
-		queryFn: client.modelDefaults,
-		staleTime: 0,
-		retry: false
-	})
+	const defaults = useModelDefaults()
 	const queryClient = useQueryClient()
 	const [refreshing, setRefreshing] = useState(false)
 	const [refreshError, setRefreshError] = useState<string>()
