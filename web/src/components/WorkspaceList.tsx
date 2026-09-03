@@ -33,7 +33,7 @@ import { PlanUsageSheet } from './PlanUsageSheet.tsx'
 import { type RepoChoice, RepoOptions, repoFilterLabel } from './RepoFilter.tsx'
 import { RolesSettings } from './RolesSettings.tsx'
 import { SearchSheet } from './SearchSheet.tsx'
-import { Badge, Empty, RelayUnreachable, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
+import { Badge, Empty, RelayUnreachable, RepoAvatar, RunBadge, Spinner, StatusDot } from './ui.tsx'
 
 /** Pinned first (matches the relay's order), then the chosen sort key. */
 function sortWorkspaces(list: Workspace[], sortBy: SortBy): Workspace[] {
@@ -583,6 +583,7 @@ function WorkspaceCard({
 					promptState={promptState}
 					className="absolute -right-0.5 -bottom-0.5 bg-surface ring-2 ring-surface"
 				/>
+				{w.run_active ? <RunBadge className="absolute -top-0.5 -left-0.5" /> : null}
 			</div>
 			<div className="min-w-0 flex-1 space-y-1.25 overflow-hidden">
 				<div className="flex min-w-0 items-center justify-between gap-2">
