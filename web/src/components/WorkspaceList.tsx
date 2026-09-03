@@ -6,7 +6,6 @@ import { cn } from '../lib/cn.ts'
 import {
 	isDone,
 	isMerged,
-	modelLabel,
 	RECENT_BUCKETS,
 	recentBucket,
 	recentBucketLabel,
@@ -22,7 +21,6 @@ import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { unreadCount } from '../lib/read.ts'
 import type { CachedModelGroup, Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs, WORKING_HINT_MS } from '../store.ts'
-import { ProviderMark } from './AgentIcons.tsx'
 import { ChangeStats } from './ChangeStats.tsx'
 import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
@@ -33,6 +31,7 @@ import { type RepoChoice, RepoOptions, repoFilterLabel } from './RepoFilter.tsx'
 import { RolesSettings } from './RolesSettings.tsx'
 import { SearchSheet } from './SearchSheet.tsx'
 import { Badge, Empty, RelayUnreachable, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
+import { WorkspaceRunLabel } from './WorkspaceRunLabel.tsx'
 
 /** Pinned first (matches the relay's order), then the chosen sort key. */
 function sortWorkspaces(list: Workspace[], sortBy: SortBy): Workspace[] {
@@ -506,18 +505,6 @@ function ViewSelect({
 	)
 }
 
-/**
- * The picker labels to name this workspace's model with. Its own agent's list when
- * that picker has been read, and otherwise everything the relay has ever seen — an
- * id that several of those labels could name resolves to none of them
- * (`format.ts` ▸ `modelLabel`), so the wider list can't produce a wrong name.
- */
-function catalogFor(groups: CachedModelGroup[] | undefined, agentType: string | null): string[] {
-	if (!groups?.length) return []
-	const own = groups.find(g => g.agentType === (agentType ?? 'unknown'))
-	return own?.models ?? [...new Set(groups.flatMap(g => g.models))]
-}
-
 function WorkspaceCard({
 	w,
 	unread,
@@ -533,7 +520,6 @@ function WorkspaceCard({
 	promptState: PromptIndicatorState
 	showDiffs: boolean
 }) {
-	const model = modelLabel(w.model, catalogFor(modelGroups, w.agent_type))
 	return (
 		<>
 			{/* No `self-start`: it pinned the tile to the top of the text column and left it
@@ -573,16 +559,11 @@ function WorkspaceCard({
 				    speak for the active one, so the number read as the workspace's. It lives on the
 				    chat tab that owns it (components/SessionView.tsx ▸ SessionTabs). */}
 				{/* Age first: it is the one thing every row is scanned for, and the left edge is
-				    where that scan already is. The model sits at the right edge, where a column
-				    of marks reads at a glance and a long name has somewhere to truncate. */}
+				    where that scan already is. The run identity sits at the right edge: workflows
+				    span several models, while an ordinary workspace names its active chat's model. */}
 				<div className="flex min-w-0 items-end gap-2 text-xs text-muted">
 					<span className="shrink-0 text-[11px] text-faint">{relativeAge(w.updated_at)}</span>
-					{model ? (
-						<span className="ml-auto flex min-w-0 items-center gap-1 text-[11px]">
-							<ProviderMark agentType={w.agent_type} model={w.model} className="size-3" />
-							<span className="truncate">{model}</span>
-						</span>
-					) : null}
+					<WorkspaceRunLabel workspace={w} modelGroups={modelGroups} />
 				</div>
 			</div>
 		</>
