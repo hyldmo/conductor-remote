@@ -41,9 +41,11 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   the relay through an injected `call`, so both transports share one path
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively
-  git.ts          workspace diff vs target branch (incl. untracked via --no-index), plus the
-                  worktree's file list (GET /api/workspaces/:id/files) that decides which file
-                  an agent named in a message becomes a link
+  git.ts          workspace diff + aggregate line stats vs target branch (incl. untracked via
+                  --no-index), plus the worktree's file list (GET /api/workspaces/:id/files)
+                  that decides which file an agent named in a message becomes a link
+  change-stats.ts bounded, background cache of git line stats for /api/state; working rows
+                  refresh quickly while idle rows avoid spending four git calls every poll
   file-preview.ts resolves a source path an agent wrote (absolute, or ~) and decides whether
                   the relay may open it — the same answer whether or not the file exists
   merge.ts        merge the workspace's open PR via `gh pr merge` (mirrors Conductor's Merge button)

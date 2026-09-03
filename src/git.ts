@@ -10,6 +10,12 @@ export interface DiffFile {
 	removed: number
 }
 
+/** Aggregate line changes for the compact workspace-sidebar readout. */
+export interface DiffStats {
+	added: number
+	removed: number
+}
+
 export interface WorkspaceDiff {
 	base: string
 	mergeBase: string | null
@@ -69,6 +75,35 @@ async function untrackedDiff(cwd: string): Promise<{ files: DiffFile[]; patch: s
 	return { files, patch: patches.join('') }
 }
 
+/**
+ * Count untracked text without building the full patches used by the diff viewer.
+ * `git diff` does not include these files until they enter the index, so each one
+ * needs the same `/dev/null` comparison as `untrackedDiff`; `--numstat` keeps that
+ * comparison to one short line even when the new file is large.
+ */
+async function untrackedStats(cwd: string): Promise<DiffStats> {
+	let listing = ''
+	try {
+		listing = await git(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])
+	} catch {
+		return { added: 0, removed: 0 }
+	}
+	const stats = { added: 0, removed: 0 }
+	for (const file of listing.split('\0').filter(Boolean)) {
+		let out = ''
+		try {
+			out = await git(cwd, ['diff', '--no-index', '--numstat', '--', '/dev/null', file])
+		} catch (err) {
+			// --no-index exits 1 for the ordinary "these differ" result.
+			out = (err as { stdout?: string }).stdout ?? ''
+		}
+		const counted = sumNumstat(out)
+		stats.added += counted.added
+		stats.removed += counted.removed
+	}
+	return stats
+}
+
 /** Resolve the base ref, preferring the remote-tracking form if it exists. */
 async function resolveBase(cwd: string, base: string): Promise<string> {
 	for (const ref of [`origin/${base}`, base]) {
@@ -82,20 +117,53 @@ async function resolveBase(cwd: string, base: string): Promise<string> {
 	return base
 }
 
+/** The commit a workspace diff compares its index and worktree against. */
+async function diffBasis(
+	cwd: string,
+	base: string
+): Promise<{ ref: string; mergeBase: string | null; against: string }> {
+	const ref = await resolveBase(cwd, base)
+	let mergeBase: string | null = null
+	try {
+		mergeBase = (await git(cwd, ['merge-base', ref, 'HEAD'])).trim()
+	} catch {
+		mergeBase = null
+	}
+	return { ref, mergeBase, against: mergeBase ?? ref }
+}
+
+/** Aggregate the numeric columns of `git diff --numstat`; binary-file dashes count as zero lines. */
+export function sumNumstat(numstat: string): DiffStats {
+	const stats = { added: 0, removed: 0 }
+	for (const line of numstat.split('\n')) {
+		if (!line) continue
+		const [rawAdded, rawRemoved] = line.split('\t')
+		const added = rawAdded === '-' ? 0 : Number(rawAdded)
+		const removed = rawRemoved === '-' ? 0 : Number(rawRemoved)
+		if (Number.isFinite(added)) stats.added += added
+		if (Number.isFinite(removed)) stats.removed += removed
+	}
+	return stats
+}
+
+/**
+ * The sidebar's cheap counterpart to `workspaceDiff`: the same base and the same
+ * tracked + untracked semantics, without materialising up to 400 KB of patch text.
+ */
+export async function workspaceDiffStats(worktree: string, base: string): Promise<DiffStats> {
+	const { against } = await diffBasis(worktree, base)
+	const tracked = sumNumstat(await git(worktree, ['diff', '--numstat', against]).catch(() => ''))
+	const untracked = await untrackedStats(worktree)
+	return { added: tracked.added + untracked.added, removed: tracked.removed + untracked.removed }
+}
+
 /**
  * Everything the workspace changed relative to its target branch — committed
  * plus uncommitted — which is what a reviewer wants to see. Computed straight
  * from the worktree, so it's independent of Conductor entirely.
  */
 export async function workspaceDiff(worktree: string, base: string): Promise<WorkspaceDiff> {
-	const ref = await resolveBase(worktree, base)
-	let mergeBase: string | null = null
-	try {
-		mergeBase = (await git(worktree, ['merge-base', ref, 'HEAD'])).trim()
-	} catch {
-		mergeBase = null
-	}
-	const against = mergeBase ?? ref
+	const { ref, mergeBase, against } = await diffBasis(worktree, base)
 
 	const numstat = await git(worktree, ['diff', '--numstat', against]).catch(() => '')
 	const files: DiffFile[] = numstat

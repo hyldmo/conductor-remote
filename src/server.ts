@@ -6,6 +6,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { attachmentPrompt, writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
+import { attachChangeStats } from './change-stats.ts'
 import { isDefaultEffortLevel, readDefaultEfforts, writeDefaultEfforts } from './conductor-settings.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
@@ -908,6 +909,7 @@ const server = http.createServer(async (req, res) => {
 			if (isRoute(routes.state, req.method, pathname)) {
 				const update = updateStatus()
 				const workspaces = reads.listWorkspaces()
+				attachChangeStats(workspaces) // serves the cache now; refreshes stale git stats in the background
 				attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
 				// An undelivered first prompt rides along with its workspace: the phone renders it
 				// in that chat rather than tracking delivery itself (see src/firstprompt.ts).
