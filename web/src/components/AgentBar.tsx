@@ -1,12 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useModelCatalog, useModels } from '../hooks.ts'
+import { nextEffort } from '../lib/agent.ts'
 import { client } from '../lib/api.ts'
 import { modelLabel } from '../lib/format.ts'
 import { isLockedError } from '../lib/lock.ts'
 import type { AgentPatch, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
-import { AgentControls, nextEffort } from './AgentControls.tsx'
+import { AgentControls } from './AgentControls.tsx'
 import { UnlockLink } from './ui.tsx'
 
 /**

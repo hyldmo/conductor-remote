@@ -3,7 +3,8 @@ import { Check, ChevronDown, LoaderCircle, Paperclip, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
-import { useModelCatalog, useRepos } from '../hooks.ts'
+import { useModelCatalog, useModelDefaults, useRepos } from '../hooks.ts'
+import { defaultEffortForModel, nextEffortOverride } from '../lib/agent.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { NEW_WORKSPACE_DRAFT } from '../lib/draft.ts'
@@ -11,7 +12,7 @@ import { enterSubmits } from '../lib/keys.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
 import type { AgentPatch } from '../lib/types.ts'
 import { useApp } from '../store.ts'
-import { AgentControls, nextEffort } from './AgentControls.tsx'
+import { AgentControls } from './AgentControls.tsx'
 import { RepoAvatar } from './ui.tsx'
 
 /** The "Send immediately" choice, remembered for next time — a preference, not state. */
@@ -67,6 +68,7 @@ function discardAttachment(stageId: string | undefined): void {
 export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const { data } = useRepos()
 	const modelCatalog = useModelCatalog()
+	const modelDefaults = useModelDefaults()
 	const lastNewWorkspaceRepo = useApp(s => s.lastNewWorkspaceRepo)
 	const setLastNewWorkspaceRepo = useApp(s => s.setLastNewWorkspaceRepo)
 	const [repo, setRepo] = useState(lastNewWorkspaceRepo)
@@ -113,6 +115,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const hasInitialPrompt = !!prompt.trim() || readyAttachments.length > 0
 	const models = modelCatalog.data?.groups.flatMap(group => group.models) ?? []
 	const defaultModel = modelCatalog.data?.defaultModel
+	const selectedModel = agent.model ?? defaultModel ?? null
+	// Draw the value this model will inherit without putting it in `agent`: an empty
+	// patch is what lets Conductor own the default when the workspace is created.
+	const inheritedEffort = defaultEffortForModel(selectedModel, modelDefaults.data?.defaultEfforts)
+	const displayedEffort = agent.effort ?? inheritedEffort
 	const anyAgentChoice = Object.keys(agent).length > 0
 	const stageAgent = (patch: AgentPatch) =>
 		setAgent(current => {
@@ -385,15 +392,15 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 					/>
 					<div className="mt-1 flex items-start gap-1 px-1">
 						<AgentControls
-							model={agent.model ?? defaultModel ?? 'Model'}
-							providerModel={agent.model ?? defaultModel ?? null}
+							model={selectedModel ?? 'Model'}
+							providerModel={selectedModel}
 							agentType={null}
 							models={models}
 							modelsFetching={modelCatalog.isFetching}
 							modelsError={modelCatalog.isError}
 							defaultModel={defaultModel}
 							fast={agent.fast}
-							effort={agent.effort}
+							effort={displayedEffort}
 							plan={agent.plan}
 							showEmptyEffort
 							modelStaged={agent.model !== undefined}
@@ -406,11 +413,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							onFastChange={() =>
 								stageAgent({ fast: agent.fast === undefined ? true : agent.fast ? false : undefined })
 							}
-							onEffortChange={() =>
-								stageAgent({
-									effort: agent.effort === 'ultracode' ? undefined : nextEffort(agent.effort)
-								})
-							}
+							onEffortChange={() => stageAgent({ effort: nextEffortOverride(displayedEffort, inheritedEffort) })}
 							onPlanChange={() =>
 								stageAgent({ plan: agent.plan === undefined ? true : agent.plan ? false : undefined })
 							}

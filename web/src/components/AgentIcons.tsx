@@ -3,6 +3,7 @@ import cursorMark from '@lobehub/icons-static-svg/icons/cursor.svg'
 import openAiMark from '@lobehub/icons-static-svg/icons/openai.svg'
 import openCodeMark from '@lobehub/icons-static-svg/icons/opencode.svg'
 import { Bot } from 'lucide-react'
+import { type AgentProvider, providerForAgent } from '../lib/agent.ts'
 import { cn } from '../lib/cn.ts'
 
 const PROVIDER_MARKS = {
@@ -12,8 +13,6 @@ const PROVIDER_MARKS = {
 	opencode: openCodeMark
 } as const
 
-type Provider = keyof typeof PROVIDER_MARKS
-
 /**
  * Claude's is the package's own `claude-color.svg` rather than a colour picked by eye.
  * The other three ship no `-color.svg` at all — every path in them is
@@ -21,24 +20,9 @@ type Provider = keyof typeof PROVIDER_MARKS
  * only because this app has no light theme. `cursor` and `opencode` stay whatever the
  * surface around them is.
  */
-const PROVIDER_COLORS: Partial<Record<Provider, string>> = {
+const PROVIDER_COLORS: Partial<Record<AgentProvider, string>> = {
 	claude: '#D97757',
 	openai: '#FFF'
-}
-
-function providerFor(agentType: string | null, model: string | null): Provider | undefined {
-	const label = model?.toLowerCase() ?? ''
-	if (/^(?:anthropic\/|claude|fable|haiku|opus|sonnet)/.test(label)) return 'claude'
-	if (/^(?:openai\/|gpt|o[1-9]|\d)/.test(label)) return 'openai'
-	if (/^(?:cursor\/|composer|grok)/.test(label)) return 'cursor'
-	if (/^opencode(?:-go)?\//.test(label)) return 'opencode'
-
-	const agent = agentType?.toLowerCase()
-	if (agent === 'claude' || agent === 'anthropic') return 'claude'
-	if (agent === 'codex' || agent === 'openai') return 'openai'
-	if (agent === 'cursor') return 'cursor'
-	if (agent === 'acp' || agent === 'opencode') return 'opencode'
-	return undefined
 }
 
 /** The active agent's recognizable brand mark; unknown harnesses retain a neutral fallback. */
@@ -51,7 +35,7 @@ export function ProviderMark({
 	model: string | null
 	className?: string
 }) {
-	const provider = providerFor(agentType, model)
+	const provider = providerForAgent(agentType, model)
 	if (!provider) return <Bot aria-hidden="true" className={className} />
 
 	const source = PROVIDER_MARKS[provider]

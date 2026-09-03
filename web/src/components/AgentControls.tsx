@@ -1,23 +1,9 @@
 import { Map as MapIcon, Zap } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { EFFORT_LABELS } from '../lib/agent.ts'
 import { cn } from '../lib/cn.ts'
 import { EffortBars, ProviderMark } from './AgentIcons.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
-
-export const EFFORT_LABELS: Record<string, string> = {
-	low: 'Low',
-	medium: 'Medium',
-	high: 'High',
-	xhigh: 'Extra high',
-	max: 'Max',
-	ultracode: 'Ultracode'
-}
-
-export const EFFORT_ORDER = Object.keys(EFFORT_LABELS)
-
-export function nextEffort(effort: string | undefined): string {
-	return EFFORT_ORDER[(EFFORT_ORDER.indexOf(effort ?? '') + 1) % EFFORT_ORDER.length]
-}
 
 /**
  * The compact agent-control row shared by an existing chat and the first-message
@@ -64,7 +50,7 @@ export function AgentControls({
 	fast?: boolean
 	effort?: string
 	plan?: boolean
-	/** A new workspace has no persisted effort to display until the user chooses one. */
+	/** Keep the control visible while a new workspace's inherited effort is unavailable. */
 	showEmptyEffort?: boolean
 	modelStaged?: boolean
 	fastStaged?: boolean

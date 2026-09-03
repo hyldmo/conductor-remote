@@ -16,7 +16,7 @@ import {
 } from './lib/push.ts'
 import { hasSelection, overSelection } from './lib/selection.ts'
 import { mergeEntries } from './lib/transcript-merge.ts'
-import type { ModelCatalogResponse, Session, TranscriptEntry } from './lib/types.ts'
+import type { ModelCatalogResponse, ModelDefaultsResponse, Session, TranscriptEntry } from './lib/types.ts'
 import { useApp } from './store.ts'
 
 /**
@@ -592,6 +592,19 @@ export function useModelCatalog() {
 		queryKey: ['model-catalog'],
 		queryFn: client.modelCatalog,
 		staleTime: 60_000,
+		gcTime: Number.POSITIVE_INFINITY,
+		retry: false
+	})
+}
+
+/** Provider-specific defaults shown by both the Models sheet and the new-chat composer. */
+export function useModelDefaults() {
+	return useQuery<ModelDefaultsResponse>({
+		queryKey: ['model-defaults'],
+		queryFn: client.modelDefaults,
+		// Preserve the last read for an instant first paint, but check the user settings
+		// again whenever either surface opens because Conductor may edit them itself.
+		staleTime: 0,
 		gcTime: Number.POSITIVE_INFINITY,
 		retry: false
 	})
