@@ -285,20 +285,22 @@ export const client = {
 	 * Open a new tab with this chat's transcript staged as an attachment. The caller
 	 * puts `text` into that tab's composer, then the user can add the new direction.
 	 * `throughRowid` stops the copy at one response, which is how a fork offered beside
-	 * an older turn carries the conversation as it stood there.
+	 * an older turn carries the conversation as it stood there. `onlyRowid` carries that
+	 * one source message without any surrounding history.
 	 */
 	splitChat: (
 		sessionId: string,
 		workspaceId: string,
 		includeThinking: boolean,
 		includeTools: boolean,
-		throughRowid?: number
+		throughRowid?: number,
+		onlyRowid?: number
 	) =>
 		api<SplitChatResult>(
 			routes.splitChat.path(sessionId),
 			{
 				method: routes.splitChat.method,
-				body: JSON.stringify({ workspaceId, includeThinking, includeTools, throughRowid })
+				body: JSON.stringify({ workspaceId, includeThinking, includeTools, throughRowid, onlyRowid })
 			},
 			ACTION_TIMEOUT_MS
 		),

@@ -372,6 +372,24 @@ export function transcriptThrough(
 }
 
 /**
+ * Keep one source message and nothing around it.
+ *
+ * One `session_messages` row can produce several transcript entries — prose split by
+ * reasoning or tool calls — so selecting by rowid keeps them together. Treating the
+ * last rendered bubble as the message would silently lose the other prose fragments.
+ */
+export function transcriptMessage(
+	entries: TranscriptEntry[],
+	rowid: number
+): { entries: TranscriptEntry[]; earlier: number; later: number } | null {
+	const first = entries.findIndex(entry => entry.rowid === rowid)
+	if (first < 0) return null
+	const kept = entries.filter(entry => entry.rowid === rowid)
+	const last = entries.findLastIndex(entry => entry.rowid === rowid)
+	return { entries: kept, earlier: first, later: entries.length - last - 1 }
+}
+
+/**
  * A chat as markdown, in Conductor's own transcript layout.
  *
  * The layout is copied from the files Conductor writes (`Transcript of <chat>.md`):

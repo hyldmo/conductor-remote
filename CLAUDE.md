@@ -768,6 +768,11 @@ Two asymmetric halves — keep them separate:
     off mid-answer). The newest turn keeps its control at the foot of the transcript and
     passes no rowid, because an agent that speaks and then keeps working would otherwise
     leave those buttons stranded above the steps that came after them.
+    The phone's **Last message only** format uses `onlyRowid` instead: every entry
+    produced by that one source message stays together, but all earlier and later
+    history is omitted. It also omits reasoning and tools, so the handoff body carries
+    the selected response's prose plus the ordinary elision markers; the attachment
+    header names that narrower cut.
   - **It stops one step short of sending**, and that is not tidiness. ⌘T and a send are
     two UI turns (28s + 55s of ceiling) which together outlast every caller's budget,
     including the MCP client's 75s. Routing the composed prompt back through the ordinary

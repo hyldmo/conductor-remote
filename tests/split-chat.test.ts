@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { chatCursor } from '../src/chat-cursor.ts'
 import { createTools, type RelayCall } from '../src/mcp-tools.ts'
 import { routes } from '../src/routes.ts'
-import { type TranscriptEntry, transcriptThrough } from '../src/transcript.ts'
+import { renderTranscript, type TranscriptEntry, transcriptMessage, transcriptThrough } from '../src/transcript.ts'
 
 function entry(rowid: number, role: TranscriptEntry['role'], text: string): TranscriptEntry {
 	return { id: `entry-${rowid}-${role}`, rowid, role, text, ts: '2026-09-01T00:00:00Z', queued: false }
@@ -30,7 +30,7 @@ function splitTool(seen: { body?: Record<string, unknown> }) {
 					path: '.context/attachments/abc123/Transcript of chat.md',
 					bytes: 2048,
 					kept: 3,
-					elided: { thinking: 0, tools: 4, later: 2 }
+					elided: { thinking: 0, tools: 4, earlier: 0, later: 2 }
 				}
 			} as T
 		}
@@ -83,5 +83,27 @@ describe('splitting a chat at an earlier message', () => {
 		const output = await splitTool({}).run({ session_id: 'chat-1', prompt: 'take it from here' })
 		expect(output).toContain('4 tool calls')
 		expect(output).toContain('2 entries after the cut')
+	})
+})
+
+describe('splitting out one source message', () => {
+	test('keeps every entry produced by that message and counts both omitted sides', () => {
+		expect(transcriptMessage(chat, 20)).toEqual({
+			entries: [chat[1], chat[2]],
+			earlier: 1,
+			later: 2
+		})
+	})
+
+	test('renders the selected response without its reasoning', () => {
+		const cut = transcriptMessage(chat, 20)
+		if (!cut) throw new Error('expected message')
+		const rendered = renderTranscript(cut.entries, { thinking: false, tools: false })
+		expect(rendered.text).toBe('## Assistant\n\n[1 thinking block elided]\n\nthe answer\n')
+		expect(rendered.elided.thinking).toBe(1)
+	})
+
+	test('refuses a message this chat does not hold', () => {
+		expect(transcriptMessage(chat, 25)).toBeNull()
 	})
 })

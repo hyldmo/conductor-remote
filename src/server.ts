@@ -61,7 +61,7 @@ import {
 	stagedAttachments
 } from './staged-attachments.ts'
 import { driftWarningLines, readExposeMode, tailscaleBin } from './tailscale.ts'
-import { renderTranscript, transcriptThrough } from './transcript.ts'
+import { renderTranscript, transcriptMessage, transcriptThrough } from './transcript.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
 import {
 	type AgentOptions,
@@ -1769,7 +1769,8 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, answer.status, answer.body)
 			}
 
-			// POST /api/sessions/:id/split { prompt?, includeThinking?, includeTools?, throughRowid? }
+			// POST /api/sessions/:id/split
+			//      { prompt?, includeThinking?, includeTools?, throughRowid?, onlyRowid? }
 			//
 			// Conductor's own "Fork to new tab" resumes the agent's real session. This copies
 			// the conversation instead, as a Conductor attachment, which is the cut that
@@ -1793,6 +1794,7 @@ const server = http.createServer(async (req, res) => {
 					includeThinking?: boolean
 					includeTools?: boolean
 					throughRowid?: number
+					onlyRowid?: number
 				}
 				// `active_session_id` is how every other route resolves this, and it would only
 				// ever find the tab on screen. Splitting a chat you are not looking at is the
@@ -1807,13 +1809,25 @@ const server = http.createServer(async (req, res) => {
 				const format = { thinking: body.includeThinking !== false, tools: body.includeTools === true }
 				const { entries } = reads.getMessages(sessionId)
 				const through = body.throughRowid
+				const only = body.onlyRowid
 				if (through !== undefined && (!Number.isSafeInteger(through) || through < 1)) {
 					return json(req, res, 400, { error: 'throughRowid must be a positive integer' })
 				}
-				const cut = through === undefined ? { entries, later: 0 } : transcriptThrough(entries, through)
+				if (only !== undefined && (!Number.isSafeInteger(only) || only < 1)) {
+					return json(req, res, 400, { error: 'onlyRowid must be a positive integer' })
+				}
+				if (through !== undefined && only !== undefined) {
+					return json(req, res, 400, { error: 'throughRowid and onlyRowid cannot be combined' })
+				}
+				const cut =
+					only !== undefined
+						? transcriptMessage(entries, only)
+						: through === undefined
+							? { entries, earlier: 0, later: 0 }
+							: transcriptThrough(entries, through)
 				if (!cut) return json(req, res, 409, { error: 'that message is not in this chat' })
 				const rendered = renderTranscript(cut.entries, format)
-				const elided = { ...rendered.elided, later: cut.later }
+				const elided = { ...rendered.elided, earlier: 'earlier' in cut ? cut.earlier : 0, later: cut.later }
 				if (!rendered.kept) return json(req, res, 409, { error: 'that chat has nothing to copy yet' })
 
 				// Conductor's own name for a copied transcript, so the chip reads the same as one
@@ -1822,11 +1836,14 @@ const server = http.createServer(async (req, res) => {
 				const title = source.title?.trim() || 'chat'
 				const carried = [`thinking ${format.thinking ? 'included' : 'omitted'}`]
 				carried.push(`tool calls ${format.tools ? 'included' : 'omitted'}`)
-				const stops = cut.later
-					? [
-							`The copy stops partway through: ${cut.later} later ${cut.later === 1 ? 'entry is' : 'entries are'} not in it.`
-						]
-					: []
+				const stops =
+					only !== undefined
+						? ['The copy contains only the selected source message; all earlier and later messages are omitted.']
+						: cut.later
+							? [
+									`The copy stops partway through: ${cut.later} later ${cut.later === 1 ? 'entry is' : 'entries are'} not in it.`
+								]
+							: []
 				const header = [
 					`# Transcript of ${title}`,
 					'',
