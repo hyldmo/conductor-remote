@@ -1,6 +1,6 @@
 import { Check, ChevronDown, LoaderCircle, RefreshCw, Star } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
-import { groupModelPickerLabels } from '../../../src/shared.ts'
+import { displayedModelPickerLabel, groupModelPickerLabels } from '../../../src/shared.ts'
 import { cn } from '../lib/cn.ts'
 
 type ModelPickerTrigger = {
@@ -69,7 +69,7 @@ export function ModelPicker({
 					aria-expanded={picking}
 					className={cn('ctl flex max-w-40 items-center gap-1', value && 'ctl-staged', className)}
 				>
-					<span className="truncate">{value ?? 'Model'}</span>
+					<span className="truncate">{value ? displayedModelPickerLabel(value) : 'Model'}</span>
 					<ChevronDown size={13} className="shrink-0" />
 				</button>
 			)}
@@ -81,7 +81,7 @@ export function ModelPicker({
 						onClick={() => setPicking(false)}
 						className="fixed inset-0 z-30 cursor-default"
 					/>
-					<div className="absolute bottom-full left-0 z-40 mb-2 max-h-64 w-56 overflow-y-auto rounded-xl border border-border bg-surface-2 py-1 shadow-xl shadow-black/40">
+					<div className="absolute bottom-full left-0 z-40 mb-2 max-h-64 w-64 overflow-y-auto rounded-xl border border-border bg-surface-2 py-1 shadow-xl shadow-black/40">
 						{beforeOptions}
 						{isFetching ? <RefreshCw size={10} className="mx-3 my-1.5 animate-spin text-faint" /> : null}
 						{groups.length ? (
@@ -100,7 +100,7 @@ export function ModelPicker({
 													}}
 													className="flex min-w-0 flex-1 items-center gap-2 py-2 pl-3 pr-1 text-left text-sm"
 												>
-													<span className="min-w-0 flex-1 truncate">{model}</span>
+													<span className="min-w-0 flex-1 truncate">{displayedModelPickerLabel(model)}</span>
 													<Check size={13} className={cn('shrink-0 text-accent', value !== model && 'invisible')} />
 												</button>
 												{onSetDefault ? (

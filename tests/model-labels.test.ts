@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { groupModelPickerLabels, modelPickerLabel } from '../src/shared.ts'
+import { displayedModelPickerLabel, groupModelPickerLabels, modelPickerLabel } from '../src/shared.ts'
 
 describe('model picker labels', () => {
 	test.each([
@@ -9,6 +9,11 @@ describe('model picker labels', () => {
 		['NEW Model', 'NEW Model']
 	])('normalizes %s to %s', (input, expected) => {
 		expect(modelPickerLabel(input)).toBe(expected)
+	})
+
+	test('shortens the redundant OpenCode prefix for display only', () => {
+		expect(displayedModelPickerLabel('opencode-go/grok-4.6')).toBe('go/grok-4.6')
+		expect(displayedModelPickerLabel('opencode/muse-space')).toBe('opencode/muse-space')
 	})
 
 	test('groups models by provider', () => {

@@ -86,6 +86,14 @@ export function modelPickerLabel(label: string): string {
 	return label.endsWith(' NEW') ? label.slice(0, -4) : label
 }
 
+/**
+ * Shorten the provider namespace only for display. The full label remains the
+ * picker value Conductor expects when a row is selected.
+ */
+export function displayedModelPickerLabel(label: string): string {
+	return modelPickerLabel(label).replace(/^opencode-/i, '')
+}
+
 /** A labelled section in a model picker. */
 export interface ModelPickerGroup {
 	label: string
