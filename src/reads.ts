@@ -7,7 +7,13 @@ import type { FirstPrompt } from './firstprompt.ts'
 import { describeRepoIcon, type RepoIcon, type ResolvedIcon, resolveRepoIcon } from './icons.ts'
 import type { ParkedPrompt } from './parked.ts'
 import { workspaceTitle } from './shared.ts'
-import { parseMessage, type TranscriptEntry, toolImageAt } from './transcript.ts'
+import {
+	type OutboxMessageRow,
+	parseMessage,
+	parseOutboxMessage,
+	type TranscriptEntry,
+	toolImageAt
+} from './transcript.ts'
 
 export interface WorkspaceRow {
 	id: string
@@ -169,6 +175,16 @@ export interface SessionState {
 	sessionTitle: string | null
 }
 
+/**
+ * Everything that existed before one UI send began. Outbox ids matter as much as
+ * the transcript rowid: dispatching an older queued copy creates a new transcript
+ * row, and must not be mistaken for delivery of this send.
+ */
+export interface DeliveryCursor {
+	rowid: number
+	outboxIds: ReadonlySet<string>
+}
+
 export interface Workspace extends WorkspaceRow {
 	/** Chats in this workspace Conductor flags unread — empty for most (see `unreadSessions`). */
 	unread_sessions: UnreadSession[]
@@ -314,6 +330,8 @@ export class Reads {
 	private readonly workspacesRoot: string
 	/** Chats with a live agent process, and its start — the gate on `background_tasks`. */
 	private readonly liveAgents: () => Map<string, number>
+	private messageOutboxAvailable: boolean | null = null
+	private messageOutboxCheckedAt = 0
 
 	constructor(db: ConductorDb, workspacesRoot: string, liveAgents: () => Map<string, number> = agentProcessStarts) {
 		this.db = db
@@ -772,8 +790,98 @@ export class Reads {
 		return worktree
 	}
 
-	/** Incremental transcript fetch. `afterRowid` is the cursor from a prior call. */
-	getMessages(sessionId: string, afterRowid = 0): { entries: TranscriptEntry[]; cursor: number } {
+	/**
+	 * The outbox arrived in Conductor migration 123. Keep older desktop builds usable,
+	 * and re-probe occasionally so a running relay notices an in-place app migration.
+	 */
+	private hasMessageOutbox(): boolean {
+		if (this.messageOutboxAvailable === true) return true
+		const now = Date.now()
+		if (this.messageOutboxAvailable === false && now - this.messageOutboxCheckedAt < 60_000) return false
+		const rows = this.db.query<{ present: number }>(
+			"SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'session_messages_outbox' LIMIT 1"
+		)
+		this.messageOutboxAvailable = rows.length > 0
+		this.messageOutboxCheckedAt = now
+		return this.messageOutboxAvailable
+	}
+
+	/** Current outbox contents. `queueOnly` is the snapshot the transcript renders. */
+	private outboxMessages(sessionId: string, queueOnly: boolean): TranscriptEntry[] {
+		if (!this.hasMessageOutbox()) return []
+		try {
+			const rows = this.db.query<OutboxMessageRow>(
+				`SELECT message_id, delivery_payload, created_at
+				 FROM session_messages_outbox
+				 WHERE session_id = ?${queueOnly ? " AND mode = 'queue'" : ''}
+				 ORDER BY COALESCE(queue_order, 2147483647), created_at ASC`,
+				[sessionId]
+			)
+			return rows.flatMap(row => {
+				const entry = parseOutboxMessage(row)
+				return entry ? [entry] : []
+			})
+		} catch (error) {
+			// A Conductor rollback can swap the DB beneath the relay. Treat only the
+			// missing-table case as an older schema; every other read failure stays loud.
+			if (error instanceof Error && /no such table:\s*session_messages_outbox/i.test(error.message)) {
+				this.messageOutboxAvailable = false
+				this.messageOutboxCheckedAt = Date.now()
+				return []
+			}
+			throw error
+		}
+	}
+
+	/** Snapshot the durable transcript cursor and pending message ids in one SQLite read. */
+	deliveryCursor(sessionId: string): DeliveryCursor {
+		if (!this.hasMessageOutbox()) {
+			const row = this.db.query<{ rowid: number }>(
+				'SELECT COALESCE(MAX(rowid), 0) AS rowid FROM session_messages WHERE session_id = ?',
+				[sessionId]
+			)[0]
+			return { rowid: row?.rowid ?? 0, outboxIds: new Set() }
+		}
+
+		try {
+			const rows = this.db.query<{ rowid: number; message_id: string | null }>(
+				`WITH transcript_cursor AS (
+				   SELECT COALESCE(MAX(rowid), 0) AS rowid
+				   FROM session_messages
+				   WHERE session_id = ?
+				 )
+				 SELECT transcript_cursor.rowid, NULL AS message_id
+				 FROM transcript_cursor
+				 UNION ALL
+				 SELECT transcript_cursor.rowid, outbox.message_id
+				 FROM transcript_cursor
+				 JOIN session_messages_outbox outbox ON outbox.session_id = ?`,
+				[sessionId, sessionId]
+			)
+			return {
+				rowid: rows[0]?.rowid ?? 0,
+				outboxIds: new Set(rows.flatMap(row => (row.message_id ? [row.message_id] : [])))
+			}
+		} catch (error) {
+			if (!(error instanceof Error && /no such table:\s*session_messages_outbox/i.test(error.message))) throw error
+			this.messageOutboxAvailable = false
+			this.messageOutboxCheckedAt = Date.now()
+			return this.deliveryCursor(sessionId)
+		}
+	}
+
+	/** Has this send created either a durable user row or a newly-owned outbox item? */
+	promptDeliveredSince(sessionId: string, text: string, before: DeliveryCursor): boolean {
+		const target = text.trim()
+		const durable = this.durableMessages(sessionId, before.rowid).entries
+		const pending = this.outboxMessages(sessionId, false)
+		return [...durable, ...pending].some(
+			entry => entry.role === 'user' && entry.text.trim() === target && !before.outboxIds.has(entry.id)
+		)
+	}
+
+	/** Incremental durable transcript fetch, without the independently replaced outbox snapshot. */
+	private durableMessages(sessionId: string, afterRowid: number): { entries: TranscriptEntry[]; cursor: number } {
 		const rows = this.db.query<{
 			rowid: number
 			id: string
@@ -798,5 +906,13 @@ export class Reads {
 			entries.push(...parseMessage(row, worktree))
 		}
 		return { entries, cursor }
+	}
+
+	/** Incremental transcript rows plus the full current queue snapshot. */
+	getMessages(
+		sessionId: string,
+		afterRowid = 0
+	): { entries: TranscriptEntry[]; queued: TranscriptEntry[]; cursor: number } {
+		return { ...this.durableMessages(sessionId, afterRowid), queued: this.outboxMessages(sessionId, true) }
 	}
 }

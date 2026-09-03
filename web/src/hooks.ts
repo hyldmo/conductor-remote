@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { RefObject } from 'react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { ApiError, client } from './lib/api.ts'
 import { localPrefsGeneration, localPrefsSnapshot, mergeRemotePrefs, subscribeLocalPrefs } from './lib/prefs.ts'
@@ -15,7 +15,7 @@ import {
 	toJson
 } from './lib/push.ts'
 import { hasSelection, overSelection } from './lib/selection.ts'
-import { mergeEntries } from './lib/transcript-merge.ts'
+import { mergeEntries, withQueuedEntries } from './lib/transcript-merge.ts'
 import type { ModelCatalogResponse, ModelDefaultsResponse, Session, TranscriptEntry } from './lib/types.ts'
 import { useApp } from './store.ts'
 
@@ -653,6 +653,14 @@ export interface TranscriptState {
 	error: string | null
 }
 
+interface TranscriptPollState extends TranscriptState {
+	/** Replaced from the full outbox snapshot on every successful poll. */
+	queued: TranscriptEntry[]
+}
+
+const sameQueuedEntries = (a: readonly TranscriptEntry[], b: readonly TranscriptEntry[]) =>
+	a.length === b.length && a.every((entry, index) => entry.id === b[index].id && entry.text === b[index].text)
+
 /**
  * Incremental transcript polling. Keeps a rowid cursor and appends only new
  * rows, so long sessions don't re-transfer on every tick.
@@ -676,7 +684,7 @@ export interface TranscriptState {
  */
 export function useTranscript(sessionId: string | null, poll = true): TranscriptState {
 	const report = useOnline()
-	const [state, setState] = useState<TranscriptState>({ entries: [], loading: true, error: null })
+	const [state, setState] = useState<TranscriptPollState>({ entries: [], queued: [], loading: true, error: null })
 	const cursor = useRef(0)
 	// This poll is also the "I am reading this chat" heartbeat the relay uses to keep a
 	// turn ending on screen off the lock screen. Held in a ref rather than in the effect's
@@ -688,11 +696,11 @@ export function useTranscript(sessionId: string | null, poll = true): Transcript
 
 	useEffect(() => {
 		if (!sessionId) {
-			setState({ entries: [], loading: false, error: null })
+			setState({ entries: [], queued: [], loading: false, error: null })
 			return
 		}
 		cursor.current = 0
-		setState({ entries: [], loading: true, error: null })
+		setState({ entries: [], queued: [], loading: true, error: null })
 		let alive = true
 		let inFlight = false
 
@@ -704,17 +712,23 @@ export function useTranscript(sessionId: string | null, poll = true): Transcript
 				// (SessionView). A chat left on screen behind a locked phone is one you walked away
 				// from, and its notification is the point.
 				const reading = document.visibilityState === 'visible' ? readingRef.current : null
-				const { entries, cursor: next } = await client.messages(sessionId, cursor.current, reading)
+				const { entries, queued = [], cursor: next } = await client.messages(sessionId, cursor.current, reading)
 				if (!alive) return
 				report(true)
-				if (entries.length) {
-					cursor.current = next
-					// Appended rather than replaced, and merged rather than concatenated: a tool's output
-					// arrives after the call it belongs to, so it lands on that row (lib/transcript-merge.ts).
-					setState(prev => ({ entries: mergeEntries(prev.entries, entries), loading: false, error: null }))
-				} else {
-					setState(prev => (prev.loading ? { ...prev, loading: false } : prev))
-				}
+				cursor.current = next
+				setState(prev => {
+					// Durable rows append; the outbox is a full snapshot and must replace its prior
+					// value so a dispatched or cancelled prompt disappears on the next tick.
+					const nextEntries = entries.length ? mergeEntries(prev.entries, entries) : prev.entries
+					const sameQueued = sameQueuedEntries(prev.queued, queued)
+					if (nextEntries === prev.entries && sameQueued && !prev.loading && !prev.error) return prev
+					return {
+						entries: nextEntries,
+						queued: sameQueued ? prev.queued : queued,
+						loading: false,
+						error: null
+					}
+				})
 			} catch (err) {
 				if (!alive) return
 				report(false, err)
@@ -735,7 +749,8 @@ export function useTranscript(sessionId: string | null, poll = true): Transcript
 		}
 	}, [sessionId, poll, report])
 
-	return state
+	const visibleEntries = useMemo(() => withQueuedEntries(state.entries, state.queued), [state.entries, state.queued])
+	return { entries: visibleEntries, loading: state.loading, error: state.error }
 }
 
 /**

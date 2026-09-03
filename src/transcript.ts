@@ -36,7 +36,7 @@ export interface TranscriptEntry {
 	/** True when this row is a failed tool result. */
 	error?: boolean
 	ts: string
-	/** True when the message is queued but not yet sent (queue_order set, sent_at null). */
+	/** True while the message is queued, from the current outbox or the legacy in-row signal. */
 	queued: boolean
 }
 
@@ -49,6 +49,13 @@ interface RawRow {
 	created_at: string
 	sent_at: string | null
 	queue_order: number | null
+}
+
+/** A prompt Conductor has accepted into its durable delivery outbox. */
+export interface OutboxMessageRow {
+	message_id: string
+	delivery_payload: string | null
+	created_at: string
 }
 
 interface SdkBlock {
@@ -78,6 +85,31 @@ interface ResultBlock {
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
 
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
+
+/**
+ * Turn Conductor's outbox payload into the same user entry its eventual
+ * `session_messages` row will become. Outbox rows have no transcript rowid yet;
+ * zero keeps them out of the durable cursor namespace while their message id remains
+ * stable when Conductor dispatches them.
+ */
+export function parseOutboxMessage(row: OutboxMessageRow): TranscriptEntry | null {
+	let payload: { message?: unknown }
+	try {
+		payload = JSON.parse(row.delivery_payload ?? '') as { message?: unknown }
+	} catch {
+		return null
+	}
+	const text = str(payload.message)
+	if (!text) return null
+	return {
+		id: row.message_id,
+		rowid: 0,
+		role: 'user',
+		text,
+		ts: row.created_at,
+		queued: true
+	}
+}
 
 /** Make tool details repo-relative: absolute worktree paths waste the whole line on a phone. */
 function stripWorktree(s: string, worktree: string | null): string {
