@@ -45,6 +45,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   git.ts          workspace diff + aggregate line stats vs target branch (incl. untracked via
                   --no-index), plus the worktree's file list (GET /api/workspaces/:id/files)
                   that decides which file an agent named in a message becomes a link
+  fork-workspace.ts  non-disruptive Git snapshot + restore for a split sent to a new workspace;
+                  preserves source HEAD, index and working tree through short-lived private refs
   change-stats.ts bounded, background cache of git line stats for /api/state; working rows
                   refresh quickly while idle rows avoid spending four git calls every poll
   file-preview.ts resolves a source path an agent wrote (absolute, or ~) and decides whether

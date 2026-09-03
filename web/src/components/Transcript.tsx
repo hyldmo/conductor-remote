@@ -21,6 +21,8 @@ import { CopyButton, Empty, Spinner, UnlockLink } from './ui.tsx'
 export interface SplitFormat {
 	thinking: boolean
 	tools: boolean
+	/** Put the handoff in a separate worktree carrying the source's current code. */
+	destination?: 'chat' | 'workspace'
 	/** Source row to stop the copy at — a fork from an earlier turn. Undefined takes the whole chat. */
 	through?: number
 	/** Keep only this source message, with no earlier or later history. */
@@ -60,7 +62,7 @@ export function Transcript({
 	queued?: PendingPrompt | null
 	/** `false` for an archived chat: it is fetched once, because it has no next message. */
 	poll?: boolean
-	/** Opens a new chat with a selected cut of this transcript staged as an attachment. */
+	/** Opens a new chat or workspace with a selected transcript cut staged as an attachment. */
 	onFork?: (format: SplitFormat) => Promise<void>
 }) {
 	const { entries, loading, error } = useTranscript(sessionId, poll ?? true)
@@ -492,6 +494,7 @@ function ChatActions({
 	const [menuOpen, setMenuOpen] = useState(false)
 	const [forking, setForking] = useState(false)
 	const [forkError, setForkError] = useState<string | null>(null)
+	const [destination, setDestination] = useState<'chat' | 'workspace'>('chat')
 
 	// An age in words goes stale where the elapsed timer above cannot: the transcript
 	// redraws when a row lands, and a finished turn has none coming. A minute is the
@@ -514,6 +517,7 @@ function ChatActions({
 			await onFork({
 				thinking: cut.thinking,
 				tools: cut.tools,
+				destination,
 				through: cut.only ? undefined : through,
 				only: cut.only ? rowid : undefined
 			})
@@ -540,17 +544,24 @@ function ChatActions({
 								type="button"
 								onClick={() => void fork({ thinking: true, tools: false })}
 								disabled={forking}
-								aria-label={through ? 'Fork chat from this response' : 'Fork chat with reasoning'}
-								className="flex h-7 items-center gap-1 px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
+								aria-label={
+									destination === 'workspace'
+										? 'Fork to a new workspace with reasoning'
+										: through
+											? 'Fork chat from this response'
+											: 'Fork chat with reasoning'
+								}
+								title={destination === 'workspace' ? 'New workspace with current code' : 'New chat, same files'}
+								className="flex h-7 items-center gap-1 whitespace-nowrap px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
 							>
 								{forking ? <Loader2 size={13} className="animate-spin" /> : <GitFork size={13} />}
-								Fork
+								{destination === 'workspace' ? 'Fork workspace' : 'Fork'}
 							</button>
 							<button
 								type="button"
 								onClick={() => setMenuOpen(open => !open)}
 								disabled={forking}
-								aria-label="Choose fork transcript type"
+								aria-label="Choose fork options"
 								aria-haspopup="menu"
 								aria-expanded={menuOpen}
 								className="flex size-7 items-center justify-center border-l border-border-soft transition active:bg-surface-2 disabled:opacity-50"
@@ -563,9 +574,35 @@ function ChatActions({
 								<div className="fixed inset-0 z-20" onClick={() => setMenuOpen(false)} aria-hidden />
 								<div
 									role="menu"
-									aria-label="Fork transcript type"
+									aria-label="Fork options"
 									className="absolute bottom-full left-0 z-30 mb-1 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
 								>
+									<button
+										type="button"
+										role="menuitemcheckbox"
+										aria-checked={destination === 'workspace'}
+										onClick={() => setDestination(current => (current === 'chat' ? 'workspace' : 'chat'))}
+										className="flex w-full items-center gap-3 border-b border-border-soft px-3 py-2 text-left active:bg-surface-2"
+									>
+										<span className="min-w-0 flex-1">
+											<span className="block text-[12px] font-medium text-text">To new workspace</span>
+											<span className="block text-[11px] text-faint">Carry the current code into its own worktree</span>
+										</span>
+										<span
+											aria-hidden
+											className={cn(
+												'relative h-6 w-11 shrink-0 rounded-full transition-colors',
+												destination === 'workspace' ? 'bg-accent' : 'border border-border bg-surface-2'
+											)}
+										>
+											<span
+												className={cn(
+													'absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform',
+													destination === 'workspace' ? 'translate-x-5' : 'translate-x-0'
+												)}
+											/>
+										</span>
+									</button>
 									<ForkOption
 										label="Last message only"
 										detail="This response, without history"

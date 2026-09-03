@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { FileDiff, Hourglass, LoaderCircle, Plus, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useParams, useSearchParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { useAnyWorkspace, useClearChatNotification, useSessions, useWorkspaceFiles, useWorkspaces } from '../hooks.ts'
 import { ApiError, client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
@@ -39,6 +39,7 @@ export function SessionView() {
 	const [closeError, setCloseError] = useState<string | null>(null)
 	const [focusComposerFor, setFocusComposerFor] = useState<string | null>(null)
 	const queryClient = useQueryClient()
+	const navigate = useNavigate()
 	const { data, isLoading } = useWorkspaces()
 	const liveWorkspace = data?.workspaces.find(w => w.id === workspaceId)
 	// `/api/state` lists only live workspaces, so an id that isn't in it is either archived
@@ -203,18 +204,31 @@ export function SessionView() {
 		}
 	}
 
-	// The relay writes the transcript and opens the tab. Its returned text contains
-	// Conductor's attachment token, which belongs in the new chat's composer until
-	// the user adds the question that starts the fork.
-	const forkChat = async ({ thinking, tools, through, only }: SplitFormat, continuation?: string) => {
+	// The relay writes the transcript and opens the selected destination. Its returned
+	// text contains Conductor's attachment token, which belongs in the new composer
+	// until the user adds the question that starts the fork.
+	const forkChat = async (
+		{ thinking, tools, through, only, destination = 'chat' }: SplitFormat,
+		continuation?: string
+	) => {
 		if (!sessionId) return
-		const split = await client.splitChat(sessionId, ws.id, thinking, tools, through, only)
+		const split = await client.splitChat(sessionId, ws.id, thinking, tools, through, only, destination)
 		if (!split.ok) throw new Error(split.error ?? 'Could not fork this chat')
-		if (!split.sessionId) throw new Error('The new chat opened, but its id was not available')
-		setDraft(split.sessionId, [split.text, continuation?.trim()].filter(Boolean).join('\n'))
-		setFocusComposerFor(split.sessionId)
+		const draftKey = split.sessionId ?? (destination === 'workspace' ? split.workspaceId : null)
+		if (!draftKey) throw new Error('The new chat opened, but its id was not available')
+		setDraft(draftKey, [split.text, continuation?.trim()].filter(Boolean).join('\n'))
+		if (split.sessionId) setFocusComposerFor(split.sessionId)
+		if (destination === 'workspace') {
+			await queryClient.invalidateQueries({ queryKey: ['state'] })
+			navigate(
+				split.sessionId
+					? `/w/${split.workspaceId}?session=${encodeURIComponent(split.sessionId)}`
+					: `/w/${split.workspaceId}`
+			)
+			return
+		}
 		await queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
-		pickSession(split.sessionId)
+		if (split.sessionId) pickSession(split.sessionId)
 	}
 
 	return (
