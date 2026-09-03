@@ -114,7 +114,7 @@ const planUsage = new PlanUsageService()
 // Full-text index over the chat prose, in the relay's own sidecar DB — never in
 // Conductor's (see src/search.ts). It backfills in the background and is disposable:
 // deleting the file rebuilds it on the next start.
-const search = new SearchIndex(db, path.join(stateDir(), 'search.db'))
+const search = new SearchIndex(cfg.dbPath, path.join(stateDir(), 'search.db'))
 search.start()
 
 /**
@@ -969,7 +969,7 @@ const server = http.createServer(async (req, res) => {
 				const scope = scoped
 					? { sessionIds: reads.searchSessionIds(repos.length ? repos : undefined, includeArchived) }
 					: {}
-				const hits = search.search(q, scope)
+				const hits = await search.search(q, scope)
 				const targets = reads.searchTargets([...new Set(hits.map(h => h.sessionId))])
 				const fromChats = foldHits<SearchWorkspace>(hits, sid => {
 					const workspace = targets.get(sid)?.workspace ?? null

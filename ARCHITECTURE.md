@@ -13,7 +13,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   server.ts       HTTP router: /api/* (token-gated) + static PWA + SPA fallback
   config.ts       paths, port, Tailscale bind, token, write strategy, dist dir
   pkg-root.ts     packageRoot(): walk up to package.json (works from src/ and dist-node/src/)
-  db.ts           read-only node:sqlite handle to conductor.db
+  db.ts           read-only node:sqlite handle to conductor.db; logs >100ms queries without params
   reads.ts        workspaces / sessions / messages + worktree resolution
   icons.ts        repo-icon resolution, mirroring Conductor's own precedence (repos.icon →
                   a known filename in the repo root → the GitHub owner's avatar → a monogram)
@@ -28,8 +28,9 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   staged-attachments.ts  files picked before a worktree exists; the first-prompt queue moves
                   them in before it sends the token that refers to them; a conservative sweep
                   removes week-old files absent from both synced drafts and the delivery queue
-  search.ts       FTS5 index over chat prose in its OWN sidecar db (stateDir()/search.db);
-                  backfills in the background, folds chunk hits up into workspaces
+  search.ts       main-thread facade/query grammar for chat search; folds chunk hits into workspaces
+  search-worker.ts owns both synchronous SQLite handles for the FTS5 sidecar
+                  (stateDir()/search.db), so backfill, lock waits and ranking cannot stall HTTP
   chat-cursor.ts  the opaque pointer one message in a chat is addressed by, so the MCP
                   contract never exposes a rowid an agent would do arithmetic on
   wire.ts         the /api contract: every shape that leaves the relay, declared once (types only)

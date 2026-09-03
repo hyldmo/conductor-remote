@@ -745,11 +745,22 @@ Two asymmetric halves — keep them separate:
   inside the phone's 250ms search-as-you-type debounce, which is the only latency
   budget that binds. Re-measure rather than re-quote: the 7.6s/111k/1–7ms this file
   claimed before thinking was indexed had already drifted to 12–57ms on its own.
-  Four things are load-bearing. The index lives in the relay's **own** file (`stateDir()/search.db`),
+  **Both SQLite handles live in `src/search-worker.ts`, never on the HTTP event
+  loop.** `node:sqlite` is synchronous, and a dev relay can hold the sidecar's writer
+  long enough for its 5s busy timeout to freeze every otherwise-unrelated API route;
+  backfill parsing and a common-word FTS rank are blocking for the same reason.
+  `src/search.ts` is only the async worker facade, cached status, query grammar and
+  result folding. Slow source queries and >100ms worker operations are relayed into
+  `/api/logs`; the main `ConductorDb` handle applies the same >100ms timing so the
+  next non-search event-loop stall names its SQL without logging bound values.
+  Five things are load-bearing. The index lives in the relay's **own** file (`stateDir()/search.db`),
   never in `conductor.db`, and is disposable — delete it and the next start rebuilds
   it. The backfill cursor advances by the **last rowid scanned**, not the last one
   matched, or a caught-up index re-reads the whole 3 GB tail every poll looking for
-  rows it already rejected. A phone query is never passed to `MATCH` raw: FTS5 reads
+  rows it already rejected. Its sidecar transaction takes `BEGIN IMMEDIATE` and
+  re-reads that cursor before inserting: two relays may prepare the same window, but
+  only one commits it and the loser adopts the durable cursor instead of duplicating
+  every chunk. A phone query is never passed to `MATCH` raw: FTS5 reads
   `-`, `*`, `:`, `AND`, `NEAR` as syntax, so an unquoted apostrophe is a *parse
   error* rather than a poor result — `matchQuery` quotes every token and ORs them,
   leaving BM25 to rank, because someone reaching for a workspace is recalling it and
