@@ -727,7 +727,8 @@ export function useTranscript(sessionId: string | null, poll = true): Transcript
 
 /**
  * Send a prompt with an optimistic in-chat bubble. Adds a `sending` pending
- * immediately, then relies on the relay's delivery read-back: on `ok` the real
+ * immediately — also the workspace/chat status ring's queue signal — then relies
+ * on the relay's delivery read-back: on `ok` the real
  * user row lands via the transcript poll and reconciles the bubble away (a
  * fallback purge covers the rare no-match); on failure the bubble flips to an
  * inline error with Retry. Reused by the Composer and the Transcript's Retry

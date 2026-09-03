@@ -18,9 +18,10 @@ import {
 	workspaceStatusLabel,
 	workspaceTitle
 } from '../lib/format.ts'
+import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { unreadCount } from '../lib/read.ts'
 import type { CachedModelGroup, Workspace } from '../lib/types.ts'
-import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
+import { type GroupBy, type SortBy, useApp, type ViewPrefs, WORKING_HINT_MS } from '../store.ts'
 import { ProviderMark } from './AgentIcons.tsx'
 import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
@@ -91,6 +92,8 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const view = useApp(s => s.view)
 	const readMarks = useApp(s => s.readMarks)
+	const pending = useApp(s => s.pending)
+	const workingHints = useApp(s => s.workingHints)
 	const toggleGroup = useApp(s => s.toggleGroup)
 	const [controlsOpen, setControlsOpen] = useState(false)
 	const [connectOpen, setConnectOpen] = useState(false)
@@ -262,6 +265,12 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 									<ul className="flex flex-col gap-2 pb-2">
 										{g.items.map(w => {
 											const unread = unreadCount(w, readMarks)
+											const workingHint = w.active_session_id ? workingHints[w.active_session_id] : undefined
+											const promptState = promptIndicator(
+												pending.filter(p => p.workspaceId === w.id),
+												[...(w.pending_prompt ? [w.pending_prompt] : []), ...(w.parked_prompts ?? [])],
+												workingHint !== undefined && Date.now() - workingHint < WORKING_HINT_MS
+											)
 											return (
 												<li key={w.id} className="fade-in">
 													{/* Tighter than the shared `.card` (px-4 py-3.5): this row is the one
@@ -281,6 +290,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 															unread={unread}
 															selected={w.id === selectedId}
 															modelGroups={modelGroups}
+															promptState={promptState}
 														/>
 													</button>
 												</li>
@@ -512,12 +522,14 @@ function WorkspaceCard({
 	w,
 	unread,
 	selected,
-	modelGroups
+	modelGroups,
+	promptState
 }: {
 	w: Workspace
 	unread: number
 	selected: boolean
 	modelGroups: CachedModelGroup[] | undefined
+	promptState: PromptIndicatorState
 }) {
 	const model = modelLabel(w.model, catalogFor(modelGroups, w.agent_type))
 	return (
@@ -528,7 +540,11 @@ function WorkspaceCard({
 			<div className="relative shrink-0">
 				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceTitle(w)} artwork="full-bleed" />
 				{/* `bg-surface` fills the spinner's hollow centre so the avatar doesn't show through it. */}
-				<StatusDot w={w} className="absolute -right-0.5 -bottom-0.5 bg-surface ring-2 ring-surface" />
+				<StatusDot
+					w={w}
+					promptState={promptState}
+					className="absolute -right-0.5 -bottom-0.5 bg-surface ring-2 ring-surface"
+				/>
 			</div>
 			<div className="min-w-0 flex-1 space-y-1.25 overflow-hidden">
 				<div className="flex items-center gap-2">

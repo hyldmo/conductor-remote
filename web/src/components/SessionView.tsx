@@ -7,9 +7,10 @@ import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { buildResolver, MentionResolverProvider } from '../lib/fileMentions.ts'
 import { shortModel, timestampMs, workspaceTitle } from '../lib/format.ts'
+import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
 import type { Session } from '../lib/types.ts'
-import { useApp } from '../store.ts'
+import { useApp, WORKING_HINT_MS } from '../store.ts'
 import { ArchivedChat } from './ArchivedChat.tsx'
 import { Composer } from './Composer.tsx'
 import { DevServerControls } from './DevServerControls.tsx'
@@ -17,7 +18,7 @@ import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
 import type { SplitFormat } from './Transcript.tsx'
 import { Transcript } from './Transcript.tsx'
-import { Spinner } from './ui.tsx'
+import { PromptStatusDot, Spinner } from './ui.tsx'
 import { WorkspaceMenu } from './WorkspaceMenu.tsx'
 
 export function SessionView() {
@@ -44,6 +45,7 @@ export function SessionView() {
 	// the query is shared by key with the reader below, so the interval has to come off here.
 	const { data: sessionsData } = useSessions(workspaceId, !missing)
 	const workingHints = useApp(s => s.workingHints)
+	const pending = useApp(s => s.pending)
 	const readMarks = useApp(s => s.readMarks)
 	const markRead = useApp(s => s.markRead)
 	const setDraft = useApp(s => s.setDraft)
@@ -107,7 +109,7 @@ export function SessionView() {
 	// confirms or, if the send never landed, the hint expires and it drops back off.
 	const workingHint = sessionId ? workingHints[sessionId] : undefined
 	const working =
-		activeSession?.status === 'working' || (workingHint !== undefined && Date.now() - workingHint < 15_000)
+		activeSession?.status === 'working' || (workingHint !== undefined && Date.now() - workingHint < WORKING_HINT_MS)
 
 	// What the indicator's elapsed timer counts from. Whichever source says we're working
 	// is the one that knows when it started: once Conductor's status agrees, its dispatch
@@ -116,6 +118,24 @@ export function SessionView() {
 	const turnStart = activeSession?.turn_started_at ? timestampMs(activeSession.turn_started_at) : null
 	const workingSince =
 		(activeSession?.status === 'working' ? (turnStart ?? workingHint) : (workingHint ?? turnStart)) ?? null
+	const indicatorNow = Date.now()
+	const promptStates = Object.fromEntries(
+		sessions.map(s => {
+			const hint = workingHints[s.id]
+			const relayPrompts = [
+				...(s.id === sessionId && ws.pending_prompt ? [ws.pending_prompt] : []),
+				...(ws.parked_prompts ?? []).filter(p => p.sessionId === s.id)
+			]
+			return [
+				s.id,
+				promptIndicator(
+					pending.filter(p => p.sessionId === s.id),
+					relayPrompts,
+					hint !== undefined && indicatorNow - hint < WORKING_HINT_MS
+				)
+			]
+		})
+	) as Record<string, PromptIndicatorState>
 
 	const subtitle = [ws.repo_name, ws.branch, shortModel(ws.model)].filter(Boolean).join(' · ')
 
@@ -181,6 +201,7 @@ export function SessionView() {
 							sessions={sessions}
 							activeId={sessionId}
 							readMarks={readMarks}
+							promptStates={promptStates}
 							onSelect={pickSession}
 							onNewChat={createChat}
 							creating={creatingChat}
@@ -224,6 +245,7 @@ function SessionTabs({
 	sessions,
 	activeId,
 	readMarks,
+	promptStates,
 	onSelect,
 	onNewChat,
 	creating
@@ -231,6 +253,7 @@ function SessionTabs({
 	sessions: Session[]
 	activeId: string | null
 	readMarks: ReadMarks
+	promptStates: Record<string, PromptIndicatorState>
 	onSelect: (id: string) => void
 	onNewChat: () => void
 	creating: boolean
@@ -248,25 +271,30 @@ function SessionTabs({
 	return (
 		<nav className="flex shrink-0 items-center gap-1 border-b border-border-soft bg-bg px-3 py-2">
 			<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-				{sessions.map(s => (
-					<button
-						type="button"
-						key={s.id}
-						ref={s.id === activeId ? activeTab : undefined}
-						onClick={() => onSelect(s.id)}
-						className={cn('pill flex shrink-0 items-center gap-1.5', s.id === activeId && 'pill-active')}
-					>
-						{s.status === 'working' ? (
-							<span className="dot-spinner size-3" />
-						) : s.background_tasks?.length ? (
-							<Hourglass size={11} className="shrink-0 text-faint" aria-label="Waiting for a background task" />
-						) : null}
-						<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
-						<ContextPercent used={s.context_used_percent} />
-						{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
-						{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}
-					</button>
-				))}
+				{sessions.map(s => {
+					const promptState = promptStates[s.id]
+					return (
+						<button
+							type="button"
+							key={s.id}
+							ref={s.id === activeId ? activeTab : undefined}
+							onClick={() => onSelect(s.id)}
+							className={cn('pill flex shrink-0 items-center gap-1.5', s.id === activeId && 'pill-active')}
+						>
+							{promptState ? (
+								<PromptStatusDot state={promptState} className="size-3" />
+							) : s.status === 'working' ? (
+								<span className="dot-spinner size-3" />
+							) : s.background_tasks?.length ? (
+								<Hourglass size={11} className="shrink-0 text-faint" aria-label="Waiting for a background task" />
+							) : null}
+							<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
+							<ContextPercent used={s.context_used_percent} />
+							{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
+							{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}
+						</button>
+					)
+				})}
 			</div>
 			<button
 				type="button"
