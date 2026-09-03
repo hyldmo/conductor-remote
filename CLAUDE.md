@@ -870,6 +870,10 @@ Two asymmetric halves — keep them separate:
   `tests/attachments.test.ts` pins both against a token Conductor itself wrote,
   and pins the other half — that a name built from a **chat title**, which is free text
   a model wrote and which then gets joined onto a path, cannot climb out of the worktree.
+  On the phone that same token becomes a clickable pill. It resolves directly against
+  the chat's worktree — never through the git-owned file list, because `.context` is
+  ignored — and opens the existing raster-image or source viewer, whose authenticated
+  routes still realpath and authorize the resulting absolute path.
   - **`split_chat` is what it exists for** (`POST /api/sessions/:id/split`): copy a chat
     into a fresh tab beside it, or into a separate workspace carrying the current code,
     so a tangent asked inside a running conversation stops leaving three threads
