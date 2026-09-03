@@ -71,6 +71,10 @@ export interface FirstPrompt {
 	model?: string
 	/** Files staged before this workspace had a worktree. They must land before `text` is sent. */
 	attachmentIds?: string[]
+	/** Role assigned to the first chat before its settings or prompt are delivered. */
+	sessionRole?: string
+	/** Persisted receipt so a relay restart does not rewrite the role registry unnecessarily. */
+	sessionRoleAssigned?: boolean
 	status: FirstPromptStatus
 	/** Sends already spent on it *after* the worktree turned ready — the budget that counts. */
 	attempts: number
@@ -118,6 +122,13 @@ export interface DeliveryDeps {
 		workspaceId: string,
 		worktree: string,
 		attachmentIds: string[]
+	) => Promise<{ ok: boolean; error?: string }>
+	/** Persist workflow-root identity before the first prompt makes the chat visible as active work. */
+	assignRole?: (
+		workspaceId: string,
+		sessionId: string,
+		role: string,
+		assignedAt: number
 	) => Promise<{ ok: boolean; error?: string }>
 	/** Remove files that belonged to a prompt the user dismissed before it was sent. */
 	discard?: (attachmentIds: string[]) => void | Promise<void>
@@ -187,7 +198,8 @@ export class FirstPromptQueue {
 		text: string,
 		sendImmediately = true,
 		attachmentIds: string[] = [],
-		agent?: ParkedAgentPatch
+		agent?: ParkedAgentPatch,
+		sessionRole?: string
 	): Promise<FirstPrompt | null> {
 		this.entries = [
 			...this.entries.filter(e => e.workspaceId !== workspaceId),
@@ -196,6 +208,7 @@ export class FirstPromptQueue {
 				text,
 				...(agent && Object.keys(agent).length ? { agent } : {}),
 				...(attachmentIds.length ? { attachmentIds } : {}),
+				...(sessionRole ? { sessionRole } : {}),
 				status: 'waiting',
 				attempts: 0,
 				createdAt: Date.now(),
@@ -276,6 +289,19 @@ export class FirstPromptQueue {
 			this.discardIds(attachmentIds)
 		}
 		if (!target?.sessionId) return
+		if (entry.sessionRole && !entry.sessionRoleAssigned) {
+			if (!target.worktree) return
+			if (!this.deps.assignRole) return this.fail(entry, 'the relay cannot assign the workflow root role')
+			const assigned = await this.deps.assignRole(
+				entry.workspaceId,
+				target.sessionId,
+				entry.sessionRole,
+				entry.createdAt
+			)
+			if (!assigned.ok) return this.fail(entry, assigned.error ?? 'the workflow root role could not be saved')
+			entry.sessionRoleAssigned = true
+			this.save()
+		}
 		// It already went — the user sent it from the Mac, where the deep link left it
 		// pre-filled in the composer. Sending again would double it, and changing the
 		// agent now would affect a later turn instead of the first one they configured.
@@ -398,6 +424,8 @@ export class FirstPromptQueue {
 				)
 				.map(e => ({
 					...e,
+					sessionRole: typeof e.sessionRole === 'string' && e.sessionRole.trim() ? e.sessionRole.trim() : undefined,
+					sessionRoleAssigned: e.sessionRoleAssigned === true ? true : undefined,
 					attachmentIds: Array.isArray(e.attachmentIds)
 						? e.attachmentIds.filter((id): id is string => typeof id === 'string')
 						: undefined

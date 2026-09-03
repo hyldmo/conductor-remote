@@ -16,7 +16,13 @@ import {
 } from './lib/push.ts'
 import { hasSelection, overSelection } from './lib/selection.ts'
 import { mergeEntries, withQueuedEntries } from './lib/transcript-merge.ts'
-import type { ModelCatalogResponse, ModelDefaultsResponse, Session, TranscriptEntry } from './lib/types.ts'
+import type {
+	ModelCatalogResponse,
+	ModelDefaultsResponse,
+	RolesResponse,
+	Session,
+	TranscriptEntry
+} from './lib/types.ts'
 import { useApp } from './store.ts'
 
 /**
@@ -622,6 +628,17 @@ export function usePlanUsage(enabled: boolean) {
 	})
 }
 
+/** Relay-owned cross-provider roles. They change only through the Roles sheet/MCP. */
+export function useRoles(enabled = true) {
+	return useQuery<RolesResponse>({
+		queryKey: ['roles'],
+		queryFn: client.roles,
+		enabled,
+		staleTime: 30_000,
+		retry: false
+	})
+}
+
 /**
  * Conductor's live model list, stale-while-revalidate through the relay cache.
  *
@@ -791,25 +808,29 @@ export function useSendPrompt() {
 			workspaceId: string
 			text: string
 			queue?: boolean
+			/** Turn this pristine chat's first message into the configured planning root. */
+			workflow?: boolean
 		}): Promise<boolean> => {
 			const text = opts.text.trim()
 			if (!text) return false
 			const id = opts.id ?? crypto.randomUUID()
 			const { sessionId, workspaceId } = opts
-			addPending({ id, sessionId, workspaceId, text, queue: opts.queue })
+			addPending({ id, sessionId, workspaceId, text, queue: opts.queue, workflow: opts.workflow })
 			try {
 				// Read at send time, not through the closure: the user may have changed the
 				// model between mounting the composer and tapping send.
 				const staged = useApp.getState().agentDrafts[sessionId]
-				const agent = staged && Object.keys(staged).length ? staged : undefined
+				const agent = !opts.workflow && staged && Object.keys(staged).length ? staged : undefined
 				// `id` goes to the relay as well as into the bubble: it is the send's identity,
 				// so a Retry of this same bubble is answered rather than sent again. Which is
 				// the duplicate the chats here hold — the prompt landed, the answer didn't.
-				const r = await client.sendPrompt(sessionId, text, workspaceId, agent, id, opts.queue)
+				const r = await client.sendPrompt(sessionId, text, workspaceId, agent, id, opts.queue, opts.workflow)
 				if (r.ok || r.parked) {
-					if (agent) {
-						// Applied (ok) or owned by the parked entry now — either way no longer staged.
-						clearAgentDraft(sessionId, agent)
+					const appliedDraft = opts.workflow ? staged : agent
+					if (appliedDraft) {
+						// Ordinary choices were applied/parked; Workflow deliberately replaces them
+						// with its planning role. Either way they are no longer staged.
+						clearAgentDraft(sessionId, appliedDraft)
 						queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
 					}
 					if (r.ok) markWorking(sessionId)

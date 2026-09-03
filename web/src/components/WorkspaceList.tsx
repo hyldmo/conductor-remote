@@ -1,4 +1,4 @@
-import { ChevronDown, Gauge, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, Gauge, Plus, QrCode, Search, SlidersHorizontal, Workflow } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useModelCatalog, useWorkspaces } from '../hooks.ts'
@@ -30,6 +30,7 @@ import { LogsSheet } from './LogsSheet.tsx'
 import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
 import { PlanUsageSheet } from './PlanUsageSheet.tsx'
 import { type RepoChoice, RepoOptions, repoFilterLabel } from './RepoFilter.tsx'
+import { RolesSettings } from './RolesSettings.tsx'
 import { SearchSheet } from './SearchSheet.tsx'
 import { Badge, Empty, RelayUnreachable, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
 
@@ -101,6 +102,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const [newOpen, setNewOpen] = useState(false)
 	const [logsOpen, setLogsOpen] = useState(false)
 	const [usageOpen, setUsageOpen] = useState(false)
+	const [rolesOpen, setRolesOpen] = useState(false)
 	const [searchOpen, setSearchOpen] = useState(false)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
@@ -152,29 +154,16 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 		setSidebarOpen(false)
 	}
 
-	// The dot marks the *setting*; the subtitle only speaks up once a filter actually
-	// took something out, or "Hide merged" with nothing merged would read as "40 of 40".
+	// The dot marks whether any workspace filter setting is active. The header no longer
+	// prints counts beside the growing action row; empty states still explain hidden rows.
 	const filtered = view.repos.length > 0 || view.hideMerged || view.hideDone
-	const narrowed = view.repos.length > 0 || hidden > 0
 	const repoLabel = repoFilterLabel(view.repos)
-	const subtitle = workspaces.length
-		? narrowed
-			? [
-					`${shown.length} of ${workspaces.length}`,
-					view.repos.length ? repoLabel : null,
-					hidden ? `${hidden} hidden` : null
-				]
-					.filter(Boolean)
-					.join(' · ')
-			: `${workspaces.length} active`
-		: undefined
 
 	return (
 		<div className="flex h-full min-w-0 flex-col overflow-hidden">
 			<div className="relative">
 				<Header
-					title="Workspaces"
-					subtitle={subtitle}
+					title={<span className="sr-only">Workspaces</span>}
 					right={
 						/* No close button. The drawer already closes four other ways — the scrim, an
 						   edge swipe back, picking a workspace, the header toggle it opened from — and
@@ -215,6 +204,14 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
 							>
 								<QrCode size={18} />
+							</button>
+							<button
+								type="button"
+								onClick={() => setRolesOpen(true)}
+								aria-label="Open delegated roles"
+								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+							>
+								<Workflow size={18} />
 							</button>
 							{/* Last, and the only filled one: it is the thing you came here to do. */}
 							<button
@@ -329,6 +326,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 			) : null}
 			{logsOpen ? <LogsSheet onClose={() => setLogsOpen(false)} /> : null}
 			{usageOpen ? <PlanUsageSheet onClose={() => setUsageOpen(false)} /> : null}
+			{rolesOpen ? <RolesSettings onClose={() => setRolesOpen(false)} /> : null}
 		</div>
 	)
 }

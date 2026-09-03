@@ -25,6 +25,7 @@ export function ModelPicker({
 	isFetching = false,
 	isError = false,
 	empty = 'No models are cached yet. Open a model picker in a chat first.',
+	placement = 'above',
 	className,
 	beforeOptions,
 	renderTrigger
@@ -43,6 +44,8 @@ export function ModelPicker({
 	isFetching?: boolean
 	isError?: boolean
 	empty?: string
+	/** Composer controls open upward; settings rows have room below them. */
+	placement?: 'above' | 'below'
 	className?: string
 	/** Controls shown above the model choices, such as an existing chat's agent settings. */
 	beforeOptions?: ReactNode
@@ -81,7 +84,12 @@ export function ModelPicker({
 						onClick={() => setPicking(false)}
 						className="fixed inset-0 z-30 cursor-default"
 					/>
-					<div className="absolute bottom-full left-0 z-40 mb-2 max-h-64 w-64 overflow-y-auto rounded-xl border border-border bg-surface-2 py-1 shadow-xl shadow-black/40">
+					<div
+						className={cn(
+							'absolute left-0 z-40 max-h-64 w-64 overflow-y-auto rounded-xl border border-border bg-surface-2 py-1 shadow-xl shadow-black/40',
+							placement === 'below' ? 'top-full mt-2' : 'bottom-full mb-2'
+						)}
+					>
 						{beforeOptions}
 						{isFetching ? <RefreshCw size={10} className="mx-3 my-1.5 animate-spin text-faint" /> : null}
 						{groups.length ? (

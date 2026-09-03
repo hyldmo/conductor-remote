@@ -30,6 +30,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from './config.ts'
 import type { Reads, SessionState } from './reads.ts'
+import type { SessionPoller } from './session-poller.ts'
 import type { PushSubscription, VapidKeys } from './webpush.ts'
 import { generateVapidKeys, MAX_PAYLOAD_BYTES, sendPush } from './webpush.ts'
 
@@ -75,8 +76,6 @@ export interface PushMessage {
 }
 
 const STORE_VERSION = 1
-/** Poll cadence for status transitions. Matches the phone's own list poll — a local SQLite read is cheap. */
-const TICK_MS = 3000
 /**
  * How long a push service should hold a notification for a phone that's offline.
  * An hour: long enough to survive a tunnel/airplane-mode blip, short enough that
@@ -474,12 +473,12 @@ export class TurnWatcher {
 
 const watcher = new TurnWatcher()
 
-function tick(reads: Reads): void {
+function tick(reads: Reads, states: SessionState[]): void {
 	if (deviceCount() === 0) {
 		watcher.reset()
 		return
 	}
-	for (const due of watcher.step(reads.listSessionStates())) void fire(reads, due.state.sessionId, due.kind, due.state)
+	for (const due of watcher.step(states)) void fire(reads, due.state.sessionId, due.kind, due.state)
 }
 
 async function fire(
@@ -516,22 +515,19 @@ async function fire(
 }
 
 /**
- * Start watching for turn endings. Safe to call unconditionally — with no
- * subscribed devices this is one small local query every few seconds, and
- * `PUSH_NOTIFY=off` skips it entirely.
+ * Subscribe notification decisions to the shared session clock. Push settings
+ * gate only this listener; the poller itself still runs for delegation progress.
  */
-export function startNotifier(reads: Reads): void {
+export function startNotifier(reads: Reads, poller: SessionPoller): () => void {
 	if (!notificationsEnabled()) {
 		console.info('[push] notifications disabled (PUSH_NOTIFY=off)')
-		return
+		return () => undefined
 	}
-	const timer = setInterval(() => {
+	return poller.subscribe(states => {
 		try {
-			tick(reads)
+			tick(reads, states)
 		} catch (err) {
-			// A transient DB read failure must not kill the interval.
 			console.warn(`[push] watcher tick failed: ${err instanceof Error ? err.message : err}`)
 		}
-	}, TICK_MS)
-	timer.unref()
+	})
 }

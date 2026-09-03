@@ -1639,22 +1639,37 @@ end controlNamed
 
 on effortButton()
 	-- The effort control is a button whose *label is its current value*, so it is
-	-- identified by that label rather than a stable name.
-	set levels to {"Low", "Medium", "High", "Extra high", "Max", "Ultracode"}
+	-- identified by that label rather than a stable name. Claude calls its top
+	-- level Ultracode while Codex calls the corresponding level Ultra. Codex's
+	-- None state is the exception: its button has no accessible name at all, so
+	-- accept one (and only one) unnamed button *after* the proven model picker.
+	-- The main composer also contains unnamed attachment/stop buttons before that
+	-- picker, and pressing one of those would be worse than failing.
+	set levels to {"Light", "Low", "Medium", "High", "Extra high", "Max", "Ultracode", "Ultra"}
+	set sawModel to false
+	set unnamed to {}
 	repeat with entry in my composerControls()
 		set c to contents of entry
-		if my tabLabel(c) is in levels then return c
+		if (my axRole(c)) is "AXPopUpButton" and (my axName(c)) contains "Change agent" then
+			set sawModel to true
+		else if sawModel and (my axRole(c)) is "AXButton" then
+			set label to my axName(c)
+			if label is in levels then return c
+			if label is "" then set end of unnamed to c
+		end if
 	end repeat
+	if (count of unnamed) is 1 then return item 1 of unnamed
 	return missing value
 end effortButton
 
 on setEffort(wanted)
-	-- Pressing cycles Low → Medium → High → Extra high → Max → Ultracode → wrap,
-	-- so step around the ring at most one full turn and confirm the label landed.
+	-- Claude owns a six-value ring ending in Ultracode; Codex adds None and ends
+	-- in Ultra. Step around either ring once and confirm the label landed.
 	set btn to my effortButton()
 	if btn is missing value then error "couldn't find the effort control"
-	repeat 7 times
-		if my tabLabel(btn) is wanted then return
+	repeat 8 times
+		set currentLabel to my axName(btn)
+		if currentLabel is wanted or (wanted is "__UNNAMED_EFFORT__" and currentLabel is "") then return
 		tell application "System Events" to tell process "Conductor"
 			perform action "AXPress" of btn
 		end tell
@@ -1883,6 +1898,7 @@ on setModel(wanted)
 		if (count of loose) > 1 then error "several models match " & wanted
 		error "no model named " & wanted
 	end if
+	set chosenLabel to my firstLine(my tabLabel(chosen))
 	tell application "System Events" to tell process "Conductor"
 		perform action "AXPress" of chosen
 	end tell
@@ -1893,7 +1909,7 @@ on setModel(wanted)
 		if my tabLabel(c) contains "Change agent" then set popup to c
 	end repeat
 	if popup is missing value then error "the model picker vanished"
-	if not my pickerShowsModel(popup, wanted) then error "the model didn't switch to " & wanted
+	if not my pickerShowsModel(popup, chosenLabel) then error "the model didn't switch to " & chosenLabel
 end setModel
 
 on listModels()

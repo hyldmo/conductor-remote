@@ -4,12 +4,19 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
+import { applyAgentConfig } from './agent-config.ts'
 import { attachmentPrompt, writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { attachChangeStats } from './change-stats.ts'
 import { isDefaultEffortLevel, readDefaultEfforts, writeDefaultEfforts } from './conductor-settings.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
+import {
+	type DelegationActionError,
+	DelegationQueue,
+	DelegationStore,
+	type PersistedDelegation
+} from './delegations.ts'
 import { DevServerController } from './dev-server.ts'
 import { isAllowedPreviewPath, parseFileReference, parseImageReference } from './file-preview.ts'
 import { FirstPromptQueue } from './firstprompt.ts'
@@ -51,11 +58,13 @@ import { PlanUsageService } from './plan-usage.ts'
 import { attachPrStatus } from './pr.ts'
 import { readPrefs, writePrefs } from './prefs.ts'
 import { type DeliveryCursor, Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
+import { decodeRoles, RoleStore, resolveRole, roleModelIssues } from './roles.ts'
 import { isRoute, routeParam, routes } from './routes.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
 import { SendOnce } from './sendonce.ts'
+import { SessionPoller } from './session-poller.ts'
 import { readSettings, writeSettings } from './settings.ts'
-import { VIEWING_HEADER, withoutWindowEvidence } from './shared.ts'
+import { responseErrorMessage, VIEWING_HEADER, withoutWindowEvidence } from './shared.ts'
 import {
 	discardStagedAttachment,
 	materializeStagedAttachments,
@@ -66,8 +75,18 @@ import {
 import { driftWarningLines, readExposeMode, tailscaleBin } from './tailscale.ts'
 import { renderTranscript, transcriptMessage, transcriptThrough } from './transcript.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
+import type {
+	Attachment,
+	CreateWorkspaceRequest,
+	DelegateTaskRequest,
+	DelegateTaskResult,
+	DelegationError,
+	DelegationProjection,
+	RolesConfig,
+	SendPromptRequest
+} from './wire.ts'
+import { prepareWorkflowRoot, WORKFLOW_ROOT_ROLE, type WorkflowRootResult } from './workflow.ts'
 import {
-	type AgentOptions,
 	archiveWorkspace,
 	type ChatTab,
 	closeChat,
@@ -79,7 +98,6 @@ import {
 	lockBlocked,
 	newChat,
 	pickActuator,
-	planSettingForUi,
 	restartConductorApp,
 	retryWontHelp,
 	type SendResult,
@@ -91,6 +109,7 @@ import {
 	setWorkspaceStatus,
 	stopTurn,
 	UiBusyError,
+	uiBusy,
 	uiQueueDepth,
 	WORKSPACE_STATUS_LABELS,
 	withUiPriority
@@ -103,6 +122,7 @@ installLogCapture()
 const cfg = loadConfig()
 const db = new ConductorDb(cfg.dbPath)
 const reads = new Reads(db, cfg.workspacesRoot)
+const sessionPoller = new SessionPoller(() => reads.listSessionStates())
 const actuator = pickActuator(cfg.writeStrategy)
 const devServers = new DevServerController()
 if (cfg.devWebPort !== undefined && process.env.CONDUCTOR_WORKSPACE_ID) {
@@ -119,6 +139,56 @@ const STAGED_ATTACHMENTS_DIR = path.join(stateDir(), 'attachment-staging')
 // from a list before Conductor has created its first chat.
 const modelCache = new ModelCache(path.join(stateDir(), 'model-cache.json'))
 const planUsage = new PlanUsageService()
+const roleStore = new RoleStore(path.join(stateDir(), 'roles.json'))
+
+/** One store object per live worktree, so the queue never registers a path twice. */
+const delegationStores = new Map<string, { worktree: string; store: DelegationStore }>()
+
+function delegationStore(ws: Workspace): DelegationStore | null {
+	if (!ws.worktree) return null
+	const cached = delegationStores.get(ws.id)
+	if (cached?.worktree === ws.worktree) return cached.store
+	const store = new DelegationStore(ws.worktree)
+	delegationStores.set(ws.id, { worktree: ws.worktree, store })
+	return store
+}
+
+function liveDelegationStores(): DelegationStore[] {
+	return reads.listWorkspaces().flatMap(ws => {
+		const store = delegationStore(ws)
+		return store ? [store] : []
+	})
+}
+
+/** Tag a pristine workflow root without ever touching Conductor's Plan control. */
+function assignWorkflowRoot(
+	ws: Workspace,
+	sessionId: string,
+	role: string,
+	assignedAt: number
+): { ok: true } | { ok: false; error: string } {
+	const store = delegationStore(ws)
+	if (!store) return { ok: false, error: 'the workflow worktree is unavailable' }
+	if (reads.sessionWorkspaceId(sessionId) !== ws.id) {
+		return { ok: false, error: 'the workflow root chat is not in that workspace' }
+	}
+	const session = reads.getSession(sessionId)
+	if (!session) return { ok: false, error: 'the workflow root chat is unavailable' }
+	if (session.permission_mode === 'plan') {
+		return {
+			ok: false,
+			error: 'the workflow root inherited Plan mode; switch it to ordinary chat mode and retry'
+		}
+	}
+	const assignments = store.sessionRoles()
+	if (assignments.warning) return { ok: false, error: `cannot assign the workflow root: ${assignments.warning}` }
+	const existing = assignments.sessions[sessionId]
+	if (existing && existing.role !== role) {
+		return { ok: false, error: `the new chat is already assigned to role ${existing.role}` }
+	}
+	if (!existing) store.assign(sessionId, { role, assignedAt })
+	return { ok: true }
+}
 
 // Full-text index over the chat prose, in the relay's own sidecar DB — never in
 // Conductor's (see src/search.ts). It backfills in the background and is disposable:
@@ -151,10 +221,10 @@ const mcpTools = createTools(async <T>(route: string, opts: CallOptions = {}): P
 		},
 		body: opts.body === undefined ? undefined : JSON.stringify(opts.body)
 	})
-	const payload = (await res.json().catch(() => ({}))) as Record<string, unknown> & { error?: string }
+	const payload = (await res.json().catch(() => ({}))) as Record<string, unknown> & { error?: unknown }
 	if (!res.ok) {
 		const busy = res.status === 503 ? ' (Conductor’s UI is busy — retry shortly)' : ''
-		throw new Error(`${payload.error || `HTTP ${res.status}`}${busy}`)
+		throw new Error(`${responseErrorMessage(payload.error, `HTTP ${res.status}`)}${busy}`)
 	}
 	return payload as T
 })
@@ -217,6 +287,12 @@ function deliveredSince(sessionId: string, text: string, since: DeliveryCursor):
 	return reads.promptDeliveredSince(sessionId, text, since)
 }
 
+function deliveredRowSince(sessionId: string, text: string, sinceRowid: number): number | null {
+	const target = text.trim()
+	const { entries } = reads.getMessages(sessionId, sinceRowid)
+	return entries.find(e => e.role === 'user' && e.text.trim() === target)?.rowid ?? null
+}
+
 /**
  * Watch for that row, ending on a check rather than a sleep, and never past
  * `budgetDeadline`. Conductor records the row or outbox item right after the send
@@ -230,6 +306,21 @@ function deliveredSince(sessionId: string, text: string, since: DeliveryCursor):
  * a confirm *followed by another attempt* always gets its full window. Only the
  * last confirm of all can be cut short, and nothing follows it to duplicate a row.
  */
+async function confirmDeliveryRow(
+	sessionId: string,
+	text: string,
+	sinceRowid: number,
+	budgetDeadline: number
+): Promise<number | null> {
+	const stopAt = Math.min(Date.now() + CONFIRM_WINDOW_MS, budgetDeadline)
+	for (;;) {
+		const rowid = deliveredRowSince(sessionId, text, sinceRowid)
+		if (rowid !== null) return rowid
+		if (Date.now() >= stopAt) return null
+		await sleep(300)
+	}
+}
+
 async function confirmDelivery(
 	sessionId: string,
 	text: string,
@@ -311,31 +402,32 @@ function locateChat(
  */
 async function openChat(
 	ws: Workspace
-): Promise<{ sessionId: string | null } | { error: true; result: Awaited<ReturnType<typeof newChat>> }> {
+): Promise<
+	{ sessionId: string | null } | { error: true; result: Awaited<ReturnType<typeof newChat>>; retryable?: boolean }
+> {
 	const before = new Set(reads.listSessions(ws.id).map(s => s.id))
 	const result = await newChat(ws)
 	if (!result.ok) return { error: true, result }
 	// The new session lands in the DB a beat after Cmd+T — poll for the fresh id.
 	for (let i = 0; i < 12; i++) {
 		await sleep(500)
-		const fresh = reads.listSessions(ws.id).find(s => !before.has(s.id))
-		if (fresh) return { sessionId: fresh.id }
+		const fresh = reads.listSessions(ws.id).filter(s => !before.has(s.id))
+		if (fresh.length > 1) {
+			return {
+				error: true,
+				retryable: false,
+				result: {
+					ok: false,
+					strategy: actuator.name,
+					error: 'more than one new chat appeared; refusing to guess which one this request opened'
+				}
+			}
+		}
+		if (fresh[0]) return { sessionId: fresh[0].id }
 	}
 	// The tab is almost certainly on screen; only its id is missing. Say so rather than
 	// failing the call, so a caller can still tell the user where the work went.
 	return { sessionId: null }
-}
-
-/** Poll the DB until Conductor records the setting we just drove through the UI. */
-async function confirmAgentOptions(ws: Workspace, sessionId: string, opts: AgentOptions): Promise<boolean> {
-	for (let attempt = 0; attempt < 10; attempt++) {
-		const s = reads.listSessions(ws.id).find(row => row.id === sessionId)
-		const effortOk = !opts.effort || s?.claude_effort_level === opts.effort
-		const planOk = opts.plan === undefined || s?.permission_mode === (opts.plan ? 'plan' : 'default')
-		if (effortOk && planOk) return true
-		await sleep(300)
-	}
-	return false
 }
 
 /**
@@ -466,6 +558,14 @@ const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.j
 			return { ok: false, error: err instanceof Error ? err.message : 'the attached files could not be copied' }
 		}
 	},
+	assignRole: async (workspaceId, sessionId, role, assignedAt) => {
+		try {
+			const ws = reads.getWorkspace(workspaceId)
+			return ws ? assignWorkflowRoot(ws, sessionId, role, assignedAt) : { ok: false, error: 'the workspace is gone' }
+		} catch (err) {
+			return { ok: false, error: err instanceof Error ? err.message : String(err) }
+		}
+	},
 	discard: attachmentIds => {
 		for (const id of attachmentIds) discardStagedAttachment(STAGED_ATTACHMENTS_DIR, id)
 	},
@@ -513,29 +613,428 @@ async function applyAgentPatch(
 ): Promise<{ ok: boolean; error?: string }> {
 	const located = locateChat(ws, sessionId)
 	if ('error' in located) return { ok: false, error: located.error }
-	const desired: AgentOptions = {
-		effort: patch.effort,
-		plan: patch.plan,
-		model: patch.model,
-		toggleFast: patch.fast === undefined ? false : patch.fast !== Boolean(located.session?.fast_mode)
-	}
-	const opts: AgentOptions = {
-		...desired,
-		plan: planSettingForUi(patch.plan, located.session?.permission_mode)
-	}
-	const result = await setAgentOptions({ workspace: ws, sessionId, tab: located.tab }, opts)
-	if (!result.ok) return { ok: false, error: result.error }
-	// Confirm the requested state, including settings that needed no UI action.
-	// A model change can redraw controls, so the pre-flight DB read is not itself
-	// enough to call the whole patch successful.
-	if (!(await confirmAgentOptions(ws, sessionId, desired))) {
-		return { ok: false, error: 'Conductor didn’t record the change — it may have been asleep. Try again.' }
-	}
+	const target = { workspace: ws, sessionId, tab: located.tab }
+	const result = await applyAgentConfig(patch, {
+		read: () => {
+			const session = reads.listSessions(ws.id).find(row => row.id === sessionId)
+			if (!session) return undefined
+			return {
+				agentType: session.agent_type,
+				model: session.model,
+				effort: session.claude_effort_level,
+				plan: session.permission_mode === 'plan',
+				fast: Boolean(session.fast_mode)
+			}
+		},
+		write: options => setAgentOptions(target, options),
+		wait: () => sleep(300)
+	})
+	if (!result.ok) return result
 	if (patch.model) {
 		const session = reads.listSessions(ws.id).find(row => row.id === sessionId)
 		modelCache.rememberModel(session?.agent_type, patch.model)
 	}
 	return { ok: true }
+}
+
+function delegationError(code: DelegationError['code'], error: string, retryable = true): DelegationActionError {
+	const clean = withoutWindowEvidence(error)
+	if (clean !== error) console.warn(`[relay] ${error}`)
+	return { ok: false, code, error: clean, retryable, blocked: lockBlocked(error) || uiBusy(error) }
+}
+
+function wireAttachment(written: ReturnType<typeof writeAttachment>): Attachment {
+	return {
+		name: written.name,
+		path: written.relPath,
+		bytes: written.bytes,
+		token: written.token
+	}
+}
+
+/** Write the frozen parent transcript cut before opening its child tab. */
+function delegationHandoff(job: PersistedDelegation, ws: Workspace): Attachment {
+	if (!ws.worktree) throw new Error('worktree path unresolved')
+	const source = reads.getSession(job.parentSessionId)
+	if (!source) throw new Error('parent chat not found in that workspace')
+	const { entries } = reads.getMessages(job.parentSessionId)
+	const cut = job.throughRowid === undefined ? { entries, later: 0 } : transcriptThrough(entries, job.throughRowid)
+	if (!cut) throw new Error('the requested handoff message is not in the parent chat')
+	const rendered = renderTranscript(cut.entries, { thinking: job.includeThinking, tools: false })
+	if (!rendered.kept) throw new Error('the parent chat has nothing to hand off yet')
+	const title = source.title?.trim() || 'chat'
+	const header = [
+		`# Transcript of ${title}`,
+		'',
+		[ws.repo_name, ws.branch].filter(Boolean).join(' · '),
+		`Delegation ${job.id} copied this chat through ${job.throughRowid ?? 'its latest row'}.`,
+		cut.later ? `${cut.later} later ${cut.later === 1 ? 'entry is' : 'entries are'} intentionally omitted.` : '',
+		'',
+		''
+	]
+		.filter((line, index) => line || index < 2 || index >= 5)
+		.join('\n')
+	return wireAttachment(writeAttachment(ws.worktree, `Transcript of ${title}.md`, header + rendered.text))
+}
+
+async function openDelegation(job: PersistedDelegation) {
+	const ws = reads.getWorkspace(job.workspaceId)
+	if (!ws) return delegationError('workspace_not_found', 'the delegated workspace is gone', false)
+	if (!ws.worktree) return delegationError('worktree_unavailable', 'worktree path unresolved', false)
+	if ((await screenLocked()) === true) {
+		return delegationError('opening_failed', 'The Mac is locked — unlock it and try again.')
+	}
+	let handoff: Attachment
+	try {
+		handoff = delegationHandoff(job, ws)
+	} catch (err) {
+		return delegationError('opening_failed', err instanceof Error ? err.message : String(err), false)
+	}
+	const opened = await withUiPriority('background', () => openChat(ws))
+	if ('error' in opened) {
+		return delegationError(
+			'opening_failed',
+			opened.result.error ?? 'Conductor did not open a child chat',
+			opened.retryable !== false
+		)
+	}
+	if (!opened.sessionId)
+		return delegationError('opening_failed', 'Conductor opened a tab but did not record its chat id', false)
+	return { ok: true as const, childSessionId: opened.sessionId, handoff }
+}
+
+async function configureDelegation(job: PersistedDelegation) {
+	const ws = reads.getWorkspace(job.workspaceId)
+	if (!ws) return delegationError('workspace_not_found', 'the delegated workspace is gone', false)
+	if (!job.childSessionId) return delegationError('state_invalid', 'the delegated child id is missing', false)
+	const before = reads.getSession(job.childSessionId)
+	if (!before) return delegationError('session_not_found', 'the delegated child chat is gone', false)
+	// Never touch the buggy Plan control for orchestration. A child that somehow
+	// inherited Plan is refused before its task is sent instead of relying on it.
+	if (before.permission_mode === 'plan') {
+		return delegationError(
+			'configuration_failed',
+			'the child inherited Plan mode; delegated roles require default mode',
+			false
+		)
+	}
+	const applied = await withUiPriority('background', () =>
+		applyAgentPatch(ws, job.childSessionId as string, {
+			model: job.resolvedRole.model,
+			effort: job.resolvedRole.effort,
+			fast: job.resolvedRole.fast
+		})
+	)
+	if (!applied.ok) return delegationError('configuration_failed', applied.error ?? 'agent configuration did not stick')
+	const after = reads.getSession(job.childSessionId)
+	if (!after) return delegationError('session_not_found', 'the configured child chat disappeared', false)
+	if (after.permission_mode === 'plan') {
+		return delegationError(
+			'configuration_failed',
+			'the child entered Plan mode; delegated roles require default mode',
+			false
+		)
+	}
+	if (after.agent_type !== job.resolvedRole.agentType) {
+		return delegationError(
+			'configuration_failed',
+			`Conductor recorded provider ${after.agent_type ?? 'unknown'}, not ${job.resolvedRole.agentType}`
+		)
+	}
+	return { ok: true as const }
+}
+
+function delegatedPrompt(job: PersistedDelegation): string {
+	const handoff = job.handoff
+	if (!handoff) throw new Error('the delegated handoff is missing')
+	const task = attachmentPrompt(handoff.token, job.prompt)
+	return job.resolvedRole.preamble?.trim() ? `${job.resolvedRole.preamble.trim()}\n\n${task}` : task
+}
+
+async function sendDelegation(job: PersistedDelegation) {
+	const ws = reads.getWorkspace(job.workspaceId)
+	if (!ws) return delegationError('workspace_not_found', 'the delegated workspace is gone', false)
+	if (!job.childSessionId) return delegationError('state_invalid', 'the delegated child id is missing', false)
+	let text: string
+	try {
+		text = delegatedPrompt(job)
+	} catch (err) {
+		return delegationError('state_invalid', err instanceof Error ? err.message : String(err), false)
+	}
+	const cursor = reads.getMessages(job.childSessionId).cursor
+	const result = await withUiPriority('background', () => deliverPrompt(ws, job.childSessionId as string, text))
+	if (!result.ok) return delegationError('send_failed', result.error ?? 'the delegated prompt did not land')
+	const sentRowid = deliveredRowSince(job.childSessionId, text, cursor)
+	if (sentRowid === null) return delegationError('send_failed', 'the delegated prompt has no transcript receipt')
+	return { ok: true as const, sentRowid }
+}
+
+function delegationCompletion(job: PersistedDelegation) {
+	if (!job.childSessionId || job.sentRowid === undefined) return null
+	const child = reads.getSession(job.childSessionId)
+	if (!child) {
+		return {
+			outcome: { kind: 'error' as const, error: 'the delegated child chat disappeared' }
+		}
+	}
+	const assistants = reads
+		.getMessages(job.childSessionId, job.sentRowid)
+		.entries.filter(entry => entry.role === 'assistant' && entry.text.trim())
+	const last = assistants.at(-1)
+	if (child.status === 'error') {
+		return {
+			outcome: {
+				kind: 'error' as const,
+				error: 'the delegated agent stopped with an error',
+				...(last ? { assistantRowid: last.rowid, text: last.text.trim() } : {})
+			},
+			...(last ? { completionRowid: last.rowid } : {})
+		}
+	}
+	if (child.status !== 'idle' || child.background_tasks.length || !last) return null
+	return {
+		outcome: { kind: 'success' as const, assistantRowid: last.rowid, text: last.text.trim() },
+		completionRowid: last.rowid
+	}
+}
+
+/** Keep the structured Baton tail when present; otherwise the complete answer is the Baton. */
+function batonText(text: string): string {
+	const match = /^## Baton\b/im.exec(text)
+	return match ? text.slice(match.index).trim() : text.trim()
+}
+
+function delegationReturnAttachment(job: PersistedDelegation, ws: Workspace): Attachment {
+	if (!ws.worktree || !job.childSessionId || job.sentRowid === undefined) throw new Error('return state is incomplete')
+	const rendered = renderTranscript(reads.getMessages(job.childSessionId, job.sentRowid).entries, {
+		thinking: true,
+		tools: false
+	})
+	const outcomeText = job.outcome
+		? job.outcome.kind === 'success'
+			? job.outcome.text
+			: (job.outcome.text ?? job.outcome.error)
+		: '(no transcript prose)'
+	const body = [
+		`# Delegated ${job.role} result`,
+		'',
+		`Delegation: ${job.id}`,
+		`Child chat: ${job.childSessionId}`,
+		'',
+		rendered.text || outcomeText
+	].join('\n')
+	return wireAttachment(writeAttachment(ws.worktree, `Delegated ${job.role} result.md`, body))
+}
+
+function delegationReturnText(job: PersistedDelegation, attachment: Attachment): string {
+	if (!job.outcome) throw new Error('the delegated outcome is missing')
+	const result =
+		job.outcome.kind === 'success' ? batonText(job.outcome.text) : batonText(job.outcome.text ?? job.outcome.error)
+	const verb = job.outcome.kind === 'success' ? 'completed' : 'failed'
+	return [`Delegated ${job.role} task ${job.id} ${verb}.`, '', result, '', attachment.token].join('\n')
+}
+
+async function returnDelegation(job: PersistedDelegation) {
+	const ws = reads.getWorkspace(job.workspaceId)
+	if (!ws) return delegationError('workspace_not_found', 'the delegated workspace is gone', false)
+	if (!reads.getSession(job.parentSessionId)) {
+		return delegationError('session_not_found', 'the parent chat is gone', false)
+	}
+	if (job.returnCursor !== undefined) {
+		if (!job.returnAttachment || !job.returnText) {
+			return delegationError('state_invalid', 'the queued return receipt state is incomplete', false)
+		}
+		const rowid = deliveredRowSince(job.parentSessionId, job.returnText, job.returnCursor)
+		return rowid === null
+			? {
+					ok: true as const,
+					pending: true as const,
+					returnCursor: job.returnCursor,
+					returnAttachment: job.returnAttachment,
+					returnText: job.returnText
+				}
+			: { ok: true as const, returnRowid: rowid }
+	}
+
+	let attachment: Attachment
+	let text: string
+	try {
+		attachment = delegationReturnAttachment(job, ws)
+		text = delegationReturnText(job, attachment)
+	} catch (err) {
+		return delegationError('return_failed', err instanceof Error ? err.message : String(err), false)
+	}
+	const cursor = reads.getMessages(job.parentSessionId).cursor
+	if (job.returnMode === 'steer') {
+		const result = await withUiPriority('background', () =>
+			deliverPrompt(ws, job.parentSessionId, text, SEND_BUDGET_MS, false)
+		)
+		if (!result.ok) return delegationError('return_failed', result.error ?? 'the delegated result did not return')
+		const rowid = deliveredRowSince(job.parentSessionId, text, cursor)
+		return rowid === null
+			? delegationError('return_failed', 'the delegated result has no transcript receipt')
+			: { ok: true as const, returnRowid: rowid }
+	}
+
+	const located = locateChat(ws, job.parentSessionId)
+	if ('error' in located) return delegationError('return_failed', located.error, false)
+	const result = await withUiPriority('background', () =>
+		actuator.send({ workspace: ws, sessionId: job.parentSessionId, tab: located.tab }, text, {
+			deadline: Date.now() + SEND_BUDGET_MS,
+			queue: true
+		})
+	)
+	const immediate = deliveredRowSince(job.parentSessionId, text, cursor)
+	if (immediate !== null) return { ok: true as const, returnRowid: immediate }
+	if (!result.ok) {
+		const late = await confirmDeliveryRow(job.parentSessionId, text, cursor, Date.now() + CONFIRM_WINDOW_MS)
+		if (late !== null) return { ok: true as const, returnRowid: late }
+		return delegationError('return_failed', result.error ?? 'Conductor did not accept the queued result')
+	}
+	return {
+		ok: true as const,
+		pending: true as const,
+		returnCursor: cursor,
+		returnAttachment: attachment,
+		returnText: text
+	}
+}
+
+const delegationQueue = new DelegationQueue(
+	{
+		open: openDelegation,
+		configure: configureDelegation,
+		send: sendDelegation,
+		completion: delegationCompletion,
+		returnResult: returnDelegation
+	},
+	{
+		blockedError: error => error instanceof UiBusyError
+	}
+)
+
+sessionPoller.subscribe(() => {
+	void delegationQueue.wake()
+})
+
+function projectDelegation(job: PersistedDelegation): DelegationProjection {
+	return {
+		id: job.id,
+		workspaceId: job.workspaceId,
+		parentSessionId: job.parentSessionId,
+		...(job.childSessionId ? { childSessionId: job.childSessionId } : {}),
+		role: job.role,
+		resolvedRole: job.resolvedRole,
+		prompt: job.prompt,
+		returnMode: job.returnMode,
+		status: job.status,
+		attempts: job.attempts,
+		createdAt: job.createdAt,
+		updatedAt: job.updatedAt,
+		...(job.outcome ? { outcome: job.outcome } : {}),
+		...(job.failure ? { failure: job.failure } : {})
+	}
+}
+
+function attachDelegationState(workspaces: Workspace[]): void {
+	for (const ws of workspaces) {
+		const store = delegationStore(ws)
+		if (!store) continue
+		const listed = store.list()
+		const jobs = listed.jobs.filter(job => job.status !== 'returned').map(projectDelegation)
+		const roles = store.sessionRoles()
+		if (jobs.length) Object.assign(ws, { delegations: jobs })
+		if (Object.keys(roles.sessions).length) Object.assign(ws, { session_roles: roles.sessions })
+		const warnings = [...listed.warnings.map(warning => `${warning.file}: ${warning.message}`)]
+		if (roles.warning) warnings.push(`sessions.json: ${roles.warning}`)
+		if (warnings.length) Object.assign(ws, { delegation_warning: warnings.join('; ') })
+	}
+}
+
+function delegationHttpStatus(error: DelegationError): number {
+	if (
+		error.code === 'workspace_not_found' ||
+		error.code === 'session_not_found' ||
+		error.code === 'role_not_found' ||
+		error.code === 'delegation_not_found'
+	) {
+		return 404
+	}
+	if (error.code === 'invalid_request') return 400
+	if (error.code === 'state_invalid') return 500
+	return 409
+}
+
+function intakeError(code: DelegationError['code'], message: string, retryable = false): DelegateTaskResult {
+	return { ok: false, error: { code, message, retryable } }
+}
+
+/** Validate and persist one job; no UI work is awaited by the caller. */
+function acceptDelegation(parentSessionId: string, body: DelegateTaskRequest): DelegateTaskResult {
+	const roleName = typeof body.role === 'string' ? body.role.trim() : ''
+	const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : ''
+	if (!roleName || !prompt) return intakeError('invalid_request', 'role and prompt are required')
+	if (body.returnMode !== undefined && body.returnMode !== 'queue' && body.returnMode !== 'steer') {
+		return intakeError('invalid_request', 'returnMode must be queue or steer')
+	}
+	if (body.throughRowid !== undefined && (!Number.isSafeInteger(body.throughRowid) || body.throughRowid < 1)) {
+		return intakeError('invalid_request', 'throughRowid must be a positive integer')
+	}
+	if (body.includeThinking !== undefined && typeof body.includeThinking !== 'boolean') {
+		return intakeError('invalid_request', 'includeThinking must be a boolean')
+	}
+
+	const actualWorkspaceId = reads.sessionWorkspaceId(parentSessionId)
+	if (!actualWorkspaceId) return intakeError('session_not_found', 'parent chat not found')
+	if (body.workspaceId && body.workspaceId !== actualWorkspaceId) {
+		return intakeError('invalid_request', 'parent chat is not in that workspace')
+	}
+	const ws = reads.getWorkspace(actualWorkspaceId)
+	if (!ws) return intakeError('workspace_not_found', 'workspace for parent chat not found')
+	if (!ws.worktree) return intakeError('worktree_unavailable', 'worktree path unresolved')
+	const parent = reads.getSession(parentSessionId)
+	if (!parent) return intakeError('session_not_found', 'parent chat not found in that workspace')
+	if (!parent.agent_type) return intakeError('provider_unknown', 'the parent chat provider is unknown')
+
+	const storedRoles = roleStore.read()
+	if (storedRoles.warning) return intakeError('state_invalid', storedRoles.warning)
+	const resolved = resolveRole(storedRoles.config, roleName, modelCache.list())
+	if (!resolved.ok) return { ok: false, error: resolved.error }
+	if (resolved.role.agentType === parent.agent_type) {
+		return intakeError('same_provider', `Role ${roleName} uses the parent's ${parent.agent_type} provider.`)
+	}
+	if (body.throughRowid !== undefined) {
+		const { entries } = reads.getMessages(parentSessionId)
+		if (!transcriptThrough(entries, body.throughRowid)) {
+			return intakeError('invalid_request', 'throughRowid is not in the parent chat')
+		}
+	}
+
+	const now = Date.now()
+	const job: PersistedDelegation = {
+		version: 1,
+		id: crypto.randomUUID(),
+		workspaceId: ws.id,
+		parentSessionId,
+		role: roleName,
+		resolvedRole: resolved.role,
+		prompt,
+		returnMode: body.returnMode ?? 'queue',
+		includeThinking: body.includeThinking !== false,
+		...(body.throughRowid === undefined ? {} : { throughRowid: body.throughRowid }),
+		status: 'queued',
+		attempts: 0,
+		createdAt: now,
+		updatedAt: now
+	}
+	try {
+		const store = delegationStore(ws)
+		if (!store) return intakeError('worktree_unavailable', 'worktree path unresolved')
+		delegationQueue.enqueue(store, job)
+	} catch (err) {
+		return intakeError('state_invalid', err instanceof Error ? err.message : String(err))
+	}
+	return { ok: true, delegationId: job.id, role: roleName, model: resolved.role.model }
 }
 
 /**
@@ -977,6 +1476,7 @@ const server = http.createServer(async (req, res) => {
 				const workspaces = reads.listWorkspaces()
 				attachChangeStats(workspaces) // serves the cache now; refreshes stale git stats in the background
 				attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
+				attachDelegationState(workspaces)
 				// An undelivered first prompt rides along with its workspace: the phone renders it
 				// in that chat rather than tracking delivery itself (see src/firstprompt.ts).
 				// Prompts parked for the lock screen ride the same way, one list per workspace,
@@ -1099,6 +1599,98 @@ const server = http.createServer(async (req, res) => {
 			// explicit user action in the sheet, never a background poll.
 			if (isRoute(routes.planUsage, req.method, pathname)) {
 				return json(req, res, 200, await planUsage.read(url.searchParams.get('refresh') === '1'))
+			}
+
+			if (isRoute(routes.roles, req.method, pathname)) {
+				const stored = roleStore.read()
+				return json(req, res, 200, {
+					...stored.config,
+					issues: roleModelIssues(stored.config, modelCache.list()),
+					...(stored.warning ? { warning: stored.warning } : {})
+				})
+			}
+
+			if (isRoute(routes.updateRoles, req.method, pathname)) {
+				let config: RolesConfig
+				try {
+					config = decodeRoles(JSON.parse((await readBody(req)) || '{}'))
+				} catch (err) {
+					const error: DelegationError = {
+						code: 'invalid_request',
+						message: err instanceof Error ? err.message : String(err),
+						retryable: false
+					}
+					return json(req, res, 400, { ok: false, error })
+				}
+				const issues = roleModelIssues(config, modelCache.list())
+				if (issues.length) return json(req, res, 409, { ok: false, error: issues[0].error, issues })
+				const written = roleStore.write(config)
+				if (!written.ok) {
+					return json(req, res, 500, {
+						ok: false,
+						error: { code: 'state_invalid', message: written.error, retryable: true }
+					})
+				}
+				return json(req, res, 200, { ok: true, config: written.config })
+			}
+
+			if (isRoute(routes.delegations, req.method, pathname)) {
+				const workspaceId = url.searchParams.get('workspaceId')
+				const workspaces = reads.listWorkspaces().filter(ws => !workspaceId || ws.id === workspaceId)
+				if (workspaceId && !workspaces.length) return json(req, res, 404, { error: 'workspace not found' })
+				const delegations = workspaces.flatMap(ws => {
+					const store = delegationStore(ws)
+					return store
+						? store
+								.list()
+								.jobs.filter(job => job.status !== 'returned')
+								.map(projectDelegation)
+						: []
+				})
+				return json(req, res, 200, { delegations })
+			}
+
+			const dismissDelegation = routeParam(routes.dismissDelegation, req.method, pathname)
+			if (dismissDelegation) {
+				for (const ws of reads.listWorkspaces()) {
+					const store = delegationStore(ws)
+					if (!store) continue
+					let job: PersistedDelegation | null
+					try {
+						job = store.get(dismissDelegation)
+					} catch (err) {
+						const error: DelegationError = {
+							code: 'state_invalid',
+							message: `Cannot dismiss unreadable delegation: ${err instanceof Error ? err.message : err}`,
+							retryable: false
+						}
+						return json(req, res, 409, {
+							ok: false,
+							error
+						})
+					}
+					if (!job) continue
+					if (job.status !== 'failed') {
+						return json(req, res, 409, {
+							ok: false,
+							error: {
+								code: 'invalid_request',
+								message: 'Only a failed delegation can be dismissed.',
+								retryable: false
+							} satisfies DelegationError
+						})
+					}
+					store.remove(job.id)
+					return json(req, res, 200, { ok: true, delegationId: job.id })
+				}
+				return json(req, res, 404, {
+					ok: false,
+					error: {
+						code: 'delegation_not_found',
+						message: 'Delegation not found.',
+						retryable: false
+					} satisfies DelegationError
+				})
 			}
 
 			// GET /api/settings — relay preferences plus what the phone needs to edit them:
@@ -1314,21 +1906,13 @@ const server = http.createServer(async (req, res) => {
 					ok: true
 				})
 
-			// POST /api/workspaces { repo, prompt, model?, effort?, plan?, fast?, send? }
+			// POST /api/workspaces { repo, prompt, workflow? | model?/effort?/plan?/fast?, send? }
 			// — create a workspace via Conductor's deep link, then configure its first chat.
 			if (isRoute(routes.createWorkspace, req.method, pathname)) {
-				const body = JSON.parse((await readBody(req)) || '{}') as {
-					repo?: string
-					prompt?: string
-					model?: string
-					effort?: string
-					plan?: boolean
-					fast?: boolean
-					send?: boolean
-					sendImmediately?: boolean
-					attachmentIds?: string[]
-				}
+				const body = JSON.parse((await readBody(req)) || '{}') as CreateWorkspaceRequest
 				const attachmentIds = body.attachmentIds ?? []
+				if (body.workflow !== undefined && typeof body.workflow !== 'boolean')
+					return json(req, res, 400, { error: 'workflow must be a boolean' })
 				if (body.model !== undefined && typeof body.model !== 'string')
 					return json(req, res, 400, { error: 'model must be a picker label' })
 				if (body.effort !== undefined && typeof body.effort !== 'string')
@@ -1340,23 +1924,38 @@ const server = http.createServer(async (req, res) => {
 					return json(req, res, 400, { error: 'plan must be a boolean' })
 				if (body.fast !== undefined && typeof body.fast !== 'boolean')
 					return json(req, res, 400, { error: 'fast must be a boolean' })
-				const agent: ParkedAgentPatch = {
+				const requestedAgent: ParkedAgentPatch = {
 					model: body.model?.trim() || undefined,
 					effort,
 					plan: body.plan,
 					fast: body.fast
 				}
-				const configureAgent = Object.values(agent).some(value => value !== undefined)
+				const hasRequestedAgent = Object.values(requestedAgent).some(value => value !== undefined)
+				if (body.workflow && hasRequestedAgent) {
+					return json(req, res, 400, { error: 'workflow mode owns model settings; omit model, effort, plan, and fast' })
+				}
 				if (!Array.isArray(attachmentIds) || attachmentIds.some(id => typeof id !== 'string'))
 					return json(req, res, 400, { error: 'attachment ids must be a list of strings' })
 				const attachments = stagedAttachments(STAGED_ATTACHMENTS_DIR, attachmentIds)
 				if (!attachments) return json(req, res, 409, { error: 'an attached file is no longer available; add it again' })
 				// The prompt is optional — a bare `path=` opens an empty workspace, like
 				// Conductor's own New workspace — but *something* has to say where it goes.
-				const prompt = [...attachments.map(attachment => attachment.token), (body.prompt ?? '').trim()]
+				const objective = [...attachments.map(attachment => attachment.token), (body.prompt ?? '').trim()]
 					.filter(Boolean)
 					.join('\n')
-				if (!prompt && !body.repo) return json(req, res, 400, { error: 'need a repo or a prompt' })
+				if (!objective && !body.repo) return json(req, res, 400, { error: 'need a repo or a prompt' })
+				let workflowRoot: Extract<WorkflowRootResult, { ok: true }> | undefined
+				if (body.workflow) {
+					const stored = roleStore.read()
+					if (stored.warning) return json(req, res, 500, { error: stored.warning })
+					const prepared = prepareWorkflowRoot(stored.config, modelCache.list(), objective)
+					if (!prepared.ok)
+						return json(req, res, delegationHttpStatus(prepared.error), { error: prepared.error.message })
+					workflowRoot = prepared
+				}
+				const prompt = workflowRoot?.prompt ?? objective
+				const agent = workflowRoot?.agent ?? requestedAgent
+				const configureAgent = Object.values(agent).some(value => value !== undefined)
 				// Resolve the repo to a real path: an unmatched `path` would silently land
 				// the workspace in whichever repo Conductor happens to list first.
 				const repo = body.repo ? reads.listRepos().find(r => r.name === body.repo) : undefined
@@ -1384,7 +1983,8 @@ const server = http.createServer(async (req, res) => {
 								prompt,
 								body.sendImmediately !== false,
 								attachmentIds,
-								configureAgent ? agent : undefined
+								configureAgent ? agent : undefined,
+								workflowRoot?.role
 							)
 						: null
 				const failed = settled && body.send === true ? await settled : null
@@ -1395,6 +1995,7 @@ const server = http.createServer(async (req, res) => {
 					workspace: reads.getWorkspace(created.id) ?? created,
 					pendingPrompt: prompt || undefined,
 					model: agent.model,
+					workflow: workflowRoot ? { role: WORKFLOW_ROOT_ROLE, model: workflowRoot.resolvedRole.model } : undefined,
 					sent: body.send === true && !!prompt && !failed,
 					configured: body.send === true && configureAgent && !failed,
 					warning:
@@ -1458,7 +2059,13 @@ const server = http.createServer(async (req, res) => {
 			// GET /api/workspaces/:id/sessions
 			const listSessionsIn = routeParam(routes.sessions, req.method, pathname)
 			if (listSessionsIn) {
-				return json(req, res, 200, { sessions: reads.listSessions(listSessionsIn) })
+				const ws = reads.getWorkspace(listSessionsIn)
+				const store = ws ? delegationStore(ws) : null
+				const roles = store?.sessionRoles()
+				return json(req, res, 200, {
+					sessions: reads.listSessions(listSessionsIn),
+					...(roles && Object.keys(roles.sessions).length ? { session_roles: roles.sessions } : {})
+				})
 			}
 
 			// POST /api/workspaces/:id/sessions — open a new chat (Cmd+T) in the workspace
@@ -1893,21 +2500,42 @@ const server = http.createServer(async (req, res) => {
 				})
 			}
 
-			// POST /api/sessions/:id/prompt  { text, agent? } — agent is the phone's staged
-			// settings patch, applied before the prompt so the two can't come apart (and so
-			// both park together when the Mac turns out to be locked).
+			const delegateFrom = routeParam(routes.delegateTask, req.method, pathname)
+			if (delegateFrom) {
+				let body: DelegateTaskRequest
+				try {
+					const parsed = JSON.parse((await readBody(req)) || '{}') as unknown
+					if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object')
+					body = parsed as DelegateTaskRequest
+				} catch {
+					return json(req, res, 400, intakeError('invalid_request', 'could not read delegation request'))
+				}
+				const result = acceptDelegation(delegateFrom, body)
+				return json(req, res, result.ok ? 202 : delegationHttpStatus(result.error), result)
+			}
+
+			// POST /api/sessions/:id/prompt  { text, agent? | workflow? } — ordinary staged
+			// settings or the planning-root role are applied before the prompt so the two
+			// can't come apart (and so both park together when the Mac is locked).
 			const promptTo = routeParam(routes.sendPrompt, req.method, pathname)
 			if (promptTo) {
 				const sessionId = promptTo
-				const body = JSON.parse((await readBody(req)) || '{}') as {
-					text?: string
-					workspaceId?: string
-					agent?: ParkedAgentPatch
-					clientId?: string
-					queue?: boolean
+				const body = JSON.parse((await readBody(req)) || '{}') as Partial<SendPromptRequest>
+				if (body.workflow !== undefined && typeof body.workflow !== 'boolean') {
+					return json(req, res, 400, { error: 'workflow must be a boolean' })
 				}
-				const text = (body.text ?? '').trim()
-				if (!text) return json(req, res, 400, { error: 'empty prompt' })
+				if (body.text !== undefined && typeof body.text !== 'string') {
+					return json(req, res, 400, { error: 'prompt must be a string' })
+				}
+				const rawText = (body.text ?? '').trim()
+				if (!rawText) return json(req, res, 400, { error: 'empty prompt' })
+				if (body.agent !== undefined && (!body.agent || typeof body.agent !== 'object' || Array.isArray(body.agent))) {
+					return json(req, res, 400, { error: 'agent must be a settings object' })
+				}
+				const requestedAgent = body.agent && Object.keys(body.agent).length ? body.agent : undefined
+				if (body.workflow && (requestedAgent || body.queue === true)) {
+					return json(req, res, 400, { error: 'workflow owns agent settings and cannot be queued behind another turn' })
+				}
 				const ws = body.workspaceId
 					? reads.getWorkspace(body.workspaceId)
 					: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
@@ -1915,9 +2543,8 @@ const server = http.createServer(async (req, res) => {
 				// One deadline for the whole request: settings eat into the send's budget
 				// rather than extending it past what the phone said it would wait.
 				const deadline = Date.now() + sendBudget(req)
-				const agent = body.agent && Object.keys(body.agent).length ? body.agent : undefined
 				const queue = body.queue === true
-				if (agent?.effort && !EFFORT_LABELS[agent.effort]) {
+				if (requestedAgent?.effort && !EFFORT_LABELS[requestedAgent.effort]) {
 					return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
 				}
 				// One prompt per intent (src/sendonce.ts). Everything that can *say something
@@ -1930,6 +2557,60 @@ const server = http.createServer(async (req, res) => {
 					)
 				}
 				const answer = await sendOnce.run(body.clientId, async () => {
+					let text = rawText
+					let agent = requestedAgent
+					if (body.workflow) {
+						const session = reads.getSession(sessionId)
+						const hasUserRow = reads.getMessages(sessionId).entries.some(entry => entry.role === 'user')
+						if (!session || session.last_user_message_at || hasUserRow) {
+							return {
+								status: 409,
+								body: {
+									ok: false,
+									strategy: actuator.name,
+									error: 'Workflow mode can only start with a new chat’s first message.'
+								}
+							}
+						}
+						if (session.status === 'working' || session.background_tasks.length) {
+							return {
+								status: 409,
+								body: {
+									ok: false,
+									strategy: actuator.name,
+									error: 'Workflow mode needs an idle new chat.'
+								}
+							}
+						}
+						const stored = roleStore.read()
+						if (stored.warning) {
+							return { status: 500, body: { ok: false, strategy: actuator.name, error: stored.warning } }
+						}
+						const prepared = prepareWorkflowRoot(stored.config, modelCache.list(), rawText)
+						if (!prepared.ok) {
+							return {
+								status: delegationHttpStatus(prepared.error),
+								body: { ok: false, strategy: actuator.name, error: prepared.error.message }
+							}
+						}
+						try {
+							const assigned = assignWorkflowRoot(ws, sessionId, prepared.role, Date.now())
+							if (!assigned.ok) {
+								return { status: 409, body: { ok: false, strategy: actuator.name, error: assigned.error } }
+							}
+						} catch (err) {
+							return {
+								status: 409,
+								body: {
+									ok: false,
+									strategy: actuator.name,
+									error: err instanceof Error ? err.message : String(err)
+								}
+							}
+						}
+						text = prepared.prompt
+						agent = prepared.agent
+					}
 					// A failed first-prompt entry offers the same Retry button as an ordinary
 					// prompt. If staging had been the failure, put its files in place before
 					// that retry reaches the attachment tokens.
@@ -2258,6 +2939,9 @@ server.listen(cfg.port, cfg.host, () => {
 	setInterval(sweepStagedAttachments, STAGED_ATTACHMENT_SWEEP_MS).unref()
 	// Same for prompts parked behind the lock screen — a lock outlives relay restarts.
 	parkedPrompts.start()
+	// Active/failed delegation state lives in each live worktree. Register every
+	// store on startup; the queue resumes side-effect stages at least once.
+	delegationQueue.resume(liveDelegationStores())
 	// A launchd/self-update restart kills the loopback bridge but not Tailscale's
 	// persisted Serve mapping. Rebuild bridges for dev servers that are still up,
 	// and remove this relay's stale mappings for ones that are not.
@@ -2267,9 +2951,10 @@ server.listen(cfg.port, cfg.host, () => {
 	// Keep the phone's public URL reachable — re-registers Funnel when its ingress goes stale after a
 	// network change. No-ops unless managed + public (Funnel) posture (see funnel-watchdog.ts).
 	startFunnelWatchdog()
-	// Watch for turns ending and push them to subscribed phones. Idle (one small local
-	// query per tick) until a device subscribes; see notify.ts.
-	startNotifier(reads)
+	// One base DB read fans out to notification and orchestration listeners. Push can
+	// be disabled or have zero devices without stopping the clock delegated jobs need.
+	startNotifier(reads, sessionPoller)
+	sessionPoller.start()
 	// Watch armed keep-awake windows for their recorded expiry: the helper's restore only
 	// re-allows sleep, so a lid still shut at expiry needs the relay's `pmset sleepnow`
 	// (see nosleep.ts). Also picks a window back up after the relay's own restarts.

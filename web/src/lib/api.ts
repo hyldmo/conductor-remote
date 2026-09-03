@@ -2,17 +2,22 @@
 // `src/shared.ts`). `routes.ts` is stdlib-free for precisely this reason, and
 // `scripts/check-imports.ts` keeps it that way.
 import { routes } from '../../../src/routes.ts'
-import { VIEWING_HEADER } from '../../../src/shared.ts'
+import { responseErrorMessage, VIEWING_HEADER } from '../../../src/shared.ts'
 import type {
 	AgentPatch,
 	AgentResult,
 	ArchiveResult,
 	CloseChatResult,
 	ContinueWorkspaceResult,
+	CreateWorkspaceRequest,
 	CreateWorkspaceResult,
 	DefaultModelResult,
+	DelegateTaskRequest,
+	DelegateTaskResult,
+	DelegationsResponse,
 	DevServerResult,
 	DevServerState,
+	DismissDelegationResult,
 	FilePreviewResponse,
 	LogsResponse,
 	MergeResult,
@@ -31,7 +36,10 @@ import type {
 	RelaySettings,
 	ReposResponse,
 	RestartConductorResult,
+	RolesConfig,
+	RolesResponse,
 	SearchResponse,
+	SendPromptRequest,
 	SendResult,
 	SessionsResponse,
 	SettingsResponse,
@@ -40,6 +48,7 @@ import type {
 	StateResponse,
 	StatusResult,
 	StopResult,
+	UpdateRolesResult,
 	UploadAttachmentResult,
 	WorkspaceDiff,
 	WorkspaceFilesResponse,
@@ -148,8 +157,8 @@ async function api<T>(path: string, opts: RequestInit = {}, timeoutMs = POLL_TIM
 		throw err
 	}
 	if (!res.ok) {
-		const body = (await res.json().catch(() => ({}))) as { error?: string }
-		throw new ApiError(body.error || `HTTP ${res.status}`, res.status)
+		const body = (await res.json().catch(() => ({}))) as { error?: unknown }
+		throw new ApiError(responseErrorMessage(body.error, `HTTP ${res.status}`), res.status)
 	}
 	return res.json() as Promise<T>
 }
@@ -175,8 +184,8 @@ async function upload<T>(path: string, file: File): Promise<T> {
 		throw err
 	}
 	if (!res.ok) {
-		const body = (await res.json().catch(() => ({}))) as { error?: string }
-		throw new ApiError(body.error || `HTTP ${res.status}`, res.status)
+		const body = (await res.json().catch(() => ({}))) as { error?: unknown }
+		throw new ApiError(responseErrorMessage(body.error, `HTTP ${res.status}`), res.status)
 	}
 	return res.json() as Promise<T>
 }
@@ -250,7 +259,8 @@ export const client = {
 	 * The relay retries a failed send itself (and confirms each try against the
 	 * transcript), hence the long budget. `agent` is the staged settings patch,
 	 * riding in the same request so the relay applies it first and the prompt only
-	 * goes if it stuck — and so a locked Mac parks the two together.
+	 * goes if it stuck — and so a locked Mac parks the two together. `workflow`
+	 * replaces that patch with the configured planning role on a pristine chat.
 	 */
 	/**
 	 * `clientId` is the pending bubble's own id, and it is what stops Retry doubling a
@@ -264,11 +274,15 @@ export const client = {
 		workspaceId: string,
 		agent?: AgentPatch,
 		clientId?: string,
-		queue?: boolean
+		queue?: boolean,
+		workflow?: boolean
 	) =>
 		api<SendResult>(
 			routes.sendPrompt.path(sessionId),
-			{ method: routes.sendPrompt.method, body: JSON.stringify({ text, workspaceId, agent, clientId, queue }) },
+			{
+				method: routes.sendPrompt.method,
+				body: JSON.stringify({ text, workspaceId, agent, clientId, queue, workflow } satisfies SendPromptRequest)
+			},
 			SEND_TIMEOUT_MS
 		),
 	/**
@@ -344,6 +358,30 @@ export const client = {
 	/** Rolling subscription limits. The relay caches ordinary reads; refresh is an explicit user action. */
 	planUsage: (refresh = false) =>
 		api<PlanUsageResponse>(`${routes.planUsage.path()}${refresh ? '?refresh=1' : ''}`, {}, 15_000),
+	/** Picker-backed cross-provider roles; reading never opens Conductor's UI. */
+	roles: () => api<RolesResponse>(routes.roles.path()),
+	/** Replace the complete versioned role document after relay-side validation. */
+	updateRoles: (config: RolesConfig) =>
+		api<UpdateRolesResult>(routes.updateRoles.path(), {
+			method: routes.updateRoles.method,
+			body: JSON.stringify(config)
+		}),
+	/** Active and failed delegation jobs, optionally limited to one workspace. */
+	delegations: (workspaceId?: string) =>
+		api<DelegationsResponse>(
+			`${routes.delegations.path()}${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`
+		),
+	/** Accept a job immediately; the relay-owned queue performs the UI work later. */
+	delegateTask: (sessionId: string, request: DelegateTaskRequest) =>
+		api<DelegateTaskResult>(routes.delegateTask.path(sessionId), {
+			method: routes.delegateTask.method,
+			body: JSON.stringify(request)
+		}),
+	/** Remove one failed job while retaining both chats and their role assignments. */
+	dismissDelegation: (delegationId: string) =>
+		api<DismissDelegationResult>(routes.dismissDelegation.path(delegationId), {
+			method: routes.dismissDelegation.method
+		}),
 	/**
 	 * Find a workspace by name or by what was said in its chats, archived included.
 	 * The relay answers from a local index, so this is a poll-budget call even though
@@ -369,18 +407,12 @@ export const client = {
 	 * sends the prompt itself from there (src/firstprompt.ts). `sendImmediately: false`
 	 * holds that send until the worktree is built instead.
 	 */
-	createWorkspace: (
-		repo: string,
-		prompt: string,
-		sendImmediately = true,
-		attachmentIds: string[] = [],
-		agent: AgentPatch = {}
-	) =>
+	createWorkspace: (request: CreateWorkspaceRequest) =>
 		api<CreateWorkspaceResult>(
 			routes.createWorkspace.path(),
 			{
 				method: routes.createWorkspace.method,
-				body: JSON.stringify({ repo, prompt, sendImmediately, attachmentIds, ...agent })
+				body: JSON.stringify(request)
 			},
 			ACTION_TIMEOUT_MS
 		),

@@ -11,6 +11,7 @@ import path from 'node:path'
 import { modelPickerLabel } from './shared.ts'
 
 export interface CachedModelGroup {
+	/** Harness of the chat where this whole picker menu was observed; not ownership of every row. */
 	agentType: string
 	models: string[]
 	/** The user-wide picker row Conductor last showed with its star selected. */

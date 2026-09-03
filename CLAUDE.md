@@ -509,17 +509,65 @@ Two asymmetric halves — keep them separate:
     has `model`, provider-specific effort (`codex_thinking_level` for Codex,
     `claude_effort_level` for Claude), `fast_mode`, `permission_mode` — so only
     the writes touch the UI: effort is a button whose **label is its own value**
-    and which *cycles* (Low → Medium → High → Extra high → Max → Ultracode → wrap),
-    so we press until the label matches; Plan is an `AXCheckBox` with readable
-    state, but an already-matching `permission_mode` suppresses the UI action
-    entirely — models that cannot enter Plan may not render the checkbox when it
-    is off, so an explicit `plan:false` is a desired state rather than an order to
-    find that control; the model picker is an `AXMenu` (labels carry badges — "Opus 5 NEW" —
+    and which *cycles*. The rings are provider-specific: Claude is Low → Medium →
+    High → Extra high → Max → Ultracode, while Codex is an unnamed `none` state →
+    Light → Medium → High → Extra high → Max → Ultra. The relay keeps the stable
+    wire values `none`, `low`…`ultracode` and translates at the actuator boundary.
+    Plan is an `AXCheckBox` with readable state, but an already-matching
+    `permission_mode` suppresses the UI action entirely — models that cannot enter
+    Plan may not render the checkbox when it is off, so an explicit `plan:false`
+    is a desired state rather than an order to find that control; the model picker
+    is an `AXMenu` (labels carry badges — "Opus 5 NEW" —
     so matching prefers exact then unique-prefix, and `GET …/models` enumerates it
-    live rather than hard-coding a list that would rot). **Fast has no readable
-    state and only exists for some models**, so the DB decides whether to press it
-    and a missing button is reported, not ignored. Every change is confirmed
-    against the DB before the API returns success.
+    live rather than hard-coding a list that would rot). **A provider-changing
+    model pick rerenders all the other composer controls**, so `src/agent-config.ts`
+    gives the model its own UI pass, confirms the model and `agent_type` in SQLite,
+    then reacquires and applies only the effort/plan/fast values that differ. Fast
+    has no readable UI state and only exists for some models, so the DB decides
+    whether to press it and a missing button is reported, not ignored. Every change
+    is confirmed against the DB before the API returns success. Conductor's Plan
+    mode is currently unreliable: keep the generic control available, but do not
+    use it as an orchestration role setting, test mechanism, or completion signal.
+
+    **Cross-provider delegation is a persisted sibling-chat queue, never a
+    subagent and never Plan mode** (`src/roles.ts`, `src/delegations.ts`). Global
+    `roles.json` stores an exact cached picker label plus optional effort/fast and
+    preamble; it has no `plan` field, and strict decoding rejects one. Intake also
+    rejects an unavailable label, an unsupported provider family, and a role on the
+    parent's provider before any UI action, then freezes the resolved provider/settings
+    on a worktree-local job. The cache's `agentType` only says which chat exposed the
+    whole picker snapshot; provider identity comes from the exact model label. One
+    producer advances opening → configuring → sending → running →
+    returning behind background-priority `uiTurn` calls. Side effects are at-least-
+    once across a relay restart; a lock or saturated UI queue costs no attempt, and
+    three real failures remain visible until dismissed. Successful job files disappear only after the
+    exact parent user-row receipt, while `.context/delegations/sessions.json` keeps
+    both chats' role chips alive until the worktree is archived.
+
+    **Workflow mode is the explicit root entry point, not Conductor Plan mode**
+    (`src/workflow.ts`, `web/src/components/WorkflowModePill.tsx`). The pill in New
+    workspace and an untouched `+` chat replaces the ordinary model/effort/fast/Plan
+    controls with the configured `planning` role. Both workflow request paths reject
+    an explicit agent patch, validate and freeze that role, and record the user's
+    authorization to call `delegate_task` in the first prompt. `FirstPromptQueue`
+    persists a new workspace's root role with that prompt; an existing-chat send first
+    verifies that the chat is idle and has no user row. Both assign `planning` in the
+    worktree's `sessions.json` before applying model/effort/fast and sending. Plan is
+    absent from the frozen patch, hidden in the Workflow UI, and explicitly forbidden
+    in the root instruction. That instruction also requires `list_roles` + tracked
+    `delegate_task` sibling chats and forbids provider-native Agent/Task/subagents,
+    because those would bypass the cross-provider queue and all three custom UI
+    surfaces. Toggling Workflow off restores the user's unsent ordinary agent choices.
+
+    **Completion owns no timer of its own.** `SessionPoller` performs one base
+    `listSessionStates()` read every two seconds and fans it out to notifications
+    and delegation wakeups even with push disabled or no devices. A delegated child
+    completes only after two stable ticks of `idle` + no process-gated background
+    task + a fresh assistant row after its sent prompt; `error` is the only other
+    outcome. Questions remain successful Baton content. A queued return may have no
+    pending SQLite row at all, so after its first dispatch the job persists the
+    cursor and exact text and only polls for the eventual row—never presses Send a
+    second time merely because `queue_order` is null.
 
     **The phone doesn't push these on tap — the send does.** A tap only *stages*
     the change (`web/src/lib/agentDraft.ts`, keyed by session id and persisted

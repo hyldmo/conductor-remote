@@ -3,6 +3,7 @@ import {
 	isUnconfirmed,
 	loadPending,
 	type PendingMessage,
+	pendingMatchesTranscript,
 	promptIndicator,
 	writePending
 } from '../web/src/lib/pending.ts'
@@ -58,6 +59,18 @@ describe('pending prompts across a reload', () => {
 		const failed = message()
 		writePending([failed])
 		expect(loadPending()).toEqual([failed])
+	})
+
+	test('preserves Workflow intent and reconciles its wrapped transcript row after a reload', () => {
+		const workflow = message({ workflow: true, status: 'sending', error: undefined })
+		writePending([workflow])
+		const [restored] = loadPending()
+
+		expect(restored.workflow).toBe(true)
+		expect(
+			pendingMatchesTranscript(restored, 'Workflow mode is enabled.\n\n## Workflow objective\n\nship the thing')
+		).toBe(true)
+		expect(pendingMatchesTranscript(message(), '## Workflow objective\n\nship the thing')).toBe(false)
 	})
 
 	test('a send caught in flight comes back failed, never still spinning', () => {

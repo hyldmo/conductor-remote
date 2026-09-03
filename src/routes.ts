@@ -108,6 +108,13 @@ export const routes = {
 	pushSubscribe: flat('POST', '/api/push/subscribe'),
 	pushUnsubscribe: flat('POST', '/api/push/unsubscribe'),
 	pushTest: flat('POST', '/api/push/test'),
+	/** Global picker-backed delegated-role definitions. */
+	roles: flat('GET', '/api/roles'),
+	updateRoles: flat('PATCH', '/api/roles'),
+	/** Active and failed jobs; optionally filtered with `?workspaceId=`. */
+	delegations: flat('GET', '/api/delegations'),
+	/** Dismiss one failed job without touching its chats or session-role identity. */
+	dismissDelegation: param('DELETE', '/api/delegations/:delegationId'),
 
 	// ── workspaces ──
 	createWorkspace: flat('POST', '/api/workspaces'),
@@ -145,6 +152,8 @@ export const routes = {
 	uploadAttachment: param('POST', '/api/sessions/:sessionId/attachments'),
 	/** Copy a chat into a fresh tab beside it, as a Conductor attachment (src/attachments.ts). */
 	splitChat: param('POST', '/api/sessions/:sessionId/split'),
+	/** Accept a persisted cross-provider job and return before its UI stages run. */
+	delegateTask: param('POST', '/api/sessions/:sessionId/delegate'),
 	/** Dismiss a prompt parked behind the lock screen (src/parked.ts). */
 	dismissParkedPrompt: param('DELETE', '/api/sessions/:sessionId/prompt')
 } as const

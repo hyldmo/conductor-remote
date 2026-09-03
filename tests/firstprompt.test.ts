@@ -92,6 +92,93 @@ describe('first prompt queue', () => {
 		expect(steps).toEqual(['agent:Sonnet 4.6:undefined:undefined:undefined'])
 	})
 
+	test('persists a workflow root role before configuring and sending its first prompt', async () => {
+		const steps: string[] = []
+		const queue = new FirstPromptQueue(path.join(directory, 'workflow-root.json'), {
+			inspect: () => ({
+				phase: 'setting_up',
+				sessionId: 'chat-workflow',
+				alreadySent: false,
+				worktree: '/tmp/workflow-root'
+			}),
+			assignRole: async (_workspaceId, sessionId, role, assignedAt) => {
+				steps.push(`role:${sessionId}:${role}:${assignedAt}`)
+				return { ok: true }
+			},
+			setAgent: async () => {
+				steps.push('agent')
+				return { ok: true }
+			},
+			send: async () => {
+				steps.push('prompt')
+				return { ok: true }
+			}
+		})
+
+		void queue.enqueue('ws-workflow', 'Run the workflow.', true, [], { model: 'Fable 5.1' }, 'planning')
+		await flush()
+
+		expect(steps).toHaveLength(3)
+		expect(steps[0]).toMatch(/^role:chat-workflow:planning:\d+$/)
+		expect(steps.slice(1)).toEqual(['agent', 'prompt'])
+		expect(queue.get('ws-workflow')).toBeNull()
+	})
+
+	test('does not repeat a workflow root assignment after a relay restart', async () => {
+		const file = path.join(directory, 'workflow-root-restart.json')
+		let assignments = 0
+		const first = new FirstPromptQueue(file, {
+			inspect: () => ({
+				phase: 'ready',
+				sessionId: 'chat-workflow-restart',
+				alreadySent: false,
+				worktree: '/tmp/workflow-root-restart'
+			}),
+			assignRole: async () => {
+				assignments += 1
+				return { ok: true }
+			},
+			setAgent: async () => ({ ok: false, blocked: true }),
+			send: async () => ({ ok: true })
+		})
+
+		void first.enqueue('ws-workflow-restart', 'Run it.', true, [], { model: 'Fable 5.1' }, 'planning')
+		await flush()
+		expect(assignments).toBe(1)
+		expect(first.get('ws-workflow-restart')).toMatchObject({
+			sessionRole: 'planning',
+			sessionRoleAssigned: true
+		})
+		vi.clearAllTimers()
+
+		const steps: string[] = []
+		const resumed = new FirstPromptQueue(file, {
+			inspect: () => ({
+				phase: 'ready',
+				sessionId: 'chat-workflow-restart',
+				alreadySent: false,
+				worktree: '/tmp/workflow-root-restart'
+			}),
+			assignRole: async () => {
+				steps.push('role')
+				return { ok: true }
+			},
+			setAgent: async () => {
+				steps.push('agent')
+				return { ok: true }
+			},
+			send: async () => {
+				steps.push('prompt')
+				return { ok: true }
+			}
+		})
+
+		resumed.start()
+		await flush()
+		expect(steps).toEqual(['agent', 'prompt'])
+		expect(resumed.get('ws-workflow-restart')).toBeNull()
+	})
+
 	test('upgrades a persisted model-only entry into an agent patch', async () => {
 		const models: string[] = []
 		const file = path.join(directory, 'legacy-model.json')

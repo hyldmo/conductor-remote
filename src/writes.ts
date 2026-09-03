@@ -49,6 +49,7 @@ export type UiPriority = 'interactive' | 'background'
 
 /** Waiting runs past this are refused rather than queued. */
 const MAX_UI_QUEUE = 4
+const UI_BUSY = "Conductor's UI is busy"
 
 const uiPriorityScope = new AsyncLocalStorage<UiPriority>()
 
@@ -60,10 +61,15 @@ export function withUiPriority<T>(priority: UiPriority, fn: () => Promise<T>): P
 export class UiBusyError extends Error {
 	readonly waiting: number
 	constructor(waiting: number) {
-		super(`Conductor's UI is busy — ${waiting} operation${waiting === 1 ? '' : 's'} already queued. Try again shortly.`)
+		super(`${UI_BUSY} — ${waiting} operation${waiting === 1 ? '' : 's'} already queued. Try again shortly.`)
 		this.name = 'UiBusyError'
 		this.waiting = waiting
 	}
+}
+
+/** Writes stringify `UiBusyError`, so background queues recognize both forms. */
+export function uiBusy(error: string | undefined): boolean {
+	return (error ?? '').startsWith(UI_BUSY)
 }
 
 interface UiWaiter {
@@ -741,6 +747,7 @@ my joinInstantHotspot()`.trim()
  * press toward, and the normalized DB value to confirm against.
  */
 export const EFFORT_LABELS: Record<string, string> = {
+	none: 'None',
 	low: 'Low',
 	medium: 'Medium',
 	high: 'High',
@@ -749,15 +756,34 @@ export const EFFORT_LABELS: Record<string, string> = {
 	ultracode: 'Ultracode'
 }
 
+const CODEX_EFFORT_LABELS: Record<string, string> = {
+	none: '__UNNAMED_EFFORT__',
+	low: 'Light',
+	medium: 'Medium',
+	high: 'High',
+	xhigh: 'Extra high',
+	max: 'Max',
+	ultracode: 'Ultra'
+}
+
+/** Translate the stable wire value to the provider's measured composer label. */
+export function effortUiLabel(effort: string, agentType?: string | null): string | undefined {
+	if (agentType === 'codex') return CODEX_EFFORT_LABELS[effort]
+	if (effort === 'none') return undefined
+	return EFFORT_LABELS[effort]
+}
+
 /** What a phone can change about the agent before (or instead of) sending a prompt. */
 export interface AgentOptions {
-	/** A normalized effort value (low…ultracode), not the UI label. */
+	/** A normalized effort value (none, low…ultracode), not the UI label. */
 	effort?: string
 	plan?: boolean
 	/** Fast mode exposes no readable state, so pass `true` only when it must flip. */
 	toggleFast?: boolean
 	/** The model picker's menu label, e.g. "Opus 5" or "Sonnet 4.6". */
 	model?: string
+	/** Current provider after any model-only pass; used for provider-specific labels. */
+	agentType?: string | null
 }
 
 /**
@@ -781,7 +807,7 @@ export function planSettingForUi(
  * so a half-applied change is reported rather than assumed.
  */
 export async function setAgentOptions(target: SendTarget, opts: AgentOptions): Promise<SendResult> {
-	if (opts.effort && !EFFORT_LABELS[opts.effort]) {
+	if (opts.effort && !effortUiLabel(opts.effort, opts.agentType)) {
 		return { ok: false, strategy: 'applescript', error: `unknown effort level ${opts.effort}` }
 	}
 	const script = `
@@ -799,7 +825,7 @@ return "ok"`.trim()
 					env: {
 						...process.env,
 						...targetEnvironment,
-						RELAY_SET_EFFORT: opts.effort ? EFFORT_LABELS[opts.effort] : '',
+						RELAY_SET_EFFORT: opts.effort ? effortUiLabel(opts.effort, opts.agentType) : '',
 						RELAY_SET_PLAN: opts.plan === undefined ? '' : opts.plan ? '1' : '0',
 						RELAY_SET_FAST: opts.toggleFast ? '1' : '',
 						RELAY_SET_MODEL: opts.model ?? ''

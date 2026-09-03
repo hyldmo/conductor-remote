@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test, vi } from 'vitest'
 import { AgentControls } from '../web/src/components/AgentControls.tsx'
+import { WorkflowModePill } from '../web/src/components/WorkflowModePill.tsx'
 import { supportsPlanMode } from '../web/src/lib/agent.ts'
 
 function controls(agentType: string | null, model: string | null): string {
@@ -37,5 +38,33 @@ describe('agent controls', () => {
 	])('hides Plan outside Claude (%s, %s)', (agentType, model) => {
 		expect(supportsPlanMode(agentType, model)).toBe(false)
 		expect(controls(agentType, model)).not.toContain('aria-label="Plan mode')
+	})
+
+	test('puts Workflow before the disabled agent settings and leaves it reversible', () => {
+		const html = renderToStaticMarkup(
+			<AgentControls
+				model="Fable 5.1"
+				providerModel="Fable 5.1"
+				agentType="claude"
+				models={['Fable 5.1']}
+				fast={false}
+				effort="max"
+				disabled
+				hidePlan
+				beforeModel={<WorkflowModePill active onChange={vi.fn()} />}
+				onModelChange={vi.fn()}
+				onFastChange={vi.fn()}
+				onEffortChange={vi.fn()}
+				onPlanChange={vi.fn()}
+			/>
+		)
+		const buttons = html.match(/<button[^>]*>/g) ?? []
+		expect(buttons.find(button => button.includes('Change model'))).toContain('disabled')
+		expect(buttons.find(button => button.includes('Fast mode'))).toContain('disabled')
+		expect(buttons.find(button => button.includes('Reasoning effort'))).toContain('disabled')
+		expect(buttons.find(button => button.includes('Workflow mode'))).not.toContain('disabled')
+		expect(html).not.toContain('aria-label="Plan mode')
+		expect(html.indexOf('aria-label="Workflow mode')).toBeLessThan(html.indexOf('aria-label="Change model'))
+		expect(html.indexOf('aria-label="Workflow mode')).toBeLessThan(html.indexOf('aria-label="Fast mode'))
 	})
 })

@@ -3,7 +3,8 @@ import { Check, ChevronDown, LoaderCircle, Paperclip, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
-import { useModelCatalog, useModelDefaults, useRepos } from '../hooks.ts'
+import { modelAgentType } from '../../../src/shared.ts'
+import { useModelCatalog, useModelDefaults, useRepos, useRoles } from '../hooks.ts'
 import { defaultEffortForModel, nextEffortOverride, supportsPlanMode } from '../lib/agent.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
@@ -14,6 +15,7 @@ import type { AgentPatch, DraftAttachment } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentControls } from './AgentControls.tsx'
 import { RepoAvatar } from './ui.tsx'
+import { WorkflowModePill } from './WorkflowModePill.tsx'
 
 /** The "Send immediately" choice, remembered for next time — a preference, not state. */
 const SEND_NOW_KEY = 'conductor-remote-send-immediately'
@@ -72,6 +74,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const { data } = useRepos()
 	const modelCatalog = useModelCatalog()
 	const modelDefaults = useModelDefaults()
+	const roles = useRoles()
 	const lastNewWorkspaceRepo = useApp(s => s.lastNewWorkspaceRepo)
 	const setLastNewWorkspaceRepo = useApp(s => s.setLastNewWorkspaceRepo)
 	const [repo, setRepo] = useState(lastNewWorkspaceRepo)
@@ -95,6 +98,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const setFocusedDraft = useApp(s => s.setFocusedDraft)
 	const setPrompt = (text: string) => setDraft(NEW_WORKSPACE_DRAFT, text)
 	const [agent, setAgent] = useState<AgentPatch>({})
+	const [workflowMode, setWorkflowMode] = useState(false)
 	const [pickerOpen, setPickerOpen] = useState(false)
 	const [sendNow, setSendNow] = useState(loadSendNow)
 	const [busy, setBusy] = useState(false)
@@ -134,12 +138,23 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const hasInitialPrompt = !!prompt.trim() || readyAttachments.length > 0
 	const models = modelCatalog.data?.groups.flatMap(group => group.models) ?? []
 	const defaultModel = modelCatalog.data?.defaultModel
-	const selectedModel = agent.model ?? defaultModel ?? null
-	const planAvailable = supportsPlanMode(null, selectedModel)
+	const planningRole = roles.data?.roles.planning
+	const planningIssue = roles.data?.issues.find(issue => issue.role === 'planning')
+	const workflowProblem = roles.isError
+		? 'Could not load delegated roles.'
+		: roles.data?.warning
+			? roles.data.warning
+			: roles.data && !planningRole
+				? 'Workflow mode needs a configured planning role.'
+				: planningIssue?.error.message
+	const workflowReady = !!planningRole && !workflowProblem
+	const ordinaryModel = agent.model ?? defaultModel ?? null
+	const selectedModel = workflowMode ? (planningRole?.model ?? 'Planning role') : ordinaryModel
+	const planAvailable = supportsPlanMode(null, ordinaryModel)
 	// Draw the value this model will inherit without putting it in `agent`: an empty
 	// patch is what lets Conductor own the default when the workspace is created.
-	const inheritedEffort = defaultEffortForModel(selectedModel, modelDefaults.data?.defaultEfforts)
-	const displayedEffort = agent.effort ?? inheritedEffort
+	const inheritedEffort = defaultEffortForModel(ordinaryModel, modelDefaults.data?.defaultEfforts)
+	const displayedEffort = workflowMode ? planningRole?.effort : (agent.effort ?? inheritedEffort)
 	const anyAgentChoice = Object.keys(agent).length > 0
 	const stageAgent = useCallback(
 		(patch: AgentPatch) =>
@@ -242,17 +257,25 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 
 	const create = async () => {
 		const text = prompt.trim()
-		if (!repo || busy || uploading || attachmentError || !online) return
+		if (
+			!repo ||
+			busy ||
+			uploading ||
+			attachmentError ||
+			!online ||
+			(workflowMode && (!hasInitialPrompt || !workflowReady))
+		)
+			return
 		setBusy(true)
 		setError(null)
 		try {
-			const r = await client.createWorkspace(
+			const r = await client.createWorkspace({
 				repo,
-				text,
-				sendNow,
-				readyAttachments.flatMap(attachment => (attachment.stageId ? [attachment.stageId] : [])),
-				agent
-			)
+				prompt: text,
+				sendImmediately: sendNow,
+				attachmentIds: readyAttachments.flatMap(attachment => (attachment.stageId ? [attachment.stageId] : [])),
+				...(workflowMode ? { workflow: true } : agent)
+			})
 			if (!r.ok || !r.workspaceId) {
 				setError(r.error ?? 'could not create the workspace')
 				return
@@ -391,7 +414,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							if (useApp.getState().focusedDraft === NEW_WORKSPACE_DRAFT) setFocusedDraft(null)
 							requestPrefsFlush()
 						}}
-						placeholder="What should the agent do? (optional)"
+						placeholder={workflowMode ? 'What should the workflow accomplish?' : 'What should the agent do? (optional)'}
 						rows={6}
 						// biome-ignore lint/a11y/noAutofocus: the sheet exists only to type this
 						autoFocus
@@ -416,20 +439,20 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 					<div className="mt-1 flex items-start gap-1 px-1">
 						<AgentControls
 							model={selectedModel ?? 'Model'}
-							providerModel={selectedModel}
-							agentType={null}
+							providerModel={workflowMode ? (planningRole?.model ?? null) : selectedModel}
+							agentType={workflowMode && planningRole ? (modelAgentType(planningRole.model) ?? null) : null}
 							models={models}
 							modelsFetching={modelCatalog.isFetching}
 							modelsError={modelCatalog.isError}
 							defaultModel={defaultModel}
-							fast={agent.fast}
+							fast={workflowMode ? planningRole?.fast : agent.fast}
 							effort={displayedEffort}
-							plan={agent.plan}
+							plan={workflowMode ? undefined : agent.plan}
 							showEmptyEffort
-							modelStaged={agent.model !== undefined}
-							fastStaged={agent.fast !== undefined}
-							effortStaged={agent.effort !== undefined}
-							planStaged={agent.plan !== undefined}
+							modelStaged={!workflowMode && agent.model !== undefined}
+							fastStaged={!workflowMode && agent.fast !== undefined}
+							effortStaged={!workflowMode && agent.effort !== undefined}
+							planStaged={!workflowMode && agent.plan !== undefined}
 							onModelChange={model =>
 								stageAgent({ model: model === (agent.model ?? defaultModel) ? undefined : model })
 							}
@@ -440,7 +463,28 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							onPlanChange={() =>
 								stageAgent({ plan: agent.plan === undefined ? true : agent.plan ? false : undefined })
 							}
-							status={anyAgentChoice ? 'Applies when the workspace opens' : undefined}
+							disabled={workflowMode}
+							hidePlan={workflowMode}
+							beforeModel={
+								<WorkflowModePill
+									active={workflowMode}
+									onChange={active => {
+										setWorkflowMode(active)
+										setError(null)
+									}}
+								/>
+							}
+							status={
+								workflowMode
+									? workflowReady
+										? 'Planning root · delegates configured roles into sibling chats'
+										: roles.isLoading
+											? 'Loading the planning role…'
+											: undefined
+									: anyAgentChoice
+										? 'Applies when the workspace opens'
+										: undefined
+							}
 						/>
 						<button
 							type="button"
@@ -452,6 +496,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							<Paperclip size={17} />
 						</button>
 					</div>
+					{workflowMode && workflowProblem ? <div className="px-2 pb-1 text-xs text-del">{workflowProblem}</div> : null}
 					{draggingFiles ? (
 						<div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-xl border border-dashed border-accent bg-accent-soft/90 text-sm font-medium text-accent">
 							Drop files to attach
@@ -501,10 +546,25 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				<button
 					type="button"
 					onClick={create}
-					disabled={!repo || busy || uploading || attachmentError || !online}
+					disabled={
+						!repo ||
+						busy ||
+						uploading ||
+						attachmentError ||
+						!online ||
+						(workflowMode && (!hasInitialPrompt || !workflowReady))
+					}
 					className="w-full rounded-2xl bg-accent px-4 py-3 text-[15px] font-semibold text-bg transition active:scale-[0.985] disabled:opacity-40"
 				>
-					{busy ? 'Creating…' : hasInitialPrompt ? 'Create & start' : 'Create empty workspace'}
+					{busy
+						? workflowMode
+							? 'Starting workflow…'
+							: 'Creating…'
+						: workflowMode
+							? 'Start workflow'
+							: hasInitialPrompt
+								? 'Create & start'
+								: 'Create empty workspace'}
 				</button>
 			</div>
 		</div>,

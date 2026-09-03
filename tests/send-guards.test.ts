@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { withoutWindowEvidence } from '../src/shared.ts'
-import { lockBlocked, retryWontHelp, sendNeverStarted } from '../src/writes.ts'
+import { lockBlocked, retryWontHelp, sendNeverStarted, uiBusy } from '../src/writes.ts'
 
 /**
  * The three predicates that decide what `deliverPrompt` does with a failed run.
@@ -92,5 +92,13 @@ describe('send failure predicates', () => {
 		for (const error of LOCK_ERRORS) expect(retryWontHelp(error), error).toBe(false)
 		expect(retryWontHelp(composerHeld)).toBe(false)
 		expect(retryWontHelp(undefined)).toBe(false)
+	})
+
+	test('recognizes the relay-owned UI saturation error through retry annotations', () => {
+		const busy = "Conductor's UI is busy — 4 operations already queued. Try again shortly."
+		expect(uiBusy(busy)).toBe(true)
+		expect(uiBusy(`${busy} (tried 2×)`)).toBe(true)
+		expect(uiBusy(ERRORS.timeout)).toBe(false)
+		expect(uiBusy(undefined)).toBe(false)
 	})
 })
