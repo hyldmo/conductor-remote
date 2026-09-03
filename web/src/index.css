@@ -156,9 +156,9 @@
 		@apply size-2.5 shrink-0 rounded-full bg-faint;
 	}
 	/**
-	 * The "agent is working" indicator: a spinning ring in the dot's own colour,
-	 * standing in for the dot itself. A pulsing halo was too easy to miss on a
-	 * phone — motion around a fixed outline reads at a glance where a fading
+	 * The ongoing-work indicator (agent or CI): a spinning ring in the dot's own
+	 * colour, standing in for the dot itself. A pulsing halo was too easy to miss
+	 * on a phone — motion around a fixed outline reads at a glance where a fading
 	 * shadow didn't. Wider than the `.dot` it replaces so the arc is legible;
 	 * `--spin-color` is set per instance (defaults to the working amber), and the
 	 * centre stays transparent so callers over a busy backdrop can fill it.
