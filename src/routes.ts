@@ -68,6 +68,10 @@ export const routes = {
 	repos: flat('GET', '/api/repos'),
 	/** Picker labels the relay has previously read from Conductor, grouped by harness. */
 	modelCatalog: flat('GET', '/api/models'),
+	/** Provider-specific defaults from Conductor's user settings TOML. */
+	modelDefaults: flat('GET', '/api/models/defaults'),
+	/** Update one or both provider defaults in Conductor's user settings TOML. */
+	updateModelDefaults: flat('PATCH', '/api/models/defaults'),
 	/** Rolling subscription limits, read without a model request from each provider CLI. */
 	planUsage: flat('GET', '/api/usage'),
 	repoIcon: param('GET', '/api/repos/:repo/icon'),

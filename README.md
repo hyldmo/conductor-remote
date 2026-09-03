@@ -232,8 +232,10 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   repo, branch, model, context %, and an unread mark on any workspace whose chats
   finished something you haven't looked at — reading it *on the phone* clears it,
   which Conductor itself only does when you open the workspace on the Mac.
-- ✅ **Plan usage** for Claude Code and Codex — rolling allowance percentages and
-  reset times from their structured CLI protocols, with no model request.
+- ✅ **Models** panel — change Claude Code and Codex defaults for new chats, written
+  to `~/.conductor/settings.toml`, and see rolling plan usage from their structured
+  CLI protocols with no model request. Cursor Agent and OpenCode keep their own
+  provider cards without pretending local accounting is a subscription limit.
 - ✅ Live transcript per session (assistant text, tool calls, queued messages),
   incremental polling.
 - ✅ Diff vs the workspace's target branch (file list + colorized patch,
@@ -416,7 +418,7 @@ A per-file map, with what each one owns, is in
 - The write path can drive your real agents — keep the token private and the
   bind address off untrusted networks.
 - The relay reads Conductor's SQLite DB **read-only** and never writes to it.
-  Your Conductor data stays on your machine. Opening Plan usage makes the already
+  Your Conductor data stays on your machine. Opening Models makes the already
   authenticated Claude/Codex CLI request its account-limit snapshot; it sends no
   prompt, transcript, or workspace data.
 

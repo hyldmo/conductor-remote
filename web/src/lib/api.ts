@@ -16,6 +16,7 @@ import type {
 	MergeResult,
 	MessagesResponse,
 	ModelCatalogResponse,
+	ModelDefaultsResponse,
 	ModelsResult,
 	NewChatResult,
 	NoSleepResult,
@@ -305,6 +306,13 @@ export const client = {
 	repos: () => api<ReposResponse>(routes.repos.path()),
 	/** Model-picker labels the relay has already read from Conductor. This never opens the desktop UI. */
 	modelCatalog: () => api<ModelCatalogResponse>(routes.modelCatalog.path()),
+	/** Provider-specific new-chat effort defaults from Conductor's user settings TOML. */
+	modelDefaults: () => api<ModelDefaultsResponse>(routes.modelDefaults.path()),
+	patchModelDefaults: (patch: Partial<ModelDefaultsResponse['defaultEfforts']>) =>
+		api<ModelDefaultsResponse>(routes.updateModelDefaults.path(), {
+			method: routes.updateModelDefaults.method,
+			body: JSON.stringify(patch)
+		}),
 	/** Rolling subscription limits. The relay caches ordinary reads; refresh is an explicit user action. */
 	planUsage: (refresh = false) =>
 		api<PlanUsageResponse>(`${routes.planUsage.path()}${refresh ? '?refresh=1' : ''}`, {}, 15_000),
