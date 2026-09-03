@@ -31,6 +31,11 @@ function render(pr_status: Workspace['pr_status']): string {
 	)
 }
 
+function bannerFor(id: string) {
+	const ws = { id, pr_status: 'merged', pr_number: 12, pr_url: 'https://github.com/o/r/pull/12' } as Workspace
+	return MergeBanner({ ws, local: { dirty: false, unpushed: false } })
+}
+
 describe('the merge bar', () => {
 	it('offers the merge on a green PR', () => {
 		const html = render('mergeable')
@@ -60,6 +65,13 @@ describe('the merge bar', () => {
 		expect(html).toContain('>Continue<')
 		expect(html).toContain('Continue on a new branch with the same chats')
 		expect(html).toContain('https://github.com/o/r/pull/12')
+	})
+
+	it('drops local banner state when the sidebar switches workspaces', () => {
+		// React remounts a child when its key changes. The receipt, error, busy and
+		// confirmation state all live in this keyed child, not in the stable wrapper.
+		expect(bannerFor('w1').key).toBe('w1')
+		expect(bannerFor('w2').key).toBe('w2')
 	})
 
 	it('draws nothing when there is no PR and nothing to push', () => {

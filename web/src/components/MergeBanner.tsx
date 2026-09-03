@@ -96,6 +96,23 @@ export function MergeBanner({
 	local?: LocalState
 	sessionId?: string | null
 }) {
+	// React Router keeps SessionView mounted when only `/w/:workspaceId` changes.
+	// Put the stateful half behind the workspace id so a Continue receipt, error,
+	// or half-finished Merge confirmation from one sidebar row cannot follow the
+	// diff rail into the next workspace. Polls and chat-tab changes keep the same
+	// key, so their live workspace state still updates without losing local UI.
+	return <WorkspaceMergeBanner key={ws.id} ws={ws} local={local} sessionId={sessionId} />
+}
+
+function WorkspaceMergeBanner({
+	ws,
+	local,
+	sessionId
+}: {
+	ws: Workspace
+	local?: LocalState
+	sessionId?: string | null
+}) {
 	const queryClient = useQueryClient()
 	const [confirming, setConfirming] = useState(false)
 	const [busy, setBusy] = useState(false)
