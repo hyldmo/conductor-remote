@@ -20,10 +20,12 @@ function splitTool(seen: { body?: Record<string, unknown> }) {
 	const call: RelayCall = async <T>(route: string, opts?: { body?: unknown }) => {
 		if (route === routes.splitChat.path('chat-1')) {
 			seen.body = opts?.body as Record<string, unknown>
+			const destination = seen.body?.destination === 'workspace' ? 'workspace' : 'chat'
 			return {
 				ok: true,
+				destination,
 				sessionId: 'chat-2',
-				workspaceId: 'ws-1',
+				workspaceId: destination === 'workspace' ? 'ws-2' : 'ws-1',
 				text: 'Forked from @⟦x⟧(y)',
 				attachment: {
 					name: 'Transcript of chat.md',
@@ -69,6 +71,19 @@ describe('splitting a chat at an earlier message', () => {
 		const seen: { body?: Record<string, unknown> } = {}
 		await splitTool(seen).run({ session_id: 'chat-1', prompt: 'take it from here' })
 		expect(seen.body?.throughRowid).toBeUndefined()
+		expect(seen.body?.destination).toBe('chat')
+	})
+
+	test('can carry the same transcript into a workspace with the current code', async () => {
+		const seen: { body?: Record<string, unknown> } = {}
+		const output = await splitTool(seen).run({
+			session_id: 'chat-1',
+			prompt: 'take it from here',
+			new_workspace: true
+		})
+		expect(seen.body?.destination).toBe('workspace')
+		expect(output).toContain('workspace_id: ws-2')
+		expect(output).toContain('current code carried across')
 	})
 
 	test('rejects a raw row id in place of a cursor', async () => {

@@ -13,6 +13,7 @@ import { ConductorDb } from './db.ts'
 import { DevServerController } from './dev-server.ts'
 import { isAllowedPreviewPath, parseFileReference } from './file-preview.ts'
 import { FirstPromptQueue } from './firstprompt.ts'
+import { captureForkWorkspace, materializeForkWorkspace, releaseForkWorkspace } from './fork-workspace.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { listSourceFiles, workspaceDiff } from './git.ts'
 import {
@@ -158,6 +159,44 @@ const mcpTools = createTools(async <T>(route: string, opts: CallOptions = {}): P
 setRestartGuard(() => !reads.listWorkspaces().some(w => w.session_status === 'working'))
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
+/**
+ * A deep link has no request id to correlate with the workspace row it creates. Keep
+ * relay-originated creations single-flight until that row appears, or two simultaneous
+ * requests can each claim the other's workspace. Manual desktop creation can still
+ * happen in the gap, so callers also narrow the fresh row to the requested repo.
+ */
+let workspaceCreationTail = Promise.resolve()
+
+async function createWorkspaceAndRead(
+	prompt: string,
+	repoPath: string | null,
+	repoName?: string
+): Promise<{ result: SendResult; created?: Workspace }> {
+	const previous = workspaceCreationTail
+	let release: () => void = () => {}
+	workspaceCreationTail = new Promise<void>(resolve => {
+		release = resolve
+	})
+	await previous
+	try {
+		const before = new Set(reads.listWorkspaces().map(w => w.id))
+		const result = await createWorkspace(prompt, repoPath)
+		if (!result.ok) return { result }
+		// The deep link is fire-and-forget, so the new row is the only proof it worked.
+		// Creating a worktree takes a beat longer than opening a chat does.
+		for (let attempt = 0; attempt < 40; attempt++) {
+			await sleep(500)
+			const created = reads
+				.listWorkspaces()
+				.find(workspace => !before.has(workspace.id) && (!repoName || workspace.repo_name === repoName))
+			if (created) return { result, created }
+		}
+		return { result }
+	} finally {
+		release()
+	}
+}
 
 /**
  * Has Conductor taken ownership of the prompt yet? The receipt everything below is
@@ -1306,16 +1345,8 @@ const server = http.createServer(async (req, res) => {
 				const repo = body.repo ? reads.listRepos().find(r => r.name === body.repo) : undefined
 				if (body.repo && !repo) return json(req, res, 404, { error: `unknown repo ${body.repo}` })
 				if (repo && !repo.root_path) return json(req, res, 409, { error: `${repo.name} has no checkout path` })
-				const before = new Set(reads.listWorkspaces().map(w => w.id))
-				const result = await createWorkspace(prompt, repo?.root_path ?? null)
+				const { result, created } = await createWorkspaceAndRead(prompt, repo?.root_path ?? null, repo?.name)
 				if (!result.ok) return json(req, res, 502, result)
-				// The deep link is fire-and-forget, so the new row is the only proof it worked.
-				// Creating a worktree takes a beat longer than opening a chat does.
-				let created: Workspace | undefined
-				for (let attempt = 0; attempt < 40 && !created; attempt++) {
-					await sleep(500)
-					created = reads.listWorkspaces().find(w => !before.has(w.id))
-				}
 				if (!created) {
 					return json(req, res, 502, {
 						ok: false,
@@ -1939,11 +1970,13 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// POST /api/sessions/:id/split
-			//      { prompt?, includeThinking?, includeTools?, throughRowid?, onlyRowid? }
+			//      { prompt?, includeThinking?, includeTools?, throughRowid?, onlyRowid?, destination? }
 			//
-			// Conductor's own "Fork to new tab" resumes the agent's real session. This copies
-			// the conversation instead, as a Conductor attachment, which is the cut that
-			// survives being read by a *different* agent: prose and reasoning, no tool churn.
+			// Conductor's own tab fork resumes the agent's real session. This copies the
+			// conversation instead, as a Conductor attachment, which is the cut that survives
+			// being read by a *different* agent: prose and reasoning, no tool churn. Its
+			// destination can be another tab over the same files, or a new workspace whose
+			// Git layers are restored from the source's current worktree snapshot.
 			// Two reasons it exists at all. A tangent asked inside a running chat leaves three
 			// conversations interleaved in one tab, which reads badly for everyone afterwards;
 			// and Conductor's fork lives on a hover menu over one message, which an agent
@@ -1951,9 +1984,10 @@ const server = http.createServer(async (req, res) => {
 			// gets more expensive the longer the chat is.
 			//
 			// It stops before sending. The composed prompt goes out through the ordinary send
-			// route so it inherits the retry loop, the transcript confirm and the parked queue
-			// — and because ⌘T plus a send is two UI turns, which together outlast any caller's
-			// budget (28s + 55s against the MCP client's 75s).
+			// route so it inherits the retry loop, the transcript confirm and the parked queue.
+			// For a tab, that also keeps ⌘T plus a send from becoming two UI turns inside one
+			// request (28s + 55s against the MCP client's 75s); for a workspace it leaves the
+			// staged handoff as the same editable draft the phone already presents for a tab.
 			const splitFrom = routeParam(routes.splitChat, req.method, pathname)
 			if (splitFrom) {
 				const sessionId = splitFrom
@@ -1964,6 +1998,7 @@ const server = http.createServer(async (req, res) => {
 					includeTools?: boolean
 					throughRowid?: number
 					onlyRowid?: number
+					destination?: 'chat' | 'workspace'
 				}
 				// `active_session_id` is how every other route resolves this, and it would only
 				// ever find the tab on screen. Splitting a chat you are not looking at is the
@@ -1974,6 +2009,10 @@ const server = http.createServer(async (req, res) => {
 				if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
 				const source = reads.listSessions(ws.id).find(s => s.id === sessionId)
 				if (!source) return json(req, res, 404, { error: 'chat not found in that workspace' })
+				const destination = body.destination ?? 'chat'
+				if (destination !== 'chat' && destination !== 'workspace') {
+					return json(req, res, 400, { error: 'destination must be chat or workspace' })
+				}
 
 				const format = { thinking: body.includeThinking !== false, tools: body.includeTools === true }
 				const { entries } = reads.getMessages(sessionId)
@@ -2022,11 +2061,93 @@ const server = http.createServer(async (req, res) => {
 					'',
 					''
 				].join('\n')
-				const attachment = writeAttachment(ws.worktree, `Transcript of ${title}.md`, header + rendered.text)
+				const transcript = header + rendered.text
+
+				if (destination === 'workspace') {
+					if (!(ws.repo_name && ws.repo_root)) {
+						return json(req, res, 409, { error: 'the source workspace has no repository checkout to fork' })
+					}
+
+					let snapshot: Awaited<ReturnType<typeof captureForkWorkspace>>
+					try {
+						snapshot = await captureForkWorkspace(ws.worktree)
+					} catch (err) {
+						const reason = err instanceof Error ? err.message : 'Git could not capture the worktree'
+						return json(req, res, 502, { error: `Could not snapshot the source workspace: ${reason}` })
+					}
+
+					let staged: ReturnType<typeof stageAttachment> | undefined
+					let materialized = false
+					let created: Workspace | undefined
+					try {
+						staged = stageAttachment(STAGED_ATTACHMENTS_DIR, `Transcript of ${title}.md`, Buffer.from(transcript))
+						const creation = await createWorkspaceAndRead('', ws.repo_root, ws.repo_name)
+						if (!creation.result.ok) return json(req, res, 502, creation.result)
+						created = creation.created
+						if (!created) {
+							return json(req, res, 502, {
+								error: 'Conductor didn’t create the fork workspace — check it’s running and not showing a dialog.'
+							})
+						}
+
+						// The DB row can precede `.git` by a tick. Install the snapshot at the
+						// first verified worktree path, before Conductor starts the new agent.
+						let target = reads.getWorkspace(created.id) ?? created
+						for (let attempt = 0; attempt < 20 && !target.worktree; attempt++) {
+							await sleep(250)
+							target = reads.getWorkspace(created.id) ?? target
+						}
+						if (!target.worktree) throw new Error('the new workspace worktree path never became available')
+						await materializeForkWorkspace(snapshot, target.worktree)
+						materializeStagedAttachments(STAGED_ATTACHMENTS_DIR, target.worktree, [staged.stageId])
+						materialized = true
+						discardStagedAttachment(STAGED_ATTACHMENTS_DIR, staged.stageId)
+
+						let destinationSession = reads.listSessions(created.id)[0]
+						for (let attempt = 0; attempt < 12 && !destinationSession; attempt++) {
+							await sleep(250)
+							destinationSession = reads.listSessions(created.id)[0]
+						}
+						return json(req, res, 200, {
+							ok: true,
+							destination,
+							sessionId: destinationSession?.id ?? null,
+							workspaceId: created.id,
+							text: attachmentPrompt(staged.token, body.prompt),
+							attachment: {
+								name: staged.name,
+								path: staged.path,
+								bytes: staged.bytes,
+								kept: rendered.kept,
+								elided
+							}
+						})
+					} catch (err) {
+						const reason = err instanceof Error ? err.message : 'the current files could not be copied'
+						return json(req, res, 502, {
+							error: created
+								? `Workspace ${created.id} was created, but its code fork failed: ${reason}`
+								: `Could not create the code fork: ${reason}`
+						})
+					} finally {
+						if (staged && !materialized) discardStagedAttachment(STAGED_ATTACHMENTS_DIR, staged.stageId)
+						await releaseForkWorkspace(snapshot).catch(err => {
+							console.warn(
+								`[relay] could not release fork snapshot ${snapshot.ref}: ${err instanceof Error ? err.message : err}`
+							)
+						})
+					}
+				}
+
+				const attachment = writeAttachment(ws.worktree, `Transcript of ${title}.md`, transcript)
 
 				const opened = await openChat(ws)
 				if ('error' in opened) {
-					return json(req, res, 502, { ...opened.result, attachment: { ...attachment, ...rendered, elided } })
+					return json(req, res, 502, {
+						...opened.result,
+						destination,
+						attachment: { ...attachment, ...rendered, elided }
+					})
 				}
 				// The token is what Conductor turns into the attachment chip and supplies to the
 				// receiving agent. Do not repeat `attachment.relPath` in prose: that renders a
@@ -2034,6 +2155,7 @@ const server = http.createServer(async (req, res) => {
 				const text = attachmentPrompt(attachment.token, body.prompt)
 				return json(req, res, 200, {
 					ok: true,
+					destination,
 					sessionId: opened.sessionId,
 					workspaceId: ws.id,
 					text,

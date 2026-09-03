@@ -823,12 +823,13 @@ Two asymmetric halves — keep them separate:
   and pins the other half — that a name built from a **chat title**, which is free text
   a model wrote and which then gets joined onto a path, cannot climb out of the worktree.
   - **`split_chat` is what it exists for** (`POST /api/sessions/:id/split`): copy a chat
-    into a fresh tab beside it, so a tangent asked inside a running conversation stops
-    leaving three threads interleaved in one tab. Conductor's own "Fork to new tab"
-    resumes the agent's real session, and is unreachable from here twice over — it lives
-    on a hover menu over one message, so finding it means walking a transcript that gets
-    more expensive the longer the chat is, which is the same unbounded-search cost the
-    status menu's depth caps exist to avoid.
+    into a fresh tab beside it, or into a separate workspace carrying the current code,
+    so a tangent asked inside a running conversation stops leaving three threads
+    interleaved in one tab. Conductor's own tab fork resumes the agent's real session,
+    and its fork controls are unreachable from here twice over — they live on a hover
+    menu over one message, so finding one means walking a transcript that gets more
+    expensive the longer the chat is, the same unbounded-search cost the status menu's
+    depth caps exist to avoid.
   - **What crosses is prose and reasoning, not tool calls**, and that cut is measured
     rather than chosen. Conductor's own concise copy drops thinking; its full copy brings
     the tool churn. On the chats here, thinking is the bigger half of a long one (p90:
@@ -860,6 +861,26 @@ Two asymmetric halves — keep them separate:
     history is omitted. It also omits reasoning and tools, so the handoff body carries
     the selected response's prose plus the ordinary elision markers; the attachment
     header names that narrower cut.
+  - **Destination and transcript cut are independent.** The phone's one **To new
+    workspace** switch applies to Last message only, Concise, With reasoning and Full
+    transcript alike. A workspace destination still receives that selected transcript
+    attachment, but its code is a snapshot of the source worktree at the moment the
+    fork is requested — not a claim that an older transcript row can reconstruct an
+    older filesystem. `split_chat` exposes the same choice as `new_workspace`.
+    `src/fork-workspace.ts` mirrors the layers in Conductor's bundled checkpointer:
+    an alternate index seeded from the source index captures tracked and
+    untracked-not-ignored working files without touching the real index; short-lived
+    private refs retain the source HEAD, index tree and worktree tree; and the fresh
+    destination branch is moved to that HEAD before its index and files are restored.
+    Seeding from the **index**, not HEAD, is load-bearing: a newly staged file can later
+    match `.gitignore` and still has to cross. The destination must share the source's
+    Git common directory and still be completely clean, or the restore refuses rather
+    than erasing setup output. The transcript is staged only after that restore.
+  - **Workspace creation is single-flight until its row appears.** A create deep link
+    is fire-and-forget and carries no request id that can be joined to the DB row, so
+    two relay callers waiting concurrently can otherwise each claim the other's new
+    workspace. `createWorkspaceAndRead` serializes the open-and-observe window and also
+    filters the new row by repository; both ordinary creation and code forks use it.
   - **It stops one step short of sending**, and that is not tidiness. ⌘T and a send are
     two UI turns (28s + 55s of ceiling) which together outlast every caller's budget,
     including the MCP client's 75s. Routing the composed prompt back through the ordinary

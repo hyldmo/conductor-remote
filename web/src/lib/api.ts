@@ -300,8 +300,8 @@ export const client = {
 	newChat: (workspaceId: string) =>
 		api<NewChatResult>(routes.newChat.path(workspaceId), { method: routes.newChat.method }, ACTION_TIMEOUT_MS),
 	/**
-	 * Open a new tab with this chat's transcript staged as an attachment. The caller
-	 * puts `text` into that tab's composer, then the user can add the new direction.
+	 * Open a new tab or workspace with this chat's transcript staged as an attachment.
+	 * The caller puts `text` into its composer, then the user can add the new direction.
 	 * `throughRowid` stops the copy at one response, which is how a fork offered beside
 	 * an older turn carries the conversation as it stood there. `onlyRowid` carries that
 	 * one source message without any surrounding history.
@@ -312,13 +312,21 @@ export const client = {
 		includeThinking: boolean,
 		includeTools: boolean,
 		throughRowid?: number,
-		onlyRowid?: number
+		onlyRowid?: number,
+		destination: 'chat' | 'workspace' = 'chat'
 	) =>
 		api<SplitChatResult>(
 			routes.splitChat.path(sessionId),
 			{
 				method: routes.splitChat.method,
-				body: JSON.stringify({ workspaceId, includeThinking, includeTools, throughRowid, onlyRowid })
+				body: JSON.stringify({
+					workspaceId,
+					includeThinking,
+					includeTools,
+					throughRowid,
+					onlyRowid,
+					destination
+				})
 			},
 			ACTION_TIMEOUT_MS
 		),

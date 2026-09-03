@@ -241,6 +241,10 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   provider cards without pretending local accounting is a subscription limit.
 - ✅ Live transcript per session (assistant text, tool calls, queued messages),
   incremental polling.
+- ✅ **Fork a chat** with the selected response only, a concise transcript,
+  reasoning, or the full tool-call transcript. Keep it as a new tab over the same files,
+  or switch on **To new workspace** to carry the current committed, staged,
+  unstaged, and untracked-not-ignored code into a separate worktree.
 - ✅ Diff vs the workspace's target branch (file list + colorized patch,
   including untracked files), with merge controls and **Continue** after a PR
   lands — the same workspace and chats move onto a fresh branch. Archived chats
@@ -285,7 +289,7 @@ Two transports, same twenty tools.
 | `plan_usage` | prompt-free Claude/Codex subscription allowances and reset times |
 | `create_workspace` | start work in a repo, with an optional first prompt and model/effort/plan/fast choices. Creation uses a deep link; selected agent settings apply before the prompt |
 | `send_prompt` · `stop_turn` · `close_chat` | talk to a running agent, cancel its turn, or hide a chat tab |
-| `split_chat` | move a tangent into a fresh tab, carrying the conversation across as a Conductor attachment |
+| `split_chat` | move a tangent into a fresh tab, or set `new_workspace` to carry the transcript and current code into a separate worktree |
 | `list_models` · `set_agent_options` · `set_default_model` | cached model labels (including the starred default), model, effort, plan, fast; starring a default also selects it for the target chat, matching Conductor |
 | `set_workspace_status` | move a workspace between the sidebar's status groups |
 | `archive_workspace` | put a finished workspace away (Conductor's ⌘⇧A) — deletes the worktree, keeps the chat |

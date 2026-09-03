@@ -70,6 +70,24 @@ serves a cached answer immediately and a four-worker background queue refreshes
 working or newly-updated rows every few seconds; idle rows get a one-minute
 safety refresh, so a long workspace list does not fork git processes every 2.5s.
 
+### Forking a worktree — the bundled checkpoint shape
+Conductor's own `Contents/Resources/bin/checkpointer.sh` spells out what “fork
+with code” has to preserve. `save` records three Git layers under a private ref:
+the source HEAD, its index tree, and a full working-tree tree made with an
+alternate index plus `git add -A` (tracked and untracked-not-ignored). Crucially,
+that alternate index is seeded from the current **index tree**, not HEAD, so a
+newly staged file that now matches `.gitignore` is not dropped. Capture does not
+move HEAD or modify files. `restore` moves HEAD and then restores both trees.
+
+The documented deep links can create a fresh workspace but expose no fork or
+checkpoint parameter. `src/fork-workspace.ts` therefore mirrors the same Git
+layers around that supported creation path: retain the objects under short-lived
+private refs, wait for the new worktree, verify it shares the source's Git common
+directory and is still clean, restore the source state onto its fresh branch, and
+only then place the transcript attachment. The destination keeps Conductor's new
+branch name while receiving the source commit, staged changes, unstaged changes,
+deletions, and ordinary untracked files. Ignored build output stays local.
+
 ### Plan usage — prompt-free through the provider CLIs
 The sidebar's `resource-usage` value is not stored in Conductor's SQLite DB. The
 two major harnesses do expose it through the exact binaries Conductor bundles:

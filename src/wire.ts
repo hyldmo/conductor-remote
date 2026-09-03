@@ -180,15 +180,17 @@ export interface MessagesResponse {
 }
 
 /**
- * POST /api/sessions/:id/split — the source chat, written into a new tab's attachments.
+ * POST /api/sessions/:id/split — the source chat, written into a new destination's attachments.
  *
- * It stops one step short of sending. The prompt it composes goes out through the
- * ordinary send route, which is what buys it the retry loop, the transcript confirm and
- * the parked-prompt queue for a locked Mac. Doing both here would also put two UI turns
- * (⌘T, then the send) inside one request, past what any caller waits.
+ * The destination is either another tab over the same files or a separate workspace
+ * carrying a snapshot of the source's current files. It stops one step short of sending:
+ * the prompt it composes goes through the ordinary send route for its retry, transcript
+ * confirm and locked-Mac parking behavior.
  */
 export interface SplitChatResult {
 	ok: boolean
+	/** Same-workspace tab, or a fresh worktree carrying the source's current code. */
+	destination: 'chat' | 'workspace'
 	/** The new chat. Present whenever the tab opened, even if nothing has been sent to it. */
 	sessionId: string | null
 	workspaceId: string

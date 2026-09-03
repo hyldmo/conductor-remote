@@ -534,12 +534,12 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'split_chat',
 			description:
-				'Move a tangent out of a chat: copy that chat into a fresh tab beside it, as a Conductor attachment, and ask the new agent your question there. Use it when a conversation has grown a second topic — a running agent steered mid-turn ends up holding three threads at once, which reads badly for everyone afterwards. The copy carries the prose and the reasoning, not the tool calls, so the new agent knows what was said and decided but not every file that was read. It runs to the end of the chat unless through names an earlier message to stop at, which is how you branch from before the conversation turned. This DRIVES THE REAL UI twice (a new tab, then the send) and steals focus for a few seconds. To split the chat you are in, find its session_id with list_chats on your own workspace.',
+				'Move a tangent out of a chat: copy that chat as a Conductor attachment and ask the new agent your question there. By default it opens a fresh tab beside the source (same files); new_workspace creates a separate Conductor workspace and carries the source worktree’s current tracked and untracked-not-ignored files into it. The transcript copy carries prose and reasoning, not tool calls, and runs to the end unless through names an earlier message. A tab fork DRIVES THE REAL UI twice (new tab, then send); a workspace fork creates through a deep link, then drives the UI for the send. Both steal focus. To split the chat you are in, find its session_id with list_chats on your own workspace.',
 			inputSchema: {
 				type: 'object',
 				properties: {
 					session_id: { type: 'string', description: 'The chat to copy (list_chats / search_chats).' },
-					prompt: { type: 'string', description: 'What to ask in the new tab.' },
+					prompt: { type: 'string', description: 'What to ask in the new destination.' },
 					workspace_id: { type: 'string', description: 'Its workspace. Resolved from the chat when omitted.' },
 					include_thinking: {
 						type: 'boolean',
@@ -549,6 +549,11 @@ export function createTools(call: RelayCall): Tool[] {
 						type: 'boolean',
 						description:
 							'Carry tool calls across as one line each (default false — mostly noise, and most of the bytes).'
+					},
+					new_workspace: {
+						type: 'boolean',
+						description:
+							'Create a separate workspace carrying the source’s current code (default false: a new tab with the same files).'
 					},
 					through: {
 						type: 'string',
@@ -562,6 +567,7 @@ export function createTools(call: RelayCall): Tool[] {
 				const sessionId = need(args, 'session_id')
 				const prompt = need(args, 'prompt')
 				const through = str(args.through)
+				const destination = args.new_workspace === true ? 'workspace' : 'chat'
 				const throughRowid = through ? parseChatCursor(through) : null
 				if (through && throughRowid === null) {
 					throw new Error('through must be a cursor returned by read_chat or search_chats')
@@ -573,11 +579,12 @@ export function createTools(call: RelayCall): Tool[] {
 						workspaceId: str(args.workspace_id),
 						includeThinking: args.include_thinking !== false,
 						includeTools: args.include_tools === true,
-						throughRowid: throughRowid ?? undefined
+						throughRowid: throughRowid ?? undefined,
+						destination
 					},
 					timeoutMs: WRITE_TIMEOUT_MS
 				})
-				if (!split.ok) throw new Error(split.error ?? 'the split did not open a tab')
+				if (!split.ok) throw new Error(split.error ?? 'the split did not open its destination')
 				const { attachment: file } = split
 				// Name the cut. A transcript that quietly dropped half the chat reads exactly
 				// like a complete one to whoever gets it next.
@@ -590,12 +597,13 @@ export function createTools(call: RelayCall): Tool[] {
 				const lines = [
 					`copied ${plural(file.kept, 'entry', 'entries')} (${Math.round(file.bytes / 1024)}kB) to ${file.path}${
 						cut.length ? `, without ${cut.join(' or ')}` : ''
-					}`
+					}`,
+					...(destination === 'workspace' ? [`workspace_id: ${split.workspaceId} (current code carried across)`] : [])
 				]
-				// The tab exists either way, so every path below leaves the caller somewhere to
+				// The destination exists either way, so every path below leaves the caller somewhere to
 				// go rather than reporting a bare failure over work that half-happened.
 				if (!split.sessionId) {
-					lines.push('the new tab is open, but the relay could not read its id back')
+					lines.push(`the new ${destination} is open, but the relay could not read its chat id back`)
 					lines.push('find it with list_chats, then send_prompt the question yourself')
 					return lines.join('\n')
 				}
@@ -608,7 +616,7 @@ export function createTools(call: RelayCall): Tool[] {
 				if (sent.parked) lines.push('the Mac is locked — the prompt is parked and lands on unlock')
 				else if (!sent.ok)
 					lines.push(
-						`! the tab and the transcript are ready, but the prompt did not land (${sent.error ?? 'unknown'}) — retry it with send_prompt`
+						`! the ${destination} and transcript are ready, but the prompt did not land (${sent.error ?? 'unknown'}) — retry it with send_prompt`
 					)
 				else lines.push(sent.warning ? `sent (${sent.warning})` : 'sent')
 				return lines.join('\n')
