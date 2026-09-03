@@ -6,6 +6,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { attachmentPrompt, writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
+import { attachChangeStats } from './change-stats.ts'
 import { isDefaultEffortLevel, readDefaultEfforts, writeDefaultEfforts } from './conductor-settings.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
@@ -68,6 +69,7 @@ import {
 	type AgentOptions,
 	archiveWorkspace,
 	type ChatTab,
+	closeChat,
 	continueWorkspace,
 	createWorkspace,
 	describeActuator,
@@ -76,6 +78,7 @@ import {
 	lockBlocked,
 	newChat,
 	pickActuator,
+	planSettingForUi,
 	restartConductorApp,
 	retryWontHelp,
 	type SendResult,
@@ -463,15 +466,22 @@ async function applyAgentPatch(
 ): Promise<{ ok: boolean; error?: string }> {
 	const located = locateChat(ws, sessionId)
 	if ('error' in located) return { ok: false, error: located.error }
-	const opts: AgentOptions = {
+	const desired: AgentOptions = {
 		effort: patch.effort,
 		plan: patch.plan,
 		model: patch.model,
 		toggleFast: patch.fast === undefined ? false : patch.fast !== Boolean(located.session?.fast_mode)
 	}
+	const opts: AgentOptions = {
+		...desired,
+		plan: planSettingForUi(patch.plan, located.session?.permission_mode)
+	}
 	const result = await setAgentOptions({ workspace: ws, sessionId, tab: located.tab }, opts)
 	if (!result.ok) return { ok: false, error: result.error }
-	if (!(await confirmAgentOptions(ws, sessionId, opts))) {
+	// Confirm the requested state, including settings that needed no UI action.
+	// A model change can redraw controls, so the pre-flight DB read is not itself
+	// enough to call the whole patch successful.
+	if (!(await confirmAgentOptions(ws, sessionId, desired))) {
 		return { ok: false, error: 'Conductor didn’t record the change — it may have been asleep. Try again.' }
 	}
 	if (patch.model) {
@@ -909,6 +919,7 @@ const server = http.createServer(async (req, res) => {
 			if (isRoute(routes.state, req.method, pathname)) {
 				const update = updateStatus()
 				const workspaces = reads.listWorkspaces()
+				attachChangeStats(workspaces) // serves the cache now; refreshes stale git stats in the background
 				attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
 				// An undelivered first prompt rides along with its workspace: the phone renders it
 				// in that chat rather than tracking delivery itself (see src/firstprompt.ts).
@@ -1719,6 +1730,86 @@ const server = http.createServer(async (req, res) => {
 					ok: true,
 					strategy: result.strategy,
 					session: reads.listSessions(ws.id).find(s => s.id === sessionId)
+				})
+			}
+
+			// DELETE /api/sessions/:id { workspaceId?, closeRunning? } — Conductor's
+			// reversible Close tab action (Command-W). A running chat gets the same
+			// explicit "Close anyway" gate as the desktop app.
+			const closeChatId = routeParam(routes.closeChat, req.method, pathname)
+			if (closeChatId) {
+				const sessionId = closeChatId
+				const body = JSON.parse((await readBody(req)) || '{}') as {
+					workspaceId?: string
+					closeRunning?: boolean
+				}
+				const ownerId = reads.sessionWorkspaceId(sessionId)
+				if (!ownerId) return json(req, res, 404, { error: 'chat not found' })
+				if (body.workspaceId && body.workspaceId !== ownerId) {
+					return json(req, res, 409, { error: 'chat is not in that workspace' })
+				}
+				const ws = reads.getWorkspace(ownerId)
+				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+
+				const before = reads.listSessions(ws.id)
+				const session = before.find(s => s.id === sessionId)
+				const visibleActiveSession = (): string | null => {
+					const visible = reads.listSessions(ws.id)
+					const activeId = reads.getWorkspace(ws.id)?.active_session_id
+					return visible.some(s => s.id === activeId) ? (activeId ?? null) : (visible[0]?.id ?? null)
+				}
+				// Closing is a soft delete. A repeat whose first response was lost is already
+				// in the requested state, so it is success rather than a stale-link error.
+				if (!session) {
+					return json(req, res, 200, {
+						ok: true,
+						alreadyClosed: true,
+						activeSessionId: visibleActiveSession()
+					})
+				}
+				if ((session.status === 'working' || session.background_tasks.length > 0) && body.closeRunning !== true) {
+					return json(req, res, 409, {
+						ok: false,
+						agentRunning: true,
+						error: 'The agent is still working in this chat. Confirm closing it anyway.'
+					})
+				}
+				const located = locateChat(ws, sessionId)
+				if ('error' in located) return json(req, res, 409, { error: located.error })
+				const result = await closeChat({ workspace: ws, sessionId, tab: located.tab }, body.closeRunning === true)
+				if (!result.ok) {
+					// A turn can start after the status read above. The script dismisses
+					// Conductor's surprise dialog instead of accepting it, and this sends the
+					// caller back through the same explicit confirmation path.
+					if (body.closeRunning !== true && result.error?.includes('needs confirmation')) {
+						return json(req, res, 409, {
+							ok: false,
+							agentRunning: true,
+							error: 'The agent is still working in this chat. Confirm closing it anyway.'
+						})
+					}
+					return json(req, res, 502, result)
+				}
+
+				// Command-W is fire-and-forget. The durable receipt is the same flag all tab
+				// reads filter on: this id disappearing from listSessions means Conductor set
+				// sessions.is_hidden, not merely that a keystroke happened.
+				let visible = true
+				for (let i = 0; i < 20 && visible; i++) {
+					await sleep(300)
+					visible = reads.listSessions(ws.id).some(s => s.id === sessionId)
+				}
+				if (visible) {
+					return json(req, res, 502, {
+						ok: false,
+						strategy: result.strategy,
+						error: 'Conductor took the close but the chat tab is still open. Try again, or close it on your Mac.'
+					})
+				}
+				return json(req, res, 200, {
+					ok: true,
+					strategy: result.strategy,
+					activeSessionId: visibleActiveSession()
 				})
 			}
 

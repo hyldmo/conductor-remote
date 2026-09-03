@@ -17,6 +17,7 @@ command = "yarn dev"
 default = true
 icon = "play"
 
-[[preview_urls]]
-name = "Conductor Remote"
-url = "http://localhost:$CONDUCTOR_PORT"
+# Deliberately no `preview_urls`: the relay prints Vite's origin with the runtime
+# `#token=…` fragment, and it is the first process in numux for that reason.
+# A static preview overrides Conductor's terminal URL detection and opens the
+# unauthenticated root instead.

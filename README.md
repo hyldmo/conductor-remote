@@ -276,7 +276,7 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 `conductor-remote mcp` is an MCP server on stdio. It gives a coding agent the same
 control the phone has, over the same relay.
 
-Two transports, same nineteen tools.
+Two transports, same twenty tools.
 
 | | |
 |---|---|
@@ -284,7 +284,7 @@ Two transports, same nineteen tools.
 | `list_workspaces` · `list_chats` · `workspace_diff` · `list_repos` | what is running, and what it changed |
 | `plan_usage` | prompt-free Claude/Codex subscription allowances and reset times |
 | `create_workspace` | start work in a repo, with an optional first prompt and model/effort/plan/fast choices. Creation uses a deep link; selected agent settings apply before the prompt |
-| `send_prompt` · `stop_turn` | talk to a running agent, or cancel its turn |
+| `send_prompt` · `stop_turn` · `close_chat` | talk to a running agent, cancel its turn, or hide a chat tab |
 | `split_chat` | move a tangent into a fresh tab, carrying the conversation across as a Conductor attachment |
 | `list_models` · `set_agent_options` · `set_default_model` | cached model labels (including the starred default), model, effort, plan, fast; starring a default also selects it for the target chat, matching Conductor |
 | `set_workspace_status` | move a workspace between the sidebar's status groups |
@@ -296,7 +296,7 @@ Two transports, same nineteen tools.
 **Name it `conductor-remote`, not `conductor`.** Conductor injects an MCP server of its
 own into every agent it runs, and that one is already called `conductor`. Register this
 under the same name and inside a Conductor workspace the two collide: Conductor's tools
-win, these seventeen vanish, and the only trace left is this server's instructions text —
+win, these tools vanish, and the only trace left is this server's instructions text —
 so it reads as if the tools should be there.
 
 **stdio** — for an agent running on this Mac. The client spawns it as a child process;
@@ -346,13 +346,14 @@ of the time.
 | `create_workspace` | start a new workspace, optionally with a first prompt and agent settings |
 | `send_prompt` | send into an existing chat (drives the real UI) |
 | `stop_turn` | cancel a running answer (drives the real UI) |
+| `close_chat` | hide a chat tab without deleting its transcript (drives the real UI) |
 | `set_workspace_status` | set the sidebar status (drives the real UI) |
 | `archive_workspace` | archive a workspace (drives the real UI, deletes the worktree) |
 
-The first seven touch nothing. `create_workspace` opens a Conductor deep link, so
+The read-only tools touch nothing. `create_workspace` opens a Conductor deep link, so
 creation needs no Accessibility and steals no focus. Requested model, effort, plan,
 and fast settings are applied later through Conductor's UI, before the relay sends
-the first prompt. The last four drive Conductor's real window for a few seconds.
+the first prompt. The UI-writing tools drive Conductor's real window for a few seconds.
 
 The HTTP transport is deliberately minimal: the server never initiates a message, so
 there is no SSE stream and `GET /mcp` answers 405, which the spec allows. It keeps no
@@ -369,8 +370,9 @@ joining a line it would only time out waiting in.
 
 Worth knowing before you wire it up: `send_prompt` into a chat that is already
 working **steers that agent** rather than starting a new turn, and `stop_turn`
-destroys work in flight. The tool descriptions say so, and both ask the caller to
-confirm with you first.
+destroys work in flight. `close_chat` keeps the transcript and is reversible with
+Conductor's ⌘⇧T; a working chat is refused until `close_running` explicitly confirms
+the desktop's own warning. The tool descriptions surface each of those choices.
 
 ## Notifications
 

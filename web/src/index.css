@@ -1,32 +1,36 @@
 @import "tailwindcss";
 
 @theme {
-	--color-bg: #0a0b0e;
-	--color-surface: #14161b;
-	--color-surface-2: #1b1e26;
-	--color-border: #262a33;
-	--color-border-soft: #1e222a;
-	--color-text: #e7e9ee;
-	--color-muted: #8b909d;
-	--color-faint: #5c616d;
+	/* `light-dark()` reads the root color-scheme. With no data-theme attribute that
+	   follows the device; an explicit Light or Dark choice pins it (lib/theme.ts). */
+	--color-bg: light-dark(#f5f6f8, #0a0b0e);
+	--color-surface: light-dark(#ffffff, #14161b);
+	--color-surface-2: light-dark(#eceef2, #1b1e26);
+	--color-border: light-dark(#d4d7de, #262a33);
+	--color-border-soft: light-dark(#e2e4e9, #1e222a);
+	--color-text: light-dark(#1c1e24, #e7e9ee);
+	--color-muted: light-dark(#626773, #8b909d);
+	--color-faint: light-dark(#9499a4, #5c616d);
 
-	--color-accent: #8b7dff;
-	--color-accent-soft: #2a2650;
+	--color-accent: light-dark(#6757d9, #8b7dff);
+	--color-accent-soft: light-dark(#ebe9ff, #2a2650);
+	--color-on-solid: light-dark(#ffffff, #101116);
+	--color-provider-openai: light-dark(#17191f, #ffffff);
 
-	--color-working: #f5a623;
-	--color-idle: #3ecf8e;
-	--color-done: #5b9dff;
+	--color-working: light-dark(#a65f00, #f5a623);
+	--color-idle: light-dark(#167a52, #3ecf8e);
+	--color-done: light-dark(#286bc0, #5b9dff);
 	/* An inactive provider context whose cheap/fast prompt cache may have cooled. */
-	--color-cold-cache: #d6a85f;
+	--color-cold-cache: light-dark(#90611f, #d6a85f);
 
 	/* Workspace dot by PR state (src/pr.ts). */
-	--color-pr-merged: #ac47ff;
-	--color-pr-draft: #a4a3a2;
-	--color-pr-attention: #facc15;
-	--color-pr-mergeable: #49de80;
+	--color-pr-merged: light-dark(#7b38b5, #ac47ff);
+	--color-pr-draft: light-dark(#6e7075, #a4a3a2);
+	--color-pr-attention: light-dark(#916b00, #facc15);
+	--color-pr-mergeable: light-dark(#167b42, #49de80);
 
-	--color-add: #3ecf8e;
-	--color-del: #ff6b6b;
+	--color-add: light-dark(#14784f, #3ecf8e);
+	--color-del: light-dark(#c73c3c, #ff6b6b);
 
 	--font-sans: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
 	--font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, monospace;
@@ -105,9 +109,17 @@
 		}
 	}
 	html {
+		/* Two values means system preference. Theme choices narrow this to one. */
+		color-scheme: light dark;
 		/* Paint the app bg on <html> too, so any sub-pixel gap in the safe area
 		   reads as the app color rather than a seam. */
 		background: var(--color-bg);
+	}
+	html[data-theme="light"] {
+		color-scheme: light;
+	}
+	html[data-theme="dark"] {
+		color-scheme: dark;
 	}
 	body {
 		margin: 0;

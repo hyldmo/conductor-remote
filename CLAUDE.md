@@ -106,6 +106,15 @@ Two asymmetric halves — keep them separate:
     concurrent phones join the same read. Cursor Agent exposes auth but no allowance;
     OpenCode's `stats` is local token/cost accounting, not provider quota, so both say
     unavailable rather than inventing a percentage.
+  - **Sidebar line changes are git-owned too, but never make `/api/state` wait.**
+    `workspaces` carries no additions/deletions, and asking the full diff endpoint for
+    every row would materialise megabytes of patch text every five seconds.
+    `src/change-stats.ts` therefore attaches the last `workspaceDiffStats` answer and
+    refreshes stale worktrees behind a four-process queue. It uses the diff view's same
+    merge-base and tracked-plus-untracked semantics, refreshes a newly-updated row
+    immediately, keeps a working row within five seconds, and lets an idle one rest for
+    a minute. Clean and binary-only diffs stay absent from the row rather than printing
+    the meaningless `+0 -0`.
 - **Deep links carry the two writes that aren't fragile — creating a workspace
   and focusing one.** The *documented* links
   (conductor.build/docs/reference/deep-links) are
@@ -236,6 +245,20 @@ Two asymmetric halves — keep them separate:
   to the log instead, which `/api/logs` serves to the same phone on request. The
   refusals themselves say "try again" rather than "send again", because three of the
   four callers aren't sends.
+- **Closing a chat is a reversible hide, but the shortcut is context-sensitive.**
+  Conductor's own tab menu names **Close tab ⌘W** and Reopen is ⌘⇧T; the durable
+  result is `sessions.is_hidden = 1`, so `DELETE /api/sessions/:id` waits for that
+  chat to disappear from `reads.listSessions` rather than trusting the keystroke.
+  A terminal with focus binds the same ⌘W to closing a terminal tab, so
+  `writes.ts` ▸ `closeChat` takes the usual workspace/tab assertions and
+  `conductor.applescript` ▸ `closeChatTab` presses ⌘L first, exactly like New chat
+  and Stop do before their context-sensitive shortcuts. A working chat draws
+  **Cancel / Close anyway** (verified against the live AX tree), so the route
+  refuses it before touching the UI unless `closeRunning` was explicit, and the
+  script checks the dialog again for a turn that started between the DB read and
+  ⌘W. The phone mirrors that confirmation; MCP exposes it as `close_running`.
+  Closing the last tab is legal, so the phone keeps its trailing New chat button
+  visible for a ready workspace even when the tab list is empty.
 - **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
   here drives Conductor's single shared window, so two overlapping runs interleave
   and land a prompt in whatever the other one focused — the exact failure every
@@ -488,7 +511,10 @@ Two asymmetric halves — keep them separate:
     the writes touch the UI: effort is a button whose **label is its own value**
     and which *cycles* (Low → Medium → High → Extra high → Max → Ultracode → wrap),
     so we press until the label matches; Plan is an `AXCheckBox` with readable
-    state; the model picker is an `AXMenu` (labels carry badges — "Opus 5 NEW" —
+    state, but an already-matching `permission_mode` suppresses the UI action
+    entirely — models that cannot enter Plan may not render the checkbox when it
+    is off, so an explicit `plan:false` is a desired state rather than an order to
+    find that control; the model picker is an `AXMenu` (labels carry badges — "Opus 5 NEW" —
     so matching prefers exact then unique-prefix, and `GET …/models` enumerates it
     live rather than hard-coding a list that would rot). **Fast has no readable
     state and only exists for some models**, so the DB decides whether to press it

@@ -172,7 +172,7 @@ export function ReloadPrompt() {
 			<button
 				type="button"
 				onClick={apply}
-				className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-black transition active:scale-95"
+				className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-on-solid transition active:scale-95"
 			>
 				Update
 			</button>

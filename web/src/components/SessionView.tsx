@@ -1,12 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { FileDiff, Hourglass, Plus, X } from 'lucide-react'
+import { FileDiff, Hourglass, LoaderCircle, Plus, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 import { useAnyWorkspace, useClearChatNotification, useSessions, useWorkspaceFiles, useWorkspaces } from '../hooks.ts'
-import { client } from '../lib/api.ts'
+import { ApiError, client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { buildResolver, MentionResolverProvider } from '../lib/fileMentions.ts'
 import { shortModel, timestampMs, workspaceTitle } from '../lib/format.ts'
+import { isLockedError } from '../lib/lock.ts'
 import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
 import type { Session } from '../lib/types.ts'
@@ -18,7 +19,7 @@ import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
 import type { SplitFormat } from './Transcript.tsx'
 import { Transcript } from './Transcript.tsx'
-import { PromptStatusDot, Spinner } from './ui.tsx'
+import { PromptStatusDot, Spinner, UnlockLink } from './ui.tsx'
 import { WorkspaceMenu } from './WorkspaceMenu.tsx'
 
 export function SessionView() {
@@ -33,6 +34,9 @@ export function SessionView() {
 	const pickSession = (id: string) => setSearchParams({ session: id }, { replace: true })
 	const [diffOpen, setDiffOpen] = useState(false)
 	const [creatingChat, setCreatingChat] = useState(false)
+	const [closingChat, setClosingChat] = useState<string | null>(null)
+	const [confirmingClose, setConfirmingClose] = useState<string | null>(null)
+	const [closeError, setCloseError] = useState<string | null>(null)
 	const [focusComposerFor, setFocusComposerFor] = useState<string | null>(null)
 	const queryClient = useQueryClient()
 	const { data, isLoading } = useWorkspaces()
@@ -49,6 +53,7 @@ export function SessionView() {
 	const readMarks = useApp(s => s.readMarks)
 	const markRead = useApp(s => s.markRead)
 	const setDraft = useApp(s => s.setDraft)
+	const online = useApp(s => s.online)
 
 	const ws = liveWorkspace
 	const actuator = data?.actuator
@@ -64,12 +69,14 @@ export function SessionView() {
 	const resolveMention = useMemo(() => buildResolver(worktree, files), [worktree, files])
 
 	const sessions = sessionsData?.sessions ?? []
+	const visibleActiveSession =
+		ws?.active_session_id && sessions.some(s => s.id === ws.active_session_id) ? ws.active_session_id : null
 	const sessionId =
 		// A named chat that isn't here — hidden, or a stale link from an old notification —
 		// falls through to the usual pick rather than showing an empty pane. Switching
 		// workspace drops the parameter with the rest of the URL, so no pick outlives it.
 		(pickedSession && sessions.some(s => s.id === pickedSession) ? pickedSession : null) ??
-		ws?.active_session_id ??
+		visibleActiveSession ??
 		sessions[0]?.id ??
 		null
 	const activeSession = sessions.find(s => s.id === sessionId)
@@ -155,6 +162,47 @@ export function SessionView() {
 		}
 	}
 
+	// Close tab is reversible in Conductor, but it confirms when that tab is still
+	// working. Mirror the question on the phone and carry the answer to the relay;
+	// a status race is caught again by Conductor's own dialog in the AppleScript.
+	const closeChat = async (id: string, closeRunning = false) => {
+		if (closingChat || !online) return
+		const target = sessions.find(s => s.id === id)
+		if ((target?.status === 'working' || target?.background_tasks.length) && !closeRunning) {
+			setConfirmingClose(id)
+			setCloseError(null)
+			return
+		}
+		setClosingChat(id)
+		setConfirmingClose(null)
+		setCloseError(null)
+		try {
+			const result = await client.closeChat(id, ws.id, closeRunning)
+			if (!result.ok) throw new Error(result.error ?? 'Could not close this chat')
+			// The Mac chooses the previously viewed surviving tab. Follow that choice only
+			// when the phone was showing the tab that disappeared; a background close must
+			// not pull this reader away from its own current chat.
+			if (sessionId === id) {
+				if (result.activeSessionId) pickSession(result.activeSessionId)
+				else setSearchParams({}, { replace: true })
+			}
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] }),
+				queryClient.invalidateQueries({ queryKey: ['state'] })
+			])
+		} catch (error) {
+			// The tab can start working after the phone rendered it idle. Turn that named
+			// refusal into the same confirmation instead of a dead-end error banner.
+			if (error instanceof ApiError && error.status === 409 && /still working/i.test(error.message)) {
+				setConfirmingClose(id)
+			} else {
+				setCloseError(error instanceof Error ? error.message : 'Could not close this chat')
+			}
+		} finally {
+			setClosingChat(null)
+		}
+	}
+
 	// The relay writes the transcript and opens the tab. Its returned text contains
 	// Conductor's attachment token, which belongs in the new chat's composer until
 	// the user adds the question that starts the fork.
@@ -196,7 +244,7 @@ export function SessionView() {
 							</>
 						}
 					/>
-					{sessions.length > 0 ? (
+					{sessions.length > 0 || ws.state === 'ready' ? (
 						<SessionTabs
 							sessions={sessions}
 							activeId={sessionId}
@@ -204,8 +252,32 @@ export function SessionView() {
 							promptStates={promptStates}
 							onSelect={pickSession}
 							onNewChat={createChat}
+							onClose={id => void closeChat(id)}
 							creating={creatingChat}
+							closingId={closingChat}
+							online={online}
 						/>
+					) : null}
+					{confirmingClose ? (
+						<TabCloseNotice
+							title={sessions.find(s => s.id === confirmingClose)?.title ?? 'Untitled'}
+							busy={closingChat === confirmingClose}
+							onCancel={() => setConfirmingClose(null)}
+							onConfirm={() => void closeChat(confirmingClose, true)}
+						/>
+					) : closeError ? (
+						<div className="flex shrink-0 items-center gap-2 border-b border-del/30 bg-del/5 px-3 py-2 text-xs text-del">
+							<span className="min-w-0 flex-1">{closeError}</span>
+							{isLockedError(closeError) ? <UnlockLink /> : null}
+							<button
+								type="button"
+								onClick={() => setCloseError(null)}
+								aria-label="Dismiss close error"
+								className="p-1"
+							>
+								<X size={14} />
+							</button>
+						</div>
 					) : null}
 					{/* The relay's undelivered prompt for this chat: one parked for the lock screen
 				    wins (it names its session; oldest first, since delivery is FIFO), else the
@@ -242,14 +314,17 @@ export function SessionView() {
 
 /** Conductor workspaces can hold several sessions — render them as tabs like the desktop app,
  *  with a trailing "+" (new chat, same files) pinned past the scrollable tabs. */
-function SessionTabs({
+export function SessionTabs({
 	sessions,
 	activeId,
 	readMarks,
 	promptStates,
 	onSelect,
 	onNewChat,
-	creating
+	onClose,
+	creating,
+	closingId,
+	online
 }: {
 	sessions: Session[]
 	activeId: string | null
@@ -257,9 +332,12 @@ function SessionTabs({
 	promptStates: Record<string, PromptIndicatorState>
 	onSelect: (id: string) => void
 	onNewChat: () => void
+	onClose: (id: string) => void
 	creating: boolean
+	closingId: string | null
+	online: boolean
 }) {
-	const activeTab = useRef<HTMLButtonElement>(null)
+	const activeTab = useRef<HTMLDivElement>(null)
 
 	// Opening a workspace can restore a session near the end of a long tab row. Keep its
 	// selected tab visible on first paint and after each tab change, without moving the
@@ -275,25 +353,41 @@ function SessionTabs({
 				{sessions.map(s => {
 					const promptState = promptStates[s.id]
 					return (
-						<button
-							type="button"
+						<div
 							key={s.id}
 							ref={s.id === activeId ? activeTab : undefined}
-							onClick={() => onSelect(s.id)}
-							className={cn('pill flex shrink-0 items-center gap-1.5', s.id === activeId && 'pill-active')}
+							className={cn(
+								'flex shrink-0 items-center rounded-full text-sm font-medium text-muted transition',
+								s.id === activeId && 'bg-surface-2 text-text'
+							)}
 						>
-							{promptState ? (
-								<PromptStatusDot state={promptState} className="size-3" />
-							) : s.status === 'working' ? (
-								<span className="dot-spinner size-3" />
-							) : s.background_tasks?.length ? (
-								<Hourglass size={11} className="shrink-0 text-faint" aria-label="Waiting for a background task" />
-							) : null}
-							<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
-							<ContextPercent used={s.context_used_percent} />
-							{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
-							{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}
-						</button>
+							<button
+								type="button"
+								onClick={() => onSelect(s.id)}
+								className="flex min-w-0 items-center gap-1.5 py-1.5 pl-3.5 pr-1"
+							>
+								{promptState ? (
+									<PromptStatusDot state={promptState} className="size-3" />
+								) : s.status === 'working' ? (
+									<span className="dot-spinner size-3" />
+								) : s.background_tasks?.length ? (
+									<Hourglass size={11} className="shrink-0 text-faint" aria-label="Waiting for a background task" />
+								) : null}
+								<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
+								<ContextPercent used={s.context_used_percent} />
+								{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
+								{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}
+							</button>
+							<button
+								type="button"
+								onClick={() => onClose(s.id)}
+								disabled={!online || closingId !== null}
+								aria-label={`Close ${s.title || 'Untitled'} chat`}
+								className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-full text-faint transition active:bg-bg/70 active:text-text disabled:opacity-40"
+							>
+								{closingId === s.id ? <LoaderCircle size={12} className="animate-spin" /> : <X size={12} />}
+							</button>
+						</div>
 					)
 				})}
 			</div>
@@ -307,6 +401,43 @@ function SessionTabs({
 				<Plus size={18} />
 			</button>
 		</nav>
+	)
+}
+
+function TabCloseNotice({
+	title,
+	busy,
+	onCancel,
+	onConfirm
+}: {
+	title: string
+	busy: boolean
+	onCancel: () => void
+	onConfirm: () => void
+}) {
+	return (
+		<div className="flex shrink-0 items-center gap-2 border-b border-working/30 bg-working/5 px-3 py-2 text-xs">
+			<span className="min-w-0 flex-1 truncate">
+				<span className="font-semibold">{title}</span> is still working. Close the tab anyway?
+			</span>
+			<button
+				type="button"
+				onClick={onCancel}
+				disabled={busy}
+				className="rounded-lg px-2 py-1 text-muted active:bg-surface-2"
+			>
+				Cancel
+			</button>
+			<button
+				type="button"
+				onClick={onConfirm}
+				disabled={busy}
+				className="flex items-center gap-1 rounded-lg bg-del px-2 py-1 font-semibold text-black active:scale-95 disabled:opacity-50"
+			>
+				{busy ? <LoaderCircle size={12} className="animate-spin" /> : null}
+				Close anyway
+			</button>
+		</div>
 	)
 }
 

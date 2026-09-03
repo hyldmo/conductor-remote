@@ -164,7 +164,7 @@ export function Chip({ children, className }: { children: ReactNode; className?:
 
 export function Badge({ children }: { children: ReactNode }) {
 	return (
-		<span className="grid min-w-5 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-bold text-white">
+		<span className="grid min-w-5 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-bold text-on-solid">
 			{children}
 		</span>
 	)

@@ -645,6 +645,49 @@ return "ok"`.trim()
 }
 
 /**
+ * Hide one chat through Conductor's own Close tab action (Command-W).
+ *
+ * Like `stopTurn`, the branch is required because Command-W acts on whatever has
+ * keyboard focus. `selectChatTab` proves the target and `closeChatTab` moves focus
+ * back out of the terminal before pressing it. Closing is reversible in Conductor,
+ * but a running chat still gets its desktop confirmation: `closeRunning` is the
+ * caller's explicit answer to that prompt, never something this layer infers.
+ *
+ * The script only reports that it pressed the action. `sessions.is_hidden` is the
+ * receipt; server.ts waits until `Reads.listSessions` no longer returns this id.
+ */
+export async function closeChat(target: SendTarget, closeRunning: boolean): Promise<SendResult> {
+	if (!target.workspace.branch) {
+		return { ok: false, strategy: 'applescript', error: 'workspace has no branch to focus' }
+	}
+	const script = `
+${CONDUCTOR_HANDLERS}
+
+my activateConductor()
+my focusWorkspace()
+my selectChatTab()
+my closeChatTab()
+return "ok"`.trim()
+	try {
+		await withTargetEnvironment(target, targetEnvironment =>
+			uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: {
+						...process.env,
+						...targetEnvironment,
+						RELAY_CLOSE_RUNNING: closeRunning ? '1' : ''
+					},
+					timeout: SEND_ATTEMPT_MS
+				})
+			)
+		)
+		return { ok: true, strategy: 'applescript' }
+	} catch (err) {
+		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	}
+}
+
+/**
  * Press the Wi-Fi menu's row for a personal hotspot — Instant Hotspot, the same
  * button a human clicks. `networksetup` can only join a network that is
  * broadcasting, and a personal hotspot usually isn't; the row in Control
@@ -712,6 +755,20 @@ export interface AgentOptions {
 	toggleFast?: boolean
 	/** The model picker's menu label, e.g. "Opus 5" or "Sonnet 4.6". */
 	model?: string
+}
+
+/**
+ * A boolean patch says what state the caller wants, not that the matching UI
+ * control must be pressed. Avoid looking for Plan when Conductor already records
+ * the requested mode — some models do not render that control at all when it is
+ * off. Unknown state remains fail-closed and is sent through to the actuator.
+ */
+export function planSettingForUi(
+	wanted: boolean | undefined,
+	currentPermissionMode: string | null | undefined
+): boolean | undefined {
+	if (wanted === undefined) return undefined
+	return currentPermissionMode === (wanted ? 'plan' : 'default') ? undefined : wanted
 }
 
 /**

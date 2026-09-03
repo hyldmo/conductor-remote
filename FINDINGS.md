@@ -64,7 +64,11 @@ Crucially, **Conductor's `sessions.id` equals the Claude Code `claude_session_id
 Every workspace is a real git worktree (`git worktree list` confirms). Diff vs
 the target branch is `git -C <worktree> diff $(git merge-base <base> HEAD)` —
 committed + uncommitted, exactly Conductor's diff view, computed with no
-Conductor involvement at all.
+Conductor involvement at all. The phone sidebar's `+adds -deletes` uses the same
+tracked-plus-untracked basis without constructing the full patch. `/api/state`
+serves a cached answer immediately and a four-worker background queue refreshes
+working or newly-updated rows every few seconds; idle rows get a one-minute
+safety refresh, so a long workspace list does not fork git processes every 2.5s.
 
 ### Plan usage — prompt-free through the provider CLIs
 The sidebar's `resource-usage` value is not stored in Conductor's SQLite DB. The

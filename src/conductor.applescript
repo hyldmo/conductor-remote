@@ -1272,6 +1272,44 @@ on cancelAgent()
 	delay 0.3
 end cancelAgent
 
+on closeChatTab()
+	-- Hide the selected chat through Conductor's own Close tab shortcut, Command-W.
+	-- The same chord closes a terminal tab when the terminal has focus, so Command-L
+	-- first is load-bearing: it moves focus into the chat whose workspace and tab were
+	-- asserted immediately above this handler.
+	set strips to my tabGroups()
+	if (count of strips) is 0 then error "couldn't find the chat pane to close from"
+	my assertWorkspace(item 1 of strips)
+	tell application "System Events"
+		keystroke "l" using {command down}
+		delay 0.2
+		keystroke "w" using {command down}
+	end tell
+
+	-- Conductor asks "Close anyway" when the chat's agent is still running. The
+	-- server normally catches that from sessions.status before touching the UI, but
+	-- a turn can start in the gap between that read and this keystroke. Detect the
+	-- live dialog too, and never infer permission to hide a running conversation.
+	set confirmEl to missing value
+	set checks to 1
+	if (system attribute "RELAY_CLOSE_RUNNING") is "1" then set checks to 4
+	repeat with attempt from 1 to checks
+		delay 0.25
+		set confirmEl to my closeConfirmButton()
+		if confirmEl is not missing value then exit repeat
+	end repeat
+	if confirmEl is missing value then return "closed"
+	if (system attribute "RELAY_CLOSE_RUNNING") is not "1" then
+		tell application "System Events" to key code 53
+		error "the agent started working before the tab closed - closing it now needs confirmation"
+	end if
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXPress" of confirmEl
+	end tell
+	delay 0.5
+	return "closed"
+end closeChatTab
+
 on buttonsUnder(root, maxDepth)
 	-- Every AXButton at or below root, level-order and bounded. Depth is the whole
 	-- cost here: the transcript hangs off the same web area as anything Conductor
@@ -1370,20 +1408,35 @@ on continueWorkspaceOnNewBranch()
 	delay 0.4
 end continueWorkspaceOnNewBranch
 
-on archiveButtons()
-	-- Both places Conductor could be drawing its archive confirmation, each at the
-	-- depth that shape actually sits at. A real sheet hangs off the window a level or
-	-- two down; an in-webview dialog is a portal near the top of the web area, which
-	-- is where the sidebar row's menu turns up at depth 4 (pressStatusMenu). Sweeping
-	-- one deep cap from the window instead would reach neither any better and would
-	-- walk the transcript to get there.
+on dialogButtons()
+	-- Both places Conductor could be drawing a confirmation, each at the depth that
+	-- shape actually sits at. A real sheet hangs off the window a level or two down;
+	-- an in-webview dialog is a shallow portal near the top of the web area. Its
+	-- buttons are inside depth 3; going to 4 reaches the transcript and made an idle
+	-- close spend its whole 28-second budget proving that no dialog existed.
 	my requireWindow()
 	set fromWindow to {}
 	tell application "System Events" to tell process "Conductor"
 		set fromWindow to my buttonsUnder(window 1, 4)
 	end tell
-	return fromWindow & (my buttonsUnder(my webArea(), 4))
-end archiveButtons
+	return fromWindow & (my buttonsUnder(my webArea(), 3))
+end dialogButtons
+
+on closeConfirmButton()
+	-- The running-chat dialog has exactly Cancel + "Close anyway". Require the
+	-- pair so an unrelated destructive dialog can never donate a similarly named
+	-- button to this run.
+	set found to missing value
+	set sawCancel to false
+	repeat with entry in my dialogButtons()
+		set node to contents of entry
+		set label to my axName(node)
+		if label is "Cancel" then set sawCancel to true
+		if label starts with "Close anyway" then set found to node
+	end repeat
+	if sawCancel then return found
+	return missing value
+end closeConfirmButton
 
 on archiveConfirmButton()
 	-- Conductor asks before archiving a workspace whose agents are still running:
@@ -1395,7 +1448,7 @@ on archiveConfirmButton()
 	-- and would otherwise read that as a confirmation of this.
 	set found to missing value
 	set sawCancel to false
-	repeat with entry in my archiveButtons()
+	repeat with entry in my dialogButtons()
 		set node to contents of entry
 		set label to my axName(node)
 		if label is "Cancel" then set sawCancel to true

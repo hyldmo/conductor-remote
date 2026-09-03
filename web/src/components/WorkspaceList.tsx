@@ -23,6 +23,7 @@ import { unreadCount } from '../lib/read.ts'
 import type { CachedModelGroup, Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs, WORKING_HINT_MS } from '../store.ts'
 import { ProviderMark } from './AgentIcons.tsx'
+import { ChangeStats } from './ChangeStats.tsx'
 import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
 import { LogsSheet } from './LogsSheet.tsx'
@@ -291,6 +292,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 															selected={w.id === selectedId}
 															modelGroups={modelGroups}
 															promptState={promptState}
+															showDiffs={view.showDiffs}
 														/>
 													</button>
 												</li>
@@ -495,7 +497,7 @@ function ViewSelect({
 			id={id}
 			value={value}
 			onChange={e => onChange(e.target.value)}
-			className="max-w-36 truncate rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-sm text-text [color-scheme:dark]"
+			className="max-w-36 truncate rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
 		>
 			{options.map(([v, label]) => (
 				<option key={v} value={v}>
@@ -523,13 +525,15 @@ function WorkspaceCard({
 	unread,
 	selected,
 	modelGroups,
-	promptState
+	promptState,
+	showDiffs
 }: {
 	w: Workspace
 	unread: number
 	selected: boolean
 	modelGroups: CachedModelGroup[] | undefined
 	promptState: PromptIndicatorState
+	showDiffs: boolean
 }) {
 	const model = modelLabel(w.model, catalogFor(modelGroups, w.agent_type))
 	return (
@@ -547,20 +551,25 @@ function WorkspaceCard({
 				/>
 			</div>
 			<div className="min-w-0 flex-1 space-y-1.25 overflow-hidden">
-				<div className="flex items-center gap-2">
-					<span
-						className={cn(
-							'min-w-0 flex-1 truncate text-sm leading-none',
-							unread ? 'font-bold' : 'font-medium',
-							unread || selected ? 'text-text' : 'text-muted'
-						)}
-					>
-						{workspaceTitle(w)}
-					</span>
-					{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
-					{/* Unread is a per-chat flag, so one unread chat has no number worth printing — a
-					    dot says it; the count only appears once several chats here have news. */}
-					{unread > 1 ? <Badge>{unread}</Badge> : unread ? <span className="dot size-2 bg-accent" /> : null}
+				<div className="flex min-w-0 items-center justify-between gap-2">
+					<div className="flex min-w-0 items-center gap-1.5">
+						<span
+							className={cn(
+								'min-w-0 truncate text-sm leading-none',
+								unread ? 'font-bold' : 'font-medium',
+								unread || selected ? 'text-text' : 'text-muted'
+							)}
+						>
+							{workspaceTitle(w)}
+						</span>
+						{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
+						{/* Unread is a per-chat flag, so one unread chat has no number worth printing — a
+						    dot says it; the count only appears once several chats here have news. */}
+						{unread > 1 ? <Badge>{unread}</Badge> : unread ? <span className="dot size-2 bg-accent" /> : null}
+					</div>
+					{/* Conductor's own sidebar puts +adds/-deletes on the workspace title line.
+					    The patch size owns the trailing edge; pin and unread stay with the title. */}
+					{showDiffs ? <ChangeStats stats={w.change_stats} /> : null}
 				</div>
 				{/* Context usage is *not* here: a workspace holds several chats and this card can only
 				    speak for the active one, so the number read as the workspace's. It lives on the

@@ -45,7 +45,7 @@ import type { TranscriptEntry } from './transcript.ts'
 import type { ActuatorInfo, SendResult as ActuatorSendResult } from './writes.ts'
 
 export type { BackgroundTask } from './background-tasks.ts'
-export type { DiffFile, WorkspaceDiff } from './git.ts'
+export type { DiffFile, DiffStats, WorkspaceDiff } from './git.ts'
 export type { RepoIcon } from './icons.ts'
 export type { LogLevel } from './logbuf.ts'
 export type { MergeMethod, MergeResult } from './merge.ts'
@@ -316,6 +316,18 @@ export interface StopResult {
 	alreadyIdle?: boolean
 	/** The chat as the relay re-read it once Conductor recorded the stop. */
 	session?: SessionRow
+	error?: string
+}
+
+/** DELETE /api/sessions/:id — Conductor's reversible "Close tab" action. */
+export interface CloseChatResult {
+	ok: boolean
+	/** A retry named a session Conductor had already hidden. */
+	alreadyClosed?: boolean
+	/** The tab Conductor selected after closing, or null when none remain. */
+	activeSessionId?: string | null
+	/** The close was refused because this chat still has an agent running. */
+	agentRunning?: boolean
 	error?: string
 }
 

@@ -428,7 +428,7 @@ export function Composer({
 							onClick={() => send()}
 							disabled={disabled || !canSend || forking || !online}
 							aria-label="Send"
-							className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-white transition active:scale-95 disabled:bg-surface-2 disabled:text-faint"
+							className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-on-solid transition active:scale-95 disabled:bg-surface-2 disabled:text-faint"
 						>
 							<ArrowUp size={18} />
 						</button>

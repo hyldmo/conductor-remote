@@ -7,6 +7,7 @@ import type {
 	AgentPatch,
 	AgentResult,
 	ArchiveResult,
+	CloseChatResult,
 	ContinueWorkspaceResult,
 	CreateWorkspaceResult,
 	DefaultModelResult,
@@ -280,6 +281,19 @@ export const client = {
 		api<StopResult>(
 			routes.stop.path(sessionId),
 			{ method: routes.stop.method, body: JSON.stringify({ workspaceId }) },
+			ACTION_TIMEOUT_MS
+		),
+	/**
+	 * Hide one chat through Conductor's own Close tab action. A running chat needs
+	 * the same explicit confirmation as the desktop's "Close anyway" dialog.
+	 */
+	closeChat: (sessionId: string, workspaceId: string, closeRunning = false) =>
+		api<CloseChatResult>(
+			routes.closeChat.path(sessionId),
+			{
+				method: routes.closeChat.method,
+				body: JSON.stringify({ workspaceId, closeRunning })
+			},
 			ACTION_TIMEOUT_MS
 		),
 	/** Open a new chat ("New chat, same files" / Cmd+T) in a workspace. */
