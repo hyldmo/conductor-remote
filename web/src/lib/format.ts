@@ -200,11 +200,15 @@ export function recentBucket(iso: string, now: Date = new Date()): RecentBucket 
 	return 'older'
 }
 
-/** One palette for every status dot, so the header control and the sidebar groups agree. */
+/**
+ * Conductor's lifecycle labels, coloured in the workspace dot's existing PR
+ * language. This changes only presentation: grouping and writes still use
+ * `manual_status` / `derived_status` above.
+ */
 export const STATUS_COLORS: Record<string, string> = {
-	done: 'var(--color-done)',
-	'in-review': 'var(--color-idle)',
-	'in-progress': 'var(--color-working)',
+	done: 'var(--color-pr-merged)',
+	'in-review': 'var(--color-pr-mergeable)',
+	'in-progress': 'var(--color-done)',
 	'setting-up': 'var(--color-muted)'
 }
 
