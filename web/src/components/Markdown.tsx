@@ -1,5 +1,5 @@
 import type { Element, ElementContent } from 'hast'
-import { Paperclip, X } from 'lucide-react'
+import { Paperclip } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown, { type ExtraProps } from 'react-markdown'
@@ -13,6 +13,7 @@ import { highlightLines, languageForFence, languageForPath } from '../lib/highli
 import type { FilePreviewResponse } from '../lib/types.ts'
 import { Code, Tokens } from './Code.tsx'
 import { CopyButton, Spinner } from './ui.tsx'
+import { ViewerHeader } from './ViewerHeader.tsx'
 
 /** Hoisted so the plugin list is one stable prop rather than a new array on every render. */
 const PLUGINS = [remarkGfm, remarkBreaks]
@@ -172,20 +173,12 @@ function FilePreviewSheet({ reference, onClose }: { reference: string; onClose: 
 				aria-label="Source file"
 				className="fade-in pt-safe pb-safe fixed inset-0 z-[60] mx-auto flex flex-col bg-bg md:inset-6 md:rounded-3xl md:border md:border-border-soft"
 			>
-				<header className="flex items-center gap-3 border-b border-border-soft px-4 py-3">
-					<div className="min-w-0 flex-1">
-						<h2 className="text-base font-semibold">Source</h2>
-						<p className="truncate font-mono text-xs text-muted">{preview?.path ?? reference}</p>
-					</div>
-					<button
-						type="button"
-						onClick={onClose}
-						aria-label="Close source preview"
-						className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
-					>
-						<X size={18} />
-					</button>
-				</header>
+				<ViewerHeader
+					title="Source"
+					subtitle={preview?.path ?? reference}
+					onClose={onClose}
+					closeLabel="Close source preview"
+				/>
 				<div className="min-h-0 flex-1 overflow-auto">
 					{!preview && !error ? <Spinner label="Reading source…" /> : null}
 					{error ? <p className="mx-auto max-w-xs px-6 py-16 text-center text-sm text-muted">{error}</p> : null}

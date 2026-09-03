@@ -2,7 +2,14 @@ import { useQueryClient } from '@tanstack/react-query'
 import { FileDiff, Hourglass, LoaderCircle, Plus, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
-import { useAnyWorkspace, useClearChatNotification, useSessions, useWorkspaceFiles, useWorkspaces } from '../hooks.ts'
+import {
+	useAnyWorkspace,
+	useClearChatNotification,
+	useDiff,
+	useSessions,
+	useWorkspaceFiles,
+	useWorkspaces
+} from '../hooks.ts'
 import { ApiError, client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { buildResolver, MentionResolverProvider } from '../lib/fileMentions.ts'
@@ -15,7 +22,7 @@ import { useApp, WORKING_HINT_MS } from '../store.ts'
 import { ArchivedChat } from './ArchivedChat.tsx'
 import { Composer } from './Composer.tsx'
 import { DevServerControls } from './DevServerControls.tsx'
-import { DiffView } from './DiffView.tsx'
+import { DiffFileViewer, type DiffReviewState, DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
 import type { SplitFormat } from './Transcript.tsx'
 import { Transcript } from './Transcript.tsx'
@@ -33,6 +40,9 @@ export function SessionView() {
 	const pickedSession = searchParams.get('session')
 	const pickSession = (id: string) => setSearchParams({ session: id }, { replace: true })
 	const [diffOpen, setDiffOpen] = useState(false)
+	const [selectedDiff, setSelectedDiff] = useState<{ workspaceId: string; path: string } | null>(null)
+	const [diffNavigatorOpen, setDiffNavigatorOpen] = useState(false)
+	const selectedDiffFile = selectedDiff && selectedDiff.workspaceId === workspaceId ? selectedDiff.path : null
 	const [creatingChat, setCreatingChat] = useState(false)
 	const [closingChat, setClosingChat] = useState<string | null>(null)
 	const [confirmingClose, setConfirmingClose] = useState<string | null>(null)
@@ -42,6 +52,7 @@ export function SessionView() {
 	const navigate = useNavigate()
 	const { data, isLoading } = useWorkspaces()
 	const liveWorkspace = data?.workspaces.find(w => w.id === workspaceId)
+	const diffQuery = useDiff(workspaceId, diffOpen && !!liveWorkspace)
 	// `/api/state` lists only live workspaces, so an id that isn't in it is either archived
 	// or gone. Ask by id before saying "not found": the worktree is deleted on archive, the
 	// transcript is not, and search reaches those chats — 1,846 of the 1,886 here.
@@ -231,6 +242,28 @@ export function SessionView() {
 		if (split.sessionId) pickSession(split.sessionId)
 	}
 
+	const closeDiff = () => {
+		setDiffOpen(false)
+		setSelectedDiff(null)
+		setDiffNavigatorOpen(false)
+	}
+
+	const toggleDiff = () => {
+		if (diffOpen) closeDiff()
+		else {
+			setDiffOpen(true)
+			setDiffNavigatorOpen(true)
+		}
+	}
+
+	const selectDiffFile = (path: string) => {
+		setSelectedDiff({ workspaceId: ws.id, path })
+		// The changed-file rail stays mounted on desktop. On a phone it is an overlay,
+		// so selecting a row dismisses it to reveal this file in the transcript's slot.
+		setDiffNavigatorOpen(false)
+	}
+	const diffReview: DiffReviewState = { workspace: ws, query: diffQuery }
+
 	return (
 		<MentionResolverProvider value={resolveMention}>
 			<div className="flex h-full min-w-0 overflow-hidden">
@@ -243,7 +276,7 @@ export function SessionView() {
 							<>
 								<DevServerControls workspaceId={ws.id} />
 								<WorkspaceMenu workspace={ws} agentsRunning={sessions.filter(s => s.status === 'working').length} />
-								<DiffButton stats={ws.change_stats} open={diffOpen} onToggle={() => setDiffOpen(o => !o)} />
+								<DiffButton stats={ws.change_stats} open={diffOpen} onToggle={toggleDiff} />
 							</>
 						}
 					/>
@@ -282,19 +315,41 @@ export function SessionView() {
 							</button>
 						</div>
 					) : null}
-					{/* The relay's undelivered prompt for this chat: one parked for the lock screen
-				    wins (it names its session; oldest first, since delivery is FIFO), else the
-				    workspace's first prompt still waiting on setup. */}
-					<Transcript
-						sessionId={sessionId}
-						workspaceId={ws.id}
-						working={working}
-						workingSince={workingSince}
-						turnStartedAt={activeSession?.turn_started_at}
-						waiting={activeSession?.background_tasks}
-						queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
-						onFork={forkChat}
-					/>
+					<div className="relative min-h-0 flex flex-1 flex-col">
+						{/* The relay's undelivered prompt for this chat: one parked for the lock screen
+						    wins (it names its session; oldest first, since delivery is FIFO), else the
+						    workspace's first prompt still waiting on setup. */}
+						{selectedDiffFile ? (
+							<DiffFileViewer
+								key={selectedDiffFile}
+								review={diffReview}
+								filePath={selectedDiffFile}
+								onSelectFile={selectDiffFile}
+								onShowFiles={() => setDiffNavigatorOpen(true)}
+								onClose={closeDiff}
+							/>
+						) : (
+							<Transcript
+								sessionId={sessionId}
+								workspaceId={ws.id}
+								working={working}
+								workingSince={workingSince}
+								turnStartedAt={activeSession?.turn_started_at}
+								waiting={activeSession?.background_tasks}
+								queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
+								onFork={forkChat}
+							/>
+						)}
+						{diffOpen && (diffNavigatorOpen || !selectedDiffFile) ? (
+							<MobileDiffNavigator
+								review={diffReview}
+								sessionId={sessionId}
+								selectedFile={selectedDiffFile}
+								onSelectFile={selectDiffFile}
+								onClose={closeDiff}
+							/>
+						) : null}
+					</div>
 					{/* The agent controls — and the Stop button — render inside the composer card. */}
 					<Composer
 						key={ws.id}
@@ -309,7 +364,15 @@ export function SessionView() {
 					/>
 				</div>
 
-				{diffOpen ? <DiffPanel workspaceId={ws.id} sessionId={sessionId} onClose={() => setDiffOpen(false)} /> : null}
+				{diffOpen ? (
+					<DiffPanel
+						review={diffReview}
+						sessionId={sessionId}
+						selectedFile={selectedDiffFile}
+						onSelectFile={selectDiffFile}
+						onClose={closeDiff}
+					/>
+				) : null}
 			</div>
 		</MentionResolverProvider>
 	)
@@ -491,20 +554,24 @@ function ContextPercent({ used }: { used: number | null }) {
 	)
 }
 
-/** Diff as a side panel: static right column on lg+, full-screen overlay below that. */
+/** Changed files stay as the right rail on lg+. */
 function DiffPanel({
-	workspaceId,
+	review,
 	sessionId,
+	selectedFile,
+	onSelectFile,
 	onClose
 }: {
-	workspaceId: string
+	review: DiffReviewState
 	sessionId: string | null
+	selectedFile: string | null
+	onSelectFile: (path: string) => void
 	onClose: () => void
 }) {
 	return (
-		<aside className="fixed inset-0 z-40 flex flex-col bg-bg lg:static lg:z-auto lg:w-[380px] lg:shrink-0 lg:border-l lg:border-border-soft xl:w-[460px]">
-			<header className="pt-safe flex items-center gap-2 border-b border-border-soft px-3 pb-2.5">
-				<span className="flex-1 text-[15px] font-semibold">Diff</span>
+		<aside className="hidden flex-col bg-bg lg:flex lg:w-[380px] lg:shrink-0 lg:border-l lg:border-border-soft xl:w-[460px]">
+			<header className="flex items-center gap-2 border-b border-border-soft px-3 py-2.5">
+				<span className="flex-1 text-[15px] font-semibold">Changed files</span>
 				<button
 					type="button"
 					onClick={onClose}
@@ -514,7 +581,39 @@ function DiffPanel({
 					<X size={20} />
 				</button>
 			</header>
-			<DiffView workspaceId={workspaceId} sessionId={sessionId} />
+			<DiffView review={review} sessionId={sessionId} selectedFile={selectedFile} onSelectFile={onSelectFile} />
 		</aside>
+	)
+}
+
+/** On narrow screens the same file rail replaces only the transcript, never the composer. */
+function MobileDiffNavigator({
+	review,
+	sessionId,
+	selectedFile,
+	onSelectFile,
+	onClose
+}: {
+	review: DiffReviewState
+	sessionId: string | null
+	selectedFile: string | null
+	onSelectFile: (path: string) => void
+	onClose: () => void
+}) {
+	return (
+		<section className="absolute inset-0 z-20 flex flex-col bg-bg lg:hidden" aria-label="Changed files">
+			<header className="flex shrink-0 items-center gap-2 border-b border-border-soft px-3 py-2.5">
+				<span className="flex-1 text-[15px] font-semibold">Changed files</span>
+				<button
+					type="button"
+					onClick={onClose}
+					aria-label="Close diff panel"
+					className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+				>
+					<X size={20} />
+				</button>
+			</header>
+			<DiffView review={review} sessionId={sessionId} selectedFile={selectedFile} onSelectFile={onSelectFile} />
+		</section>
 	)
 }
