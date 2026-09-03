@@ -1,9 +1,21 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
 		<meta name="theme-color" content="#0a0b0e" />
+		<script>
+			// Keep the key and colors aligned with src/lib/theme.ts. This runs before the
+			// stylesheet so an explicit preference never flashes the opposite theme.
+			try {
+				const preference = localStorage.getItem('conductor-remote-theme')
+				if (preference === 'light' || preference === 'dark') document.documentElement.dataset.theme = preference
+				const dark =
+					preference === 'dark' ||
+					(preference !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+				document.querySelector('meta[name="theme-color"]').content = dark ? '#0a0b0e' : '#f5f6f8'
+			} catch {}
+		</script>
 		<meta name="apple-mobile-web-app-capable" content="yes" />
 		<meta name="mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

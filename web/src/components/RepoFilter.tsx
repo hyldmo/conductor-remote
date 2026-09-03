@@ -66,7 +66,7 @@ function RepoOption({
 			<span
 				className={cn(
 					'flex size-4 shrink-0 items-center justify-center rounded border peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent',
-					checked ? 'border-accent bg-accent text-white' : 'border-faint bg-surface'
+					checked ? 'border-accent bg-accent text-on-solid' : 'border-faint bg-surface'
 				)}
 			>
 				{checked ? <Check size={12} strokeWidth={3} /> : null}
