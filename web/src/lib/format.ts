@@ -84,12 +84,14 @@ const PR_DOT_COLORS: Record<NonNullable<Workspace['pr_status']>, string> = {
 /**
  * The workspace dot: PR state drives the colour (merged/draft/attention/mergeable),
  * everything else falls back to blue. Setup uses a muted spinner. An active
- * agent uses a spinner in its status colour (`StatusDot`).
+ * agent or a PR with checks still running uses a spinner in its status colour
+ * (`StatusDot`), so pending CI stays distinct from the solid attention dot used
+ * by failed checks and merge conflicts.
  */
-export function statusDot(w: Workspace): { color: string; working: boolean } {
-	if (isSettingUp(w)) return { color: 'var(--color-muted)', working: true }
+export function statusDot(w: Workspace): { color: string; spinning: boolean } {
+	if (isSettingUp(w)) return { color: 'var(--color-muted)', spinning: true }
 	const color = (w.pr_status && PR_DOT_COLORS[w.pr_status]) || 'var(--color-done)'
-	return { color, working: w.session_status === 'working' }
+	return { color, spinning: w.session_status === 'working' || w.pr_status === 'checks_pending' }
 }
 
 /**

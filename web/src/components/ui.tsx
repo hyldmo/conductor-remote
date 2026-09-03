@@ -42,9 +42,9 @@ export function PromptStatusDot({
 
 /**
  * Workspace dot: coloured by PR state (src/pr.ts). While a prompt is queued or the
- * agent works it becomes a spinner in that same colour; a send failure leaves the
- * ring behind with an X. `background` must go to the ring or dot, never both, or the
- * spinner fills in and its motion disappears.
+ * agent or CI works it becomes a spinner in that same colour; a send failure leaves
+ * the ring behind with an X. `background` must go to the ring or dot, never both, or
+ * the spinner fills in and its motion disappears.
  */
 export function StatusDot({
 	w,
@@ -55,9 +55,9 @@ export function StatusDot({
 	promptState?: PromptIndicatorState
 	className?: string
 }) {
-	const { color, working } = statusDot(w)
+	const { color, spinning } = statusDot(w)
 	if (promptState) return <PromptStatusDot state={promptState} color={color} className={className} />
-	if (working)
+	if (spinning)
 		return <span className={cn('dot-spinner', className)} style={{ '--spin-color': color } as CSSProperties} />
 	return <span className={cn('dot', className)} style={{ background: color }} />
 }
