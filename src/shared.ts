@@ -242,11 +242,25 @@ const SOURCE_EXTENSIONS = new Set([
 	'.yml'
 ])
 
-/** True for a file extension the relay's source preview accepts. */
-export function isPreviewableSource(filePath: string): boolean {
+/** Raster formats browsers can display without executing document content. */
+const IMAGE_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp'])
+
+function fileExtension(filePath: string): string | null {
 	const name = filePath.slice(filePath.lastIndexOf('/') + 1)
 	const dot = name.lastIndexOf('.')
-	return dot !== -1 && SOURCE_EXTENSIONS.has(name.slice(dot).toLowerCase())
+	return dot === -1 ? null : name.slice(dot).toLowerCase()
+}
+
+/** True for a file extension the relay's source preview accepts. */
+export function isPreviewableSource(filePath: string): boolean {
+	const extension = fileExtension(filePath)
+	return extension !== null && SOURCE_EXTENSIONS.has(extension)
+}
+
+/** True for a raster image the relay may return to an authenticated browser. */
+export function isPreviewableImage(filePath: string): boolean {
+	const extension = fileExtension(filePath)
+	return extension !== null && IMAGE_EXTENSIONS.has(extension)
 }
 
 /**

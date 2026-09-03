@@ -1614,6 +1614,20 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     first paint. `tests/mention-render.test.tsx` renders the chat to static markup for
     the fence trap alone — it caught it — because everything else about it typechecks
     and the failure is silent in both directions.
+    **An explicit raster image link does not need the git file list.** QA screenshots
+    routinely live in ignored `.context/qa` directories, so `[Screenshot](./shot.png)`
+    and `![Screenshot](./shot.png)` resolve against the live worktree even though git
+    cannot name them; absolute and `~/` image paths keep working without a workspace.
+    A plain link opens the full-screen image sheet, while image syntax renders inline.
+    Both fetch through the authenticated local-image route and an object URL, never a
+    filesystem URL carrying the token. The route realpaths before applying the source
+    preview boundary (public: Conductor workspaces; tailnet: the signed-in user's home),
+    retains the temporary-file roots agents use, caps replies at 10 MB, and accepts only
+    AVIF, GIF, JPEG, PNG and WebP. SVG stays in the source viewer: serving active document
+    content as an image would make a path allowlist do the wrong security job. A relative
+    link from an archived chat has no worktree left, but is still intercepted so it says
+    **Image unavailable** instead of falling through BrowserRouter and silently showing
+    Home — the same symptom this support fixes for a missing file.
     **A link the sanitiser emptied is not a link, and `ChatLink` now says so.**
     react-markdown keeps only `http(s)`, `irc(s)`, `mailto` and `xmpp`, and rewrites every
     other scheme to `href=""` — which a browser follows to the page it is already on, so

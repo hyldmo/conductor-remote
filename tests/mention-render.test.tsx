@@ -31,7 +31,11 @@ const resolve = buildResolver(WORKTREE, ['src/git.ts'])
 function render(markdown: string, mentions = true) {
 	const chat = <Markdown>{markdown}</Markdown>
 	return renderToStaticMarkup(
-		mentions ? <MentionResolverProvider value={resolve}>{chat}</MentionResolverProvider> : chat
+		mentions ? (
+			<MentionResolverProvider value={{ resolveMention: resolve, worktree: WORKTREE }}>{chat}</MentionResolverProvider>
+		) : (
+			chat
+		)
 	)
 }
 
@@ -69,5 +73,28 @@ describe('a link the URL sanitiser emptied', () => {
 
 	it('still draws a link that goes somewhere', () => {
 		expect(render('see [the docs](https://conductor.build/docs)')).toContain('href="https://conductor.build/docs"')
+	})
+})
+
+describe('a local image in Markdown', () => {
+	it('marks a project-relative image link for the authenticated preview', () => {
+		const html = render('[Desktop QA screenshot](.context/qa/wide.png)')
+		expect(html).toContain(`title="Open image ${WORKTREE}/.context/qa/wide.png"`)
+	})
+
+	it('intercepts the absolute workspace link agents commonly emit', () => {
+		const image = '/Users/someone/conductor/workspaces/project/berlin/.context/qa/desktop.png'
+		expect(render(`[Desktop QA screenshot](${image})`)).toContain(`title="Open image ${image}"`)
+	})
+
+	it('leaves a remote image link in the browser', () => {
+		const html = render('[Screenshot](https://example.com/wide.png)')
+		expect(html).toContain('href="https://example.com/wide.png"')
+		expect(html).not.toContain('title="Open image')
+	})
+
+	it('keeps an archived relative image out of the PWA router', () => {
+		const html = render('[Old screenshot](.context/qa/wide.png)', false)
+		expect(html).toContain('title="Open image .context/qa/wide.png"')
 	})
 })

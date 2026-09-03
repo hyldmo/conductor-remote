@@ -212,7 +212,7 @@ export const client = {
 	state: () => api<StateResponse>(routes.state.path()),
 	/** A repo's icon as an object URL, fetched with the auth header (token never rides in the URL). Cached per repo. */
 	repoIcon: (repoName: string): Promise<string> => cachedObjectUrl(routes.repoIcon.path(repoName)),
-	/** A local temporary image from chat Markdown. The relay validates the path before it reads it. */
+	/** A local image from chat Markdown. The relay realpaths and authorizes it before reading. */
 	localImage: (filePath: string): Promise<string> => cachedObjectUrl(routes.localImage.path(filePath)),
 	/** One image a tool returned, as an object URL. Asked for only when its step is opened. */
 	toolImage: (reference: string): Promise<string> => cachedObjectUrl(routes.toolImage.path(reference)),

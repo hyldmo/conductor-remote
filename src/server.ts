@@ -11,7 +11,7 @@ import { isDefaultEffortLevel, readDefaultEfforts, writeDefaultEfforts } from '.
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
 import { DevServerController } from './dev-server.ts'
-import { isAllowedPreviewPath, parseFileReference } from './file-preview.ts'
+import { isAllowedPreviewPath, parseFileReference, parseImageReference } from './file-preview.ts'
 import { FirstPromptQueue } from './firstprompt.ts'
 import { captureForkWorkspace, materializeForkWorkspace, releaseForkWorkspace } from './fork-workspace.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
@@ -616,15 +616,24 @@ async function serveLocalImage(
 	res: http.ServerResponse,
 	requestedPath: string
 ): Promise<void> {
-	const contentType = LOCAL_IMAGE_TYPES[path.extname(requestedPath).toLowerCase()]
-	if (!contentType || !path.isAbsolute(requestedPath)) return json(req, res, 404, { error: 'image not found' })
+	const target = parseImageReference(requestedPath)
+	const contentType = target ? LOCAL_IMAGE_TYPES[path.extname(target).toLowerCase()] : null
+	if (!target || !contentType) return json(req, res, 404, { error: 'image not found' })
 
 	let filePath: string
 	let size: number
 	try {
-		filePath = await fs.promises.realpath(requestedPath)
-		if (!LOCAL_IMAGE_ROOTS.some(root => insideRoot(filePath, root)))
-			return json(req, res, 404, { error: 'image not found' })
+		filePath = await fs.promises.realpath(target)
+		if (!LOCAL_IMAGE_ROOTS.some(root => insideRoot(filePath, root))) {
+			const [workspaceRoot, homeRoot, bundledSkillsRoot] = await Promise.all([
+				fs.promises.realpath(cfg.workspacesRoot),
+				fs.promises.realpath(os.homedir()),
+				fs.promises.realpath(BUNDLED_SKILLS_ROOT).catch(() => null)
+			])
+			if (!isAllowedPreviewPath(filePath, workspaceRoot, homeRoot, readExposeMode(), bundledSkillsRoot)) {
+				return json(req, res, 404, { error: 'image not found' })
+			}
+		}
 		const info = await fs.promises.stat(filePath)
 		if (!info.isFile()) return json(req, res, 404, { error: 'image not found' })
 		size = info.size
@@ -1399,9 +1408,9 @@ const server = http.createServer(async (req, res) => {
 				})
 			}
 
-			// GET /api/local-images/:path — temporary images linked from agent Markdown. The browser fetches this
+			// GET /api/local-images/:path — local images linked from agent Markdown. The browser fetches this
 			// with its Authorization header and turns the reply into an object URL (Markdown.tsx), so the secret
-			// stays out of the image URL. `serveLocalImage` contains access to temporary image files only.
+			// stays out of the image URL. `serveLocalImage` limits reads to temp files and permitted workspace paths.
 			const localImage = routeParam(routes.localImage, req.method, pathname)
 			if (localImage) return serveLocalImage(req, res, localImage)
 

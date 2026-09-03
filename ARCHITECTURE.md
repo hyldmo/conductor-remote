@@ -49,8 +49,9 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   preserves source HEAD, index and working tree through short-lived private refs
   change-stats.ts bounded, background cache of git line stats for /api/state; working rows
                   refresh quickly while idle rows avoid spending four git calls every poll
-  file-preview.ts resolves a source path an agent wrote (absolute, or ~) and decides whether
-                  the relay may open it — the same answer whether or not the file exists
+  file-preview.ts parses source and raster-image paths an agent wrote (absolute, or ~) and
+                  decides whether the relay may open them — the same answer whether or not
+                  the file exists
   merge.ts        merge the workspace's open PR via `gh pr merge` (mirrors Conductor's Merge button)
   pr.ts           the one read that leaves this box: GitHub PR state, cached and never awaited
                   by /api/state; conflicts are computed locally with `git merge-tree`
@@ -102,6 +103,7 @@ web/              React PWA (Vite root)
                   identity intact), transcript-actions (where a Fork control may sit), highlight
                   (eleven languages, registered one at a time), fileMentions (turns `src/git.ts`
                   in a message into a source link, worktree file list as the existence check;
+                  explicit raster links also resolve ignored project-relative files, while
                   absolute and ~ paths pass through for the relay to allow), clipboard (copyText,
                   behind the Copy on a response and on every fenced block)
   src/components/ Header, WorkspaceList, SessionView, Transcript, Markdown + Code, DiffView,
