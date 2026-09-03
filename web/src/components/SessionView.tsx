@@ -504,7 +504,10 @@ export function SessionTabs({
 							<button
 								type="button"
 								onClick={() => onSelect(s.id)}
-								className="flex min-w-0 items-center gap-1.5 py-1.5 pl-3.5 pr-1"
+								className={cn(
+									'flex min-w-0 items-center gap-1.5 py-1.5 pl-3.5',
+									sessions.length > 1 ? 'pr-1' : 'pr-3.5'
+								)}
 							>
 								{promptState ? (
 									<PromptStatusDot state={promptState} className="size-3" />
@@ -519,15 +522,17 @@ export function SessionTabs({
 								{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
 								{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}
 							</button>
-							<button
-								type="button"
-								onClick={() => onClose(s.id)}
-								disabled={!online || closingId !== null}
-								aria-label={`Close ${s.title || 'Untitled'} chat`}
-								className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-full text-faint transition active:bg-bg/70 active:text-text disabled:opacity-40"
-							>
-								{closingId === s.id ? <LoaderCircle size={12} className="animate-spin" /> : <X size={12} />}
-							</button>
+							{sessions.length > 1 ? (
+								<button
+									type="button"
+									onClick={() => onClose(s.id)}
+									disabled={!online || closingId !== null}
+									aria-label={`Close ${s.title || 'Untitled'} chat`}
+									className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-full text-faint transition active:bg-bg/70 active:text-text disabled:opacity-40"
+								>
+									{closingId === s.id ? <LoaderCircle size={12} className="animate-spin" /> : <X size={12} />}
+								</button>
+							) : null}
 						</div>
 					)
 				})}
