@@ -1314,16 +1314,22 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   opens after focus + Space, and pressing its exact `AXMenuItem` starts the task
   immediately—there is no second Play press. An unnamed legacy start inspects that
   live menu and proceeds only when it independently contains one task.
-  **Preview intent comes from Conductor's own documented `preview_urls` setting**,
-  resolved with its user → shared repo → repo-local →
-  managed precedence. Each named loopback HTTP URL gets its own persisted
-  `tailscale serve` HTTPS port and appears in the phone's Open dropdown; two paths
-  on one local port reuse one bridge. The relay still discovers the local
+  **Preview intent is URL-first.** Conductor's documented `preview_urls` setting
+  remains authoritative, resolved with its user → shared repo → repo-local →
+  managed precedence; a running application can otherwise explicitly advertise
+  the complete loopback URL it wants opened. That producer-owned boundary is how
+  `yarn dev` carries this relay's dynamic `#token` without teaching the forwarding
+  layer what a relay token is. Each named URL appears in the phone's Open dropdown,
+  and forwarding changes only its origin — path, query and fragment survive. One
+  persisted `tailscale serve` mapping belongs to each local port, so two launch URLs
+  on one port reuse one bridge. The relay still discovers the local
   workspace's allocated `CONDUCTOR_PORT` from `ps eww` so it can expand that
   template (never log the snapshot — it contains environments and secrets). This
-  is a process-environment read, not terminal-output scraping. If a repo has no
-  configured previews, Conductor's detected Open-button ports and then the base
-  allocation remain compatibility fallbacks.
+  is a process-environment read, not terminal-output scraping. If no full URL was
+  configured or advertised, `writes.ts` accepts an `AXURL` from Conductor's Open
+  control; current Conductor builds expose only the `Open :<port>` label, so that
+  port and then the base allocation remain compatibility fallbacks. Never append a
+  credential in the consumer: arbitrary preview JavaScript can read its fragment.
   **A start whose port already listens presses nothing** — forwarding is relay-only
   work, measured at **0.4s** against the Accessibility path's tens of seconds, and it
   steals no focus. That is what lets the phone open the tab from the same tap:

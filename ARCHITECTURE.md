@@ -67,7 +67,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   sendonce.ts     the send memo: answers a repeated clientId with the first send's outcome
   firstprompt.ts  persisted queue that delivers a new workspace's first prompt, from setup on
   parked.ts       persisted queue for prompts that hit the lock screen — delivers on unlock, pushes the receipt
-  dev-server.ts   Conductor Run task + tailnet-only HTTPS for its configured preview_urls
+  dev-server.ts   URL-first Conductor Run previews + per-port tailnet-only HTTPS forwards
   notify.ts       status-transition watcher + subscription store (~/…/conductor-remote/push.json, 0600)
   webpush.ts      Web Push protocol: VAPID (ES256) + aes128gcm payloads, node:crypto only
   logbuf.ts       console capture (ring + stamped stdout) + log-file tail → GET /api/logs, token redacted

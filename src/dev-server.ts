@@ -5,10 +5,11 @@
  * The relay never spawns a repository command itself. Starting and stopping go
  * through Conductor's real Run button (`writes.ts`), which preserves its task
  * selection, environment, run-mode rules and process-group cleanup. This module
- * discovers that workspace's allocated `CONDUCTOR_PORT`, expands Conductor's
- * configured `preview_urls`, and gives each local preview a tailnet HTTPS origin
- * on the Mac's MagicDNS name. Conductor's detected Open-button ports remain the
- * fallback for repositories that do not declare previews.
+ * discovers that workspace's allocated `CONDUCTOR_PORT`, accepts complete URLs
+ * from Conductor configuration or a running application, and gives each local
+ * preview a tailnet HTTPS origin on the Mac's MagicDNS name. Conductor's detected
+ * Open-control URLs are used when its accessibility tree exposes them; port-only
+ * controls remain the compatibility fallback.
  *
  * Tailscale's reverse proxy preserves the public Host header. Dev servers such
  * as Vite reject that by default, so a tiny loopback bridge rewrites Host/Origin
@@ -25,7 +26,12 @@ import net from 'node:net'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { stateDir } from './config.ts'
-import { type PreviewTarget, previewUrlSettings, resolvePreviewTargets } from './preview-urls.ts'
+import {
+	type PreviewTarget,
+	type PreviewUrlSetting,
+	previewUrlSettings,
+	resolvePreviewTargets
+} from './preview-urls.ts'
 import type { Workspace } from './reads.ts'
 import { type DevRunConfig, runConfigsFor } from './run-configs.ts'
 import type { ServeStatus } from './tailscale.ts'
@@ -87,7 +93,9 @@ interface StoredForward {
 	servePort: number
 	bridgePort: number
 	host: string
+	/** Last launch label, retained only for a port-only fallback after restart. */
 	name?: string
+	/** Last path/query/fragment, retained only for a port-only fallback after restart. */
 	path?: string
 	/** Relay process holding the loopback bridge; absent on version-1 receipts. */
 	ownerPid?: number
@@ -393,8 +401,18 @@ function chooseServePort(status: ServeStatus, targetPort: number, reserved = new
 	return null
 }
 
-function forwardUrl(record: StoredForward, previewPath = record.path || '/'): string {
-	return `https://${record.host}${record.servePort === 443 ? '' : `:${record.servePort}`}${previewPath}`
+function previewPath(previewUrl: string): string {
+	const url = new URL(previewUrl)
+	return `${url.pathname || '/'}${url.search}${url.hash}`
+}
+
+function localPreviewUrl(port: number, suffix = '/'): string {
+	return `http://localhost:${port}${suffix}`
+}
+
+function forwardUrl(record: StoredForward, previewUrl?: string): string {
+	const suffix = previewUrl ? previewPath(previewUrl) : record.path || '/'
+	return `https://${record.host}${record.servePort === 443 ? '' : `:${record.servePort}`}${suffix}`
 }
 
 export class DevServerController {
@@ -404,6 +422,7 @@ export class DevServerController {
 	private readonly records = new Map<string, StoredForward>()
 	private readonly proxies = new Map<string, DevProxy>()
 	private readonly ports = new Map<string, number>()
+	private readonly advertisedPreviews = new Map<string, PreviewUrlSetting[]>()
 	private readonly actions = new Map<string, Promise<DevServerResult>>()
 
 	constructor(storeFile = path.join(stateDir(), 'dev-forwards.json')) {
@@ -411,6 +430,25 @@ export class DevServerController {
 		this.bin = tailscaleBin()
 		this.host = this.bin ? magicDnsName(this.bin) : null
 		this.load()
+	}
+
+	/**
+	 * Let a running application publish the exact URLs it wants opened.
+	 *
+	 * The producer owns every path, query parameter and fragment — including any
+	 * bootstrap credential. The forwarding layer only accepts loopback HTTP URLs
+	 * and changes their origin, so it never needs application-specific token logic.
+	 */
+	advertisePreviewUrls(workspaceId: string, previews: PreviewUrlSetting[]): void {
+		if (!workspaceId) return
+		if (!previews.length) {
+			this.advertisedPreviews.delete(workspaceId)
+			return
+		}
+		this.advertisedPreviews.set(
+			workspaceId,
+			previews.slice(0, 10).map(preview => ({ name: preview.name, url: preview.url }))
+		)
 	}
 
 	private refreshTailscale(): void {
@@ -464,20 +502,36 @@ export class DevServerController {
 		return null
 	}
 
-	private targetsFor(workspace: Workspace, basePort: number | null, detectedPorts: number[] = []): PreviewTarget[] {
+	private targetsFor(
+		workspace: Workspace,
+		basePort: number | null,
+		detectedPorts: number[] = [],
+		detectedUrls: string[] = []
+	): PreviewTarget[] {
 		const configured = resolvePreviewTargets(previewUrlSettings(workspace), basePort)
 		if (configured.length) return configured
+		const advertised = resolvePreviewTargets(this.advertisedPreviews.get(workspace.id) ?? [], basePort)
+		if (advertised.length) return advertised
+		const detected = resolvePreviewTargets(
+			detectedUrls.map(url => ({ url })),
+			basePort
+		)
 		const ports = [...new Set(detectedPorts.filter(validPort))]
-		if (!ports.length && basePort) ports.push(basePort)
-		if (!ports.length) {
+		const representedPorts = new Set(detected.map(target => target.port))
+		if (!ports.length && !detected.length && basePort) ports.push(basePort)
+		if (!ports.length && !detected.length) {
 			for (const record of this.records.values()) {
 				if (record.workspaceId === workspace.id) ports.push(record.targetPort)
 			}
 		}
-		return ports.slice(0, 10).map(port => {
-			const record = this.records.get(recordKey(workspace.id, port))
-			return { name: record?.name || `Port ${port}`, port, path: record?.path || '/' }
-		})
+		const fallbacks = ports
+			.filter(port => !representedPorts.has(port))
+			.slice(0, 10 - detected.length)
+			.map(port => {
+				const record = this.records.get(recordKey(workspace.id, port))
+				return { name: record?.name || `Port ${port}`, port, url: localPreviewUrl(port, record?.path || '/') }
+			})
+		return [...detected, ...fallbacks]
 	}
 
 	private async serveStatus(): Promise<ServeStatus> {
@@ -562,7 +616,7 @@ export class DevServerController {
 			if (serveProxyAt(status, existing.servePort) === expected && (await bridgeMatches(existing))) {
 				existing.basePort = basePort ?? existing.basePort
 				existing.name = target.name
-				existing.path = target.path
+				existing.path = previewPath(target.url)
 				this.save()
 				return existing
 			}
@@ -602,7 +656,7 @@ export class DevServerController {
 			bridgePort: proxy.port,
 			host: this.host,
 			name: target.name,
-			path: target.path,
+			path: previewPath(target.url),
 			ownerPid: process.pid,
 			bridgeToken: proxy.token
 		}
@@ -680,7 +734,7 @@ export class DevServerController {
 			targets.push({
 				name: record.name || `Port ${record.targetPort}`,
 				port: record.targetPort,
-				path: record.path || '/'
+				url: localPreviewUrl(record.targetPort, record.path || '/')
 			})
 			targetPorts.add(record.targetPort)
 		}
@@ -717,7 +771,7 @@ export class DevServerController {
 					port: target.port,
 					running: targetRunning,
 					forwarded: targetForwarded,
-					url: targetForwarded && record ? forwardUrl(record, target.path) : null
+					url: targetForwarded && record ? forwardUrl(record, target.url) : null
 				}
 			})
 		)
@@ -812,9 +866,10 @@ export class DevServerController {
 			if (!run.ok) return { ok: false, ...(await this.state(workspace)), error: run.error }
 			basePort ??= await workspacePort(workspace.id)
 			if (basePort) this.ports.set(workspace.id, basePort)
-			// Configured previews win. Conductor's expanded Open buttons are the
-			// compatibility path for repositories that have not declared them yet.
-			targets = this.targetsFor(workspace, basePort, run.ports)
+			// Configured and producer-advertised URLs win. Conductor's Open controls
+			// supply an exact AXURL when available and a port-only compatibility path
+			// on current builds.
+			targets = this.targetsFor(workspace, basePort, run.ports, run.previewUrls)
 			primaryPort = targets[0]?.port ?? null
 			if (!primaryPort) {
 				const rollback = run.changed ? await setRunTask(workspace, false) : null

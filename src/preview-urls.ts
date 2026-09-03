@@ -13,8 +13,8 @@ export interface PreviewUrlSetting {
 export interface PreviewTarget {
 	name: string
 	port: number
-	/** Path, query and fragment from the configured preview URL. */
-	path: string
+	/** Complete loopback URL supplied by configuration or the running application. */
+	url: string
 }
 
 const MAX_PREVIEWS = 10
@@ -269,11 +269,13 @@ export function resolvePreviewTargets(settings: PreviewUrlSetting[], conductorPo
 			if (url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) continue
 			const port = Number(url.port || 80)
 			if (!validPort(port)) continue
-			const previewPath = `${url.pathname || '/'}${url.search}${url.hash}`
-			const key = `${port}\0${previewPath}`
+			// All accepted hosts reach the same loopback service after forwarding.
+			// Deduplicate on the destination the phone will actually see, not whether
+			// its producer happened to spell loopback as localhost or 127.0.0.1.
+			const key = `${port}\0${url.pathname || '/'}${url.search}${url.hash}`
 			if (seen.has(key)) continue
 			seen.add(key)
-			targets.push({ name: setting.name?.trim() || `Port ${port}`, port, path: previewPath })
+			targets.push({ name: setting.name?.trim() || `Port ${port}`, port, url: url.href })
 			if (targets.length >= MAX_PREVIEWS) break
 		} catch {
 			// Invalid settings are already surfaced by Conductor's schema UI. They are

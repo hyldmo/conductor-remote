@@ -255,8 +255,11 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   every time—there is no remembered default. The relay then expands the
   repository's named `[[preview_urls]]` entries (including `$CONDUCTOR_PORT`) and
   exposes every local HTTP preview at its own tailnet-only HTTPS URL. The primary
-  preview opens directly; additional previews appear in its dropdown.
-  Repositories without `preview_urls` retain detected-port fallback behavior.
+  preview opens directly; additional previews appear in its dropdown. Preview
+  paths, queries and fragments are preserved while only the loopback origin is
+  replaced. Repositories without `preview_urls` use Conductor's exact Open-control
+  destination when it is exposed to Accessibility, with detected-port fallback
+  behavior for current Conductor builds.
   Open and Stop controls appear once it is running; Stop uses Conductor's own
   button and removes only this relay's Serve mappings. Forwarding a server that
   is already up presses nothing in Conductor, so it takes about a second and

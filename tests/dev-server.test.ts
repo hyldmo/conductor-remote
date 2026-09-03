@@ -104,9 +104,35 @@ url = 'http://127.0.0.1:6006/'
 				55300
 			)
 		).toEqual([
-			{ name: 'Web', port: 55300, path: '/app?q=1#top' },
-			{ name: 'Other path', port: 55300, path: '/other' },
-			{ name: 'Port 6006', port: 6006, path: '/' }
+			{ name: 'Web', port: 55300, url: 'http://localhost:55300/app?q=1#top' },
+			{ name: 'Other path', port: 55300, url: 'http://localhost:55300/other' },
+			{ name: 'Port 6006', port: 6006, url: 'http://127.0.0.1:6006/' }
+		])
+	})
+
+	test('uses an explicitly advertised full URL before falling back to a detected port', () => {
+		const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'conductor-remote-advertised-preview-'))
+		closeAfter.push(async () => fs.rmSync(temp, { recursive: true, force: true }))
+		const controller = new DevServerController(path.join(temp, 'forwards.json'))
+		controller.advertisePreviewUrls('workspace-runtime', [
+			{
+				name: 'Runtime app',
+				url: 'http://localhost:55300/app?mode=dev#token=declared-by-app'
+			}
+		])
+		const harness = controller as unknown as {
+			targetsFor: (workspace: Workspace, basePort: number | null, detectedPorts?: number[]) => PreviewTarget[]
+		}
+
+		expect(harness.targetsFor({ id: 'workspace-runtime' } as Workspace, 55300, [55300])).toEqual([
+			{
+				name: 'Runtime app',
+				port: 55300,
+				url: 'http://localhost:55300/app?mode=dev#token=declared-by-app'
+			}
+		])
+		expect(harness.targetsFor({ id: 'workspace-other' } as Workspace, 55300, [55300])).toEqual([
+			{ name: 'Port 55300', port: 55300, url: 'http://localhost:55300/' }
 		])
 	})
 
@@ -125,9 +151,13 @@ url = 'http://127.0.0.1:6006/'
 		const store = path.join(temp, 'forwards.json')
 		const controller = new DevServerController(store)
 		const targets: PreviewTarget[] = [
-			{ name: 'App', port: firstPort, path: '/app' },
-			{ name: 'Admin', port: firstPort, path: '/admin' },
-			{ name: 'Storybook', port: secondPort, path: '/' }
+			{
+				name: 'App',
+				port: firstPort,
+				url: `http://localhost:${firstPort}/app?mode=dev#token=declared-by-app`
+			},
+			{ name: 'Admin', port: firstPort, url: `http://localhost:${firstPort}/admin` },
+			{ name: 'Storybook', port: secondPort, url: `http://127.0.0.1:${secondPort}/` }
 		]
 		const status: ServeStatus = { TCP: {}, Web: {} }
 		type Harness = {
@@ -168,7 +198,7 @@ url = 'http://127.0.0.1:6006/'
 					port: firstPort,
 					running: true,
 					forwarded: true,
-					url: `https://test.ts.net:${firstPort}/app`
+					url: `https://test.ts.net:${firstPort}/app?mode=dev#token=declared-by-app`
 				},
 				{
 					name: 'Admin',

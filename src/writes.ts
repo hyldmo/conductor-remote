@@ -151,6 +151,9 @@ export interface RunTaskResult {
 	state?: 'running' | 'stopped'
 	task?: string
 	changed?: boolean
+	/** Exact destinations Conductor exposes on its Open controls, when available. */
+	previewUrls?: string[]
+	/** Port-only compatibility path for Conductor builds whose controls expose no destination. */
 	ports?: number[]
 	error?: string
 }
@@ -1211,13 +1214,17 @@ return my setRunTask(wantRunning, wantedTask)`.trim()
 					})
 				)
 		)
-		const [state, task, changed, rawPorts = ''] = stdout.trim().split('\t')
+		const [state, task, changed, rawPorts = '', rawPreviewUrls = ''] = stdout.trim().split('\t')
 		if (state !== 'running' && state !== 'stopped') throw new Error(`unexpected Run state: ${state || 'empty'}`)
 		const ports = rawPorts
 			.split(',')
 			.map(Number)
 			.filter(port => Number.isInteger(port) && port > 0 && port <= 65535)
-		return { ok: true, state, task, changed: changed === 'true', ports }
+		const previewUrls = rawPreviewUrls
+			.split('\x1e')
+			.map(url => url.trim())
+			.filter(Boolean)
+		return { ok: true, state, task, changed: changed === 'true', previewUrls, ports }
 	} catch (err) {
 		return { ok: false, error: osaError(err, 'Conductor took too long to change the Run task') }
 	} finally {

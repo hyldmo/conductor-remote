@@ -105,6 +105,14 @@ const db = new ConductorDb(cfg.dbPath)
 const reads = new Reads(db, cfg.workspacesRoot)
 const actuator = pickActuator(cfg.writeStrategy)
 const devServers = new DevServerController()
+if (cfg.devWebPort !== undefined && process.env.CONDUCTOR_WORKSPACE_ID) {
+	const preview = new URL(`http://localhost:${cfg.devWebPort}/`)
+	preview.hash = new URLSearchParams({ token: cfg.token }).toString()
+	// `yarn dev` is itself one application behind Conductor's Run button. Publish
+	// the same canonical URL printed below; DevServerController treats it exactly
+	// like any other full preview URL and has no knowledge of relay authentication.
+	devServers.advertisePreviewUrls(process.env.CONDUCTOR_WORKSPACE_ID, [{ name: 'Conductor Remote', url: preview.href }])
+}
 const STAGED_ATTACHMENTS_DIR = path.join(stateDir(), 'attachment-staging')
 // Picker labels cannot be reconstructed from `sessions.model`, so they belong to
 // relay state alongside the prompt queues. This lets a brand-new workspace choose
