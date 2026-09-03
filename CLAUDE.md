@@ -43,17 +43,22 @@ Two asymmetric halves — keep them separate:
     That column moves on **every** user message, including one typed *into* a
     running turn — steering — so the chat's elapsed timer would restart mid-answer
     on the one message that didn't start an answer. Conductor already separates the
-    two: `session_messages.turn_id` groups a turn (a steering message carries the
-    running turn's id), and **`queue_order` is set exactly on the messages that
-    head a turn** and NULL on steering ones. So `turn_started_at`
-    (`reads.listSessions`) is `MAX(sent_at)` over this session's heads — `sent_at`,
-    not `created_at`, because a prompt can sit queued for minutes before it runs,
-    and skipping the `sent_at IS NULL` ones is what stops a message queued behind
-    the current answer from blipping the timer. `queue_order` only appeared in
-    **May 2026** (every row before that is NULL), so a chat dormant since then
-    reports null and the phone just shows the dots with no timer. It rides on the
-    2s session poll for free — `idx_session_messages_sent_at(session_id, sent_at)`
-    serves it directly.
+    two with `session_messages.turn_id`: the prompt that started a turn and every
+    steering message added to it carry the same id. **`queue_order` used to identify
+    only the head, but Conductor stopped writing it on 2026-08-31** (measured
+    2026-09-03: all 715 user rows since September 1 had `turn_id` and `sent_at`;
+    zero had `queue_order`). So
+    `turn_started_at` (`reads.listSessions`) finds the latest user row whose `sent_at`
+    is non-null, then takes `MIN(sent_at)` across the user rows in its `turn_id` —
+    `sent_at`, not `created_at`, because a prompt can sit queued for minutes before it
+    runs. That both skips a message queued behind the current answer and walks a steer
+    back to the question instead of restarting the timer. A self-scheduled `/loop`
+    lap writes no user row, so the value deliberately stays on the last turn a person
+    started; the notifier uses that stability too. `MAX(sent_at)` over legacy
+    `queue_order` heads remains the fallback for old rows without `turn_id`. The two
+    existing message indexes keep it inside the 2s session poll; the `MIN(CASE …)`
+    shape is deliberate so SQLite chooses the exact `(session_id, role, turn_id, …)`
+    lookup rather than walking every older turn through the sent-time index.
   - **A chat waiting on a background task reads `idle`, and the desktop's "Waiting
     for task" row is in the SDK frames, not in `sessions`.** A `Bash` call with
     `run_in_background` (or a background Agent) writes `system/task_started`
@@ -934,20 +939,20 @@ Two asymmetric halves — keep them separate:
     minutes for as long as it runs, and `status` cycles `working → idle` on each lap.
     Measured here: one looping chat pushed roughly every 5 minutes from early evening
     past midnight and again all morning, which was most of what the phone received at
-    all. The tell is in the data rather than in a guess about intent: a turn is headed
-    by a `session_messages` row with `queue_order` set, a lap the agent gave itself
-    writes nothing at all, so what a person last did **sits still while `status` cycles**.
+    all. The tell is in the data rather than in a guess about intent: user messages in
+    one turn share a `turn_id`, a lap the agent gave itself writes no user message at
+    all, so what a person last did **sits still while `status` cycles**.
     So the lap after you type notifies and the ones after it are quiet, until you say the
     next thing. It takes **both** `turn_started_at` (the same read `listSessions` uses for
     the elapsed timer, now on `listSessionStates` too) **and `last_user_message_at`**: the
-    first misses steering, because a message typed into a running turn carries no
-    `queue_order`, so answering a question mid-lap would read as a lap nobody asked for
-    and the turn would end unannounced. Two exemptions, both deliberate: `→ error` always
-    fires (a loop that breaks is worth hearing about however it started), and a chat
-    recording **neither** (dormant since before `queue_order` landed in May 2026) notifies
-    every time, because with no evidence either way, silence is the dangerous default. The
-    state machine is `TurnWatcher`, split out of the poll loop so `tests/notify.test.ts`
-    can drive it a tick at a time.
+    first deliberately stays on the turn's first message when someone steers it, so
+    answering a question mid-lap would otherwise read as a lap nobody asked for and the
+    turn would end unannounced. Two exemptions, both deliberate: `→ error` always fires
+    (a loop that breaks is worth hearing about however it started), and a chat recording
+    **neither** (no dispatched user row with a current `turn_id` or legacy `queue_order`,
+    and no session timestamp) notifies every time, because with no evidence either way,
+    silence is the dangerous default. The state machine is `TurnWatcher`, split out of
+    the poll loop so `tests/notify.test.ts` can drive it a tick at a time.
   - **A fourth one: the chat already in front of you.** A turn ending on the screen you
     are reading is not news, and the drop has to happen on the relay. The service worker
     cannot swallow it — Safari treats a push that resolves without a notification as

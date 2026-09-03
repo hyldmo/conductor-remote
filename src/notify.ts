@@ -350,9 +350,9 @@ function oneLine(text: string): string {
 /**
  * Everything this chat records about a person having asked for something, as one
  * comparable string — the turn head *and* the last user message, because steering a
- * running turn moves only the second (`queue_order` is null on a steering message, see
- * reads.ts). Empty when the chat records neither, which is what `selfScheduled` reads
- * as "no evidence" rather than as "nobody asked".
+ * running turn moves only the second (`turn_started_at` stays at the first message in
+ * that `turn_id`; see reads.ts). Empty when the chat records neither, which is what
+ * `selfScheduled` reads as "no evidence" rather than as "nobody asked".
  */
 function askedBy(state: { turnStartedAt: string | null; lastUserMessageAt: string | null }): string {
 	if (!state.turnStartedAt && !state.lastUserMessageAt) return ''
@@ -393,16 +393,17 @@ export class TurnWatcher {
 	 * midnight, and again all morning, which was most of the notifications the phone got
 	 * at all.
 	 *
-	 * The tell is in the data rather than in a guess about intent. A turn is headed by a
-	 * `session_messages` row with `queue_order` set and a loop's next lap writes nothing
-	 * at all, so `askedBy` below sits still while `status` cycles. The first lap after you
-	 * type something notifies. Every lap the agent gave itself is quiet, until you say the
-	 * next thing. An `error` is exempt — a loop that breaks is worth hearing about however
-	 * it started.
+	 * The tell is in the data rather than in a guess about intent. User messages in one
+	 * turn share a `turn_id`, and a loop's next lap writes no user message at all, so
+	 * `askedBy` below sits still while `status` cycles. The first lap after you type
+	 * something notifies. Every lap the agent gave itself is quiet, until you say the next
+	 * thing. An `error` is exempt — a loop that breaks is worth hearing about however it
+	 * started.
 	 *
-	 * A chat with nothing to compare (no turn head *and* no user message — dormant since
-	 * before `queue_order` landed in May 2026) notifies every time, which is the old
-	 * behaviour: with no evidence either way, silence is the dangerous default.
+	 * A chat with nothing to compare (no dispatched user row carrying either a current
+	 * `turn_id` or legacy `queue_order`, and no session timestamp) notifies every time,
+	 * which is the old behaviour: with no evidence either way, silence is the dangerous
+	 * default.
 	 */
 	private readonly notifiedTurn = new Map<string, string>()
 
