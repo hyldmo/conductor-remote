@@ -42,8 +42,10 @@ const exec = promisify(execFile)
 // Keep the receipt additive and version-1-readable: an installed relay and a
 // source `yarn dev` relay can briefly share this file during an update.
 const STORE_VERSION = 1
+const PREVIEW_ADVERTISEMENT_VERSION = 1
 const PORT_WAIT_MS = 15_000
 const PORT_SNAPSHOT_TTL_MS = 5000
+const MAX_PREVIEW_ADVERTISEMENT_BYTES = 64 * 1024
 
 export interface DevServerState {
 	/** The local Tailscale prerequisites needed to expose a Run task are ready. */
@@ -106,6 +108,13 @@ interface StoredForward {
 interface ForwardStore {
 	version: number
 	forwards: StoredForward[]
+}
+
+interface PreviewAdvertisement {
+	version: number
+	workspaceId: string
+	ownerPid: number
+	previews: PreviewUrlSetting[]
 }
 
 interface DevProxy {
@@ -417,6 +426,7 @@ function forwardUrl(record: StoredForward, previewUrl?: string): string {
 
 export class DevServerController {
 	private readonly storeFile: string
+	private readonly advertisementDir: string
 	private bin: string | null
 	private host: string | null
 	private readonly records = new Map<string, StoredForward>()
@@ -427,13 +437,16 @@ export class DevServerController {
 
 	constructor(storeFile = path.join(stateDir(), 'dev-forwards.json')) {
 		this.storeFile = storeFile
+		this.advertisementDir = path.join(path.dirname(storeFile), 'dev-preview-advertisements')
 		this.bin = tailscaleBin()
 		this.host = this.bin ? magicDnsName(this.bin) : null
 		this.load()
 	}
 
 	/**
-	 * Let a running application publish the exact URLs it wants opened.
+	 * Let a running application publish the exact URLs it wants opened. A source
+	 * relay and the installed relay are separate processes, so the advertisement
+	 * is also written to a private workspace-scoped manifest they can both read.
 	 *
 	 * The producer owns every path, query parameter and fragment — including any
 	 * bootstrap credential. The forwarding layer only accepts loopback HTTP URLs
@@ -443,12 +456,74 @@ export class DevServerController {
 		if (!workspaceId) return
 		if (!previews.length) {
 			this.advertisedPreviews.delete(workspaceId)
+			this.removeOwnPreviewAdvertisement(workspaceId)
 			return
 		}
-		this.advertisedPreviews.set(
+		const published = previews.slice(0, 10).map(preview => ({ name: preview.name, url: preview.url }))
+		this.advertisedPreviews.set(workspaceId, published)
+		const advertisement: PreviewAdvertisement = {
+			version: PREVIEW_ADVERTISEMENT_VERSION,
 			workspaceId,
-			previews.slice(0, 10).map(preview => ({ name: preview.name, url: preview.url }))
-		)
+			ownerPid: process.pid,
+			previews: published
+		}
+		const file = this.previewAdvertisementFile(workspaceId)
+		const temporary = `${file}.${process.pid}.tmp`
+		try {
+			fs.mkdirSync(this.advertisementDir, { recursive: true, mode: 0o700 })
+			fs.writeFileSync(temporary, `${JSON.stringify(advertisement, null, 2)}\n`, { mode: 0o600 })
+			fs.chmodSync(temporary, 0o600)
+			fs.renameSync(temporary, file)
+		} catch (err) {
+			try {
+				fs.unlinkSync(temporary)
+			} catch {}
+			console.warn(`⚠ could not publish dev-server previews (${err instanceof Error ? err.message : err})`)
+		}
+	}
+
+	private previewAdvertisementFile(workspaceId: string): string {
+		const key = crypto.createHash('sha256').update(workspaceId).digest('hex')
+		return path.join(this.advertisementDir, `${key}.json`)
+	}
+
+	private readPreviewAdvertisement(workspaceId: string): PreviewUrlSetting[] {
+		try {
+			const file = this.previewAdvertisementFile(workspaceId)
+			if (fs.statSync(file).size > MAX_PREVIEW_ADVERTISEMENT_BYTES) return []
+			const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<PreviewAdvertisement>
+			if (
+				value.version !== PREVIEW_ADVERTISEMENT_VERSION ||
+				value.workspaceId !== workspaceId ||
+				!Number.isInteger(value.ownerPid) ||
+				(value.ownerPid ?? 0) <= 0 ||
+				!processAlive(value.ownerPid) ||
+				!Array.isArray(value.previews)
+			)
+				return []
+			return value.previews
+				.flatMap(preview =>
+					preview &&
+					typeof preview.url === 'string' &&
+					preview.url.length <= 8192 &&
+					(preview.name === undefined || (typeof preview.name === 'string' && preview.name.length <= 256))
+						? [{ name: preview.name, url: preview.url }]
+						: []
+				)
+				.slice(0, 10)
+		} catch {
+			return []
+		}
+	}
+
+	private removeOwnPreviewAdvertisement(workspaceId: string): void {
+		const file = this.previewAdvertisementFile(workspaceId)
+		try {
+			const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<PreviewAdvertisement>
+			if (value.workspaceId === workspaceId && value.ownerPid === process.pid) fs.unlinkSync(file)
+		} catch {
+			// Missing, malformed or owned by another producer: there is nothing of ours to remove.
+		}
 	}
 
 	private refreshTailscale(): void {
@@ -510,7 +585,10 @@ export class DevServerController {
 	): PreviewTarget[] {
 		const configured = resolvePreviewTargets(previewUrlSettings(workspace), basePort)
 		if (configured.length) return configured
-		const advertised = resolvePreviewTargets(this.advertisedPreviews.get(workspace.id) ?? [], basePort)
+		const advertised = resolvePreviewTargets(
+			this.advertisedPreviews.get(workspace.id) ?? this.readPreviewAdvertisement(workspace.id),
+			basePort
+		)
 		if (advertised.length) return advertised
 		const detected = resolvePreviewTargets(
 			detectedUrls.map(url => ({ url })),

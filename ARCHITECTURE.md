@@ -80,7 +80,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   firstprompt.ts  persisted queue that tags a workflow root, applies its frozen settings, and
                   delivers a new workspace's first prompt, from setup on
   parked.ts       persisted queue for prompts that hit the lock screen — delivers on unlock, pushes the receipt
-  dev-server.ts   URL-first Conductor Run previews + per-port tailnet-only HTTPS forwards
+  dev-server.ts   URL-first Conductor Run previews + live cross-process advertisements +
+                  per-port tailnet-only HTTPS forwards
   notify.ts       status-transition watcher subscribed to SessionPoller + subscription store
                   (~/…/conductor-remote/push.json, 0600)
   webpush.ts      Web Push protocol: VAPID (ES256) + aes128gcm payloads, node:crypto only
