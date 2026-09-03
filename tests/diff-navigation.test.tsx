@@ -1,47 +1,50 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Patch, scrollToPatchFile } from '../web/src/components/Patch.tsx'
+import { describe, expect, it } from 'vitest'
+import type { DiffFile } from '../src/wire.ts'
+import { Patch } from '../web/src/components/Patch.tsx'
+import { patchForFile, splitWorkspacePatch } from '../web/src/lib/diff.ts'
+
+const files: DiffFile[] = [
+	{ path: 'one.ts', added: 1, removed: 0 },
+	{ path: 'two.ts', added: 1, removed: 1 }
+]
+
+const patch = [
+	'diff --git a/one.ts b/one.ts',
+	'--- a/one.ts',
+	'+++ b/one.ts',
+	'@@ -0,0 +1 @@',
+	'+one',
+	'diff --git a/two.ts b/two.ts',
+	'--- a/two.ts',
+	'+++ b/two.ts',
+	'@@ -1 +1 @@',
+	'-old',
+	'+two'
+].join('\n')
 
 describe('diff file navigation', () => {
-	afterEach(() => vi.unstubAllGlobals())
+	it('splits a workspace patch into independently viewable files', () => {
+		const sections = splitWorkspacePatch(patch)
 
-	it('anchors each file header in patch order', () => {
-		const patch = [
-			'diff --git a/one.ts b/one.ts',
-			'--- a/one.ts',
-			'+++ b/one.ts',
-			'diff --git a/two.ts b/two.ts',
-			'--- a/two.ts',
-			'+++ b/two.ts'
-		].join('\n')
-		const html = renderToStaticMarkup(<Patch patch={patch} fileAnchorIds={['diff-file-0', 'diff-file-1']} />)
-
-		expect(html).toContain('id="diff-file-0"')
-		expect(html).toContain('id="diff-file-1"')
-		expect(html.indexOf('id="diff-file-0"')).toBeLessThan(html.indexOf('id="diff-file-1"'))
+		expect(sections).toHaveLength(2)
+		expect(sections[0]).toContain('a/one.ts')
+		expect(sections[0]).not.toContain('a/two.ts')
+		expect(sections[1]).toContain('a/two.ts')
 	})
 
-	it('smoothly scrolls only the diff panel to the selected file', () => {
-		const scrollIntoView = vi.fn()
-		const anchor = {
-			getBoundingClientRect: () => ({ top: 640 }),
-			scrollIntoView
-		}
-		const scrollTo = vi.fn()
-		const panel = {
-			contains: vi.fn(() => true),
-			getBoundingClientRect: () => ({ top: 140 }),
-			scrollTo,
-			scrollTop: 120
-		}
-		const getElementById = vi.fn(() => anchor)
-		vi.stubGlobal('document', { getElementById })
+	it('renders only the file selected in the changed-files rail', () => {
+		const selected = patchForFile(patch, files, 'two.ts')
+		const html = renderToStaticMarkup(<Patch patch={selected ?? ''} />)
 
-		scrollToPatchFile('diff-file-1', panel as unknown as HTMLElement)
+		expect(html).toContain('a/two.ts')
+		expect(html).toContain('+two')
+		expect(html).not.toContain('a/one.ts')
+	})
 
-		expect(getElementById).toHaveBeenCalledWith('diff-file-1')
-		expect(panel.contains).toHaveBeenCalledWith(anchor)
-		expect(scrollTo).toHaveBeenCalledWith({ behavior: 'smooth', top: 620 })
-		expect(scrollIntoView).not.toHaveBeenCalled()
+	it('reports a file whose section fell beyond the workspace patch limit', () => {
+		const firstSectionOnly = splitWorkspacePatch(patch)[0] ?? ''
+
+		expect(patchForFile(firstSectionOnly, files, 'two.ts')).toBeNull()
 	})
 })
