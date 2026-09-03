@@ -292,6 +292,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 															selected={w.id === selectedId}
 															modelGroups={modelGroups}
 															promptState={promptState}
+															showDiffs={view.showDiffs}
 														/>
 													</button>
 												</li>
@@ -524,13 +525,15 @@ function WorkspaceCard({
 	unread,
 	selected,
 	modelGroups,
-	promptState
+	promptState,
+	showDiffs
 }: {
 	w: Workspace
 	unread: number
 	selected: boolean
 	modelGroups: CachedModelGroup[] | undefined
 	promptState: PromptIndicatorState
+	showDiffs: boolean
 }) {
 	const model = modelLabel(w.model, catalogFor(modelGroups, w.agent_type))
 	return (
@@ -548,8 +551,8 @@ function WorkspaceCard({
 				/>
 			</div>
 			<div className="min-w-0 flex-1 space-y-1.25 overflow-hidden">
-				<div className="flex items-center gap-2">
-					<div className="flex min-w-0 flex-1 items-center gap-1.5">
+				<div className="flex min-w-0 items-center justify-between gap-2">
+					<div className="flex min-w-0 items-center gap-1.5">
 						<span
 							className={cn(
 								'min-w-0 truncate text-sm leading-none',
@@ -559,15 +562,14 @@ function WorkspaceCard({
 						>
 							{workspaceTitle(w)}
 						</span>
-						{/* Conductor's own sidebar puts +adds/-deletes beside the workspace title.
-						    Keeping them in this left-hand cluster makes the patch size part of the
-						    identity scan; pins and unread state still hold the far edge. */}
-						<ChangeStats stats={w.change_stats} />
+						{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
+						{/* Unread is a per-chat flag, so one unread chat has no number worth printing — a
+						    dot says it; the count only appears once several chats here have news. */}
+						{unread > 1 ? <Badge>{unread}</Badge> : unread ? <span className="dot size-2 bg-accent" /> : null}
 					</div>
-					{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
-					{/* Unread is a per-chat flag, so one unread chat has no number worth printing — a
-					    dot says it; the count only appears once several chats here have news. */}
-					{unread > 1 ? <Badge>{unread}</Badge> : unread ? <span className="dot size-2 bg-accent" /> : null}
+					{/* Conductor's own sidebar puts +adds/-deletes on the workspace title line.
+					    The patch size owns the trailing edge; pin and unread stay with the title. */}
+					{showDiffs ? <ChangeStats stats={w.change_stats} /> : null}
 				</div>
 				{/* Context usage is *not* here: a workspace holds several chats and this card can only
 				    speak for the active one, so the number read as the workspace's. It lives on the

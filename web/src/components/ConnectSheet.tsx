@@ -1,4 +1,4 @@
-import { Bell, Check, Copy, LogOut, RotateCcw, Sun, SunMoon, Wifi, X } from 'lucide-react'
+import { Bell, Check, Copy, FileDiff, LogOut, RotateCcw, Sun, SunMoon, Wifi, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { usePush } from '../hooks.ts'
@@ -172,6 +172,8 @@ const THEMES: [ThemePreference, string][] = [
 /** This device's appearance; it stays local rather than following another connected phone. */
 function ThemeRow() {
 	const [theme, setTheme] = useState(readThemePreference)
+	const showDiffs = useApp(s => s.view.showDiffs)
+	const setView = useApp(s => s.setView)
 	const choose = (next: ThemePreference) => {
 		setTheme(next)
 		writeThemePreference(next)
@@ -202,6 +204,31 @@ function ThemeRow() {
 					))}
 				</div>
 			</fieldset>
+			<div className="mt-2.5 flex items-center justify-between gap-3 border-t border-border pt-2.5">
+				<div className="flex min-w-0 items-center gap-2 text-sm">
+					<FileDiff size={16} className="shrink-0 text-muted" />
+					<span>Sidebar diffs</span>
+				</div>
+				<button
+					type="button"
+					role="switch"
+					aria-checked={showDiffs}
+					aria-label="Show line changes in workspace rows"
+					onClick={() => setView({ showDiffs: !showDiffs })}
+					className={cn(
+						'relative h-6 w-11 shrink-0 rounded-full transition-colors',
+						showDiffs ? 'bg-accent' : 'border border-border bg-surface'
+					)}
+				>
+					<span
+						className={cn(
+							'absolute left-0.5 top-0.5 size-5 rounded-full bg-white transition-transform',
+							showDiffs ? 'translate-x-5' : 'translate-x-0'
+						)}
+					/>
+				</button>
+			</div>
+			<p className="mt-1 text-xs text-muted">Show line additions and deletions in workspace rows.</p>
 		</div>
 	)
 }
