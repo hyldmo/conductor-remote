@@ -136,6 +136,8 @@ export const routes = {
 	defaultModel: param('POST', '/api/sessions/:sessionId/default-model'),
 	agent: param('POST', '/api/sessions/:sessionId/agent'),
 	stop: param('POST', '/api/sessions/:sessionId/stop'),
+	/** Hide one chat tab through Conductor's own Close tab action (Command-W). */
+	closeChat: param('DELETE', '/api/sessions/:sessionId'),
 	sendPrompt: param('POST', '/api/sessions/:sessionId/prompt'),
 	/** Write a phone-selected file into Conductor's attachment layout for this chat's workspace. */
 	uploadAttachment: param('POST', '/api/sessions/:sessionId/attachments'),

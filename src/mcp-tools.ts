@@ -33,6 +33,7 @@ import type { TranscriptEntry } from './transcript.ts'
 import type {
 	AgentResult,
 	ArchiveResult,
+	CloseChatResult,
 	CreateWorkspaceResult,
 	DefaultModelResult,
 	LogsResponse,
@@ -67,7 +68,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 export const SERVER_INFO = { name: 'conductor-remote', version: '1' }
 
 export const INSTRUCTIONS =
-	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. plan_usage, dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
+	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. plan_usage, dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
 
 /** Reads are quick; a UI write is measured in tens of seconds (writes.ts ▸ SEND_ATTEMPT_MS). */
 export const READ_TIMEOUT_MS = 10_000
@@ -638,6 +639,40 @@ export function createTools(call: RelayCall): Tool[] {
 				if (data.alreadyIdle) return 'that chat had already finished — nothing to stop'
 				if (!data.ok) throw new Error(data.error ?? 'the stop did not land')
 				return 'stopped'
+			}
+		},
+		{
+			name: 'close_chat',
+			description:
+				'Close one visible Conductor chat tab. This hides the tab but keeps its transcript; it can be reopened in Conductor with ⌘⇧T. DRIVES THE REAL UI and steals focus for a few seconds. A running chat is refused unless close_running is true, matching Conductor’s own “Close anyway” confirmation — only set it after the user confirms.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					session_id: { type: 'string', description: 'The visible chat tab to close.' },
+					workspace_id: {
+						type: 'string',
+						description: 'Workspace holding the chat. The relay verifies it when provided.'
+					},
+					close_running: {
+						type: 'boolean',
+						description: 'Close even though its agent is still working. Requires explicit user confirmation.'
+					}
+				},
+				required: ['session_id']
+			},
+			run: async args => {
+				const sessionId = need(args, 'session_id')
+				const data = await call<CloseChatResult>(routes.closeChat.path(sessionId), {
+					method: routes.closeChat.method,
+					body: {
+						workspaceId: str(args.workspace_id),
+						closeRunning: args.close_running === true
+					},
+					timeoutMs: WRITE_TIMEOUT_MS
+				})
+				if (!data.ok) throw new Error(data.error ?? 'the chat tab did not close')
+				if (data.alreadyClosed) return 'already closed'
+				return data.activeSessionId ? `closed; active session_id: ${data.activeSessionId}` : 'closed; no tabs remain'
 			}
 		},
 		{
