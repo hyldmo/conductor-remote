@@ -6,6 +6,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { attachmentPrompt, writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
+import { isDefaultEffortLevel, readDefaultEfforts, writeDefaultEfforts } from './conductor-settings.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
 import { DevServerController } from './dev-server.ts'
@@ -975,6 +976,26 @@ const server = http.createServer(async (req, res) => {
 			// new workspace has no chat yet, so this is its only safe source of choices.
 			if (isRoute(routes.modelCatalog, req.method, pathname)) {
 				return json(req, res, 200, { groups: modelCache.list(), defaultModel: modelCache.defaultModel() })
+			}
+
+			// GET/PATCH /api/models/defaults — the live user-wide effort defaults.
+			// These are file-backed settings, not the stale rows conductor.db still carries.
+			if (isRoute(routes.modelDefaults, req.method, pathname)) {
+				return json(req, res, 200, { defaultEfforts: readDefaultEfforts() })
+			}
+			if (isRoute(routes.updateModelDefaults, req.method, pathname)) {
+				const body = JSON.parse((await readBody(req)) || '{}') as { claude?: unknown; codex?: unknown }
+				const patch: Parameters<typeof writeDefaultEfforts>[0] = {}
+				if (body.claude !== undefined) {
+					if (!isDefaultEffortLevel(body.claude)) return json(req, res, 400, { error: 'unknown Claude effort level' })
+					patch.claude = body.claude
+				}
+				if (body.codex !== undefined) {
+					if (!isDefaultEffortLevel(body.codex)) return json(req, res, 400, { error: 'unknown Codex effort level' })
+					patch.codex = body.codex
+				}
+				if (Object.keys(patch).length === 0) return json(req, res, 400, { error: 'nothing to change' })
+				return json(req, res, 200, { defaultEfforts: writeDefaultEfforts(patch) })
 			}
 
 			// GET /api/usage — structured subscription limits from the CLIs Conductor

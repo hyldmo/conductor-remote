@@ -189,8 +189,8 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 							<button
 								type="button"
 								onClick={() => setUsageOpen(true)}
-								aria-label="Plan usage"
-								title="Plan usage"
+								aria-label="Models"
+								title="Models"
 								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
 							>
 								<Gauge size={18} />

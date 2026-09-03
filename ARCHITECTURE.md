@@ -52,6 +52,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
   model-cache.ts  the picker labels and starred default Conductor has shown us, keyed by
                   harness, so a workspace with no chat yet can still show the effective model
+  conductor-settings.ts  surgical, atomic reads/writes of Claude/Codex new-chat effort
+                  defaults in ~/.conductor/settings.toml; preserves every unrelated TOML line
   plan-usage.ts   prompt-free Claude/Codex CLI allowance reads → normalized rolling windows;
                   concurrent, single-flight and cached (Cursor/OpenCode report unavailable)
   sendonce.ts     the send memo: answers a repeated clientId with the first send's outcome
@@ -98,7 +100,8 @@ web/              React PWA (Vite root)
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
                   WorkspaceMenu (the status groups, plus Archive), MergeBanner, MessageNav,
                   DevServerControls, SearchSheet + SearchPane, ArchivedChat (a hit whose
-                  worktree is gone), NewWorkspaceSheet, PlanUsageSheet, LogsSheet, TokenGate, QRCode +
+                  worktree is gone), NewWorkspaceSheet, PlanUsageSheet (the Models panel:
+                  provider defaults plus usage), LogsSheet, TokenGate, QRCode +
                   QRScanner, ReloadPrompt, ui, and ConnectSheet
                   (the Notifications switch with "send a test", plus the Mac section: keep-awake
                   windows and the fallback-network picker). Patch.tsx renders a unified diff for

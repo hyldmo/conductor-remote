@@ -50,6 +50,14 @@ select.”** Starring `5.6 Sol` restored both live values; the DB settings rows
 again did not move. Default reads therefore come from the starred picker / user
 settings TOML, never those stale DB rows, while per-chat reads remain SQLite.
 
+The phone's **Models** sheet reads and updates the two file-backed new-chat
+defaults directly: `models.claude_code.default_effort_level` and
+`models.codex.default_thinking_level`. `src/conductor-settings.ts` changes only
+the requested assignment and writes atomically, preserving comments, review
+levels and unknown future keys around it. Cursor Agent and OpenCode have provider
+cards in the same sheet but no invented effort setting: Conductor's user schema
+defines provider-specific defaults only for Claude Code and Codex.
+
 Crucially, **Conductor's `sessions.id` equals the Claude Code `claude_session_id`** — the app is a GUI over Claude Code sessions.
 
 ### Diffs

@@ -22,6 +22,7 @@
  */
 
 import type { UpdateStatus } from './autoupdate.ts'
+import type { DefaultEfforts } from './conductor-settings.ts'
 import type { DevServerForward, DevServerResult, DevServerState } from './dev-server.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import type { LogEntry, LogFileInfo } from './logbuf.ts'
@@ -54,6 +55,7 @@ export type { SearchRole, SearchSnippet } from './search.ts'
 export type {
 	ActuatorInfo,
 	CachedModelGroup,
+	DefaultEfforts,
 	DeviceInfo as PushDevice,
 	DevServerForward,
 	DevServerResult,
@@ -229,6 +231,11 @@ export interface ModelCatalogResponse {
 	groups: CachedModelGroup[]
 	/** The newest default observed in any live picker. */
 	defaultModel?: string
+}
+
+/** GET/PATCH /api/models/defaults — Conductor's provider-specific new-chat effort defaults. */
+export interface ModelDefaultsResponse {
+	defaultEfforts: DefaultEfforts
 }
 
 /** GET /api/usage — provider subscription windows read from local agent CLIs. */
