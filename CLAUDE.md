@@ -1362,7 +1362,11 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   unchosen or unknown multi-config start instead of inheriting whatever the Mac
   last selected. `writes.ts` then presses the exact Run/Stop task through the same
   fail-closed Accessibility path as other writes; Conductor still owns the process
-  and its cleanup. The desktop's `Select task` pop-up advertises `AXPress` but only
+  and its cleanup. The same controller is exposed to agents as MCP `dev_server`:
+  use it instead of starting a long-lived development server from a shell, so the
+  allocated ports, run-mode policy and process-group cleanup remain Conductor-owned.
+  Its default `status` action is read-only; `start` and `stop` join the shared UI lock.
+  The desktop's `Select task` pop-up advertises `AXPress` but only
   opens after focus + Space, and pressing its exact `AXMenuItem` starts the task
   immediately—there is no second Play press. An unnamed legacy start inspects that
   live menu and proceeds only when it independently contains one task.
