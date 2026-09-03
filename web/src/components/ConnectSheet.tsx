@@ -202,7 +202,6 @@ function ThemeRow() {
 					))}
 				</div>
 			</fieldset>
-			<p className="mt-1 text-xs text-muted">System follows this device’s appearance.</p>
 		</div>
 	)
 }
@@ -431,7 +430,7 @@ function MacRow() {
 							? nosleep.preventsScreenLock
 								? locked
 									? `Awake ${untilLabel(nosleep.until)}, lid closed. It blocks the idle screen lock from starting; it can’t lift one already up.`
-									: `Awake ${untilLabel(nosleep.until)}, lid closed. The idle screen lock is off; anyone at the Mac can use it. Shutting the lid or locking it by hand still locks the session.`
+									: `Awake ${untilLabel(nosleep.until)}, lid closed. The idle screen lock is off; anyone at the Mac can use it.`
 								: `Awake ${untilLabel(nosleep.until)}, lid closed. Sends park if macOS locks.`
 							: goingToSleep
 								? 'The lid is shut, so the Mac is going to sleep now — this app will be unreachable until you wake it.'
@@ -463,7 +462,7 @@ function MacRow() {
 
 				{fallback ? (
 					<p className="mt-1 text-xs text-muted">
-						If the Mac loses its connection it joins <span className="text-fg">{fallback}</span> and re-registers.
+						Auto-joins <span className="text-fg">{fallback}</span> when the primary network drops.
 					</p>
 				) : (
 					<NetworkPicker
@@ -511,11 +510,11 @@ function MacRow() {
 						</button>
 					) : null}
 				</div>
-				<p className="mt-1 text-xs text-muted">
-					{restartedMs !== null
-						? `Quit and reopened in ${(restartedMs / 1000).toFixed(1)}s. Send a prompt to check an agent answers.`
-						: 'Quits Conductor and opens it again — for when chats still take prompts but no agent answers.'}
-				</p>
+				{restartedMs !== null ? (
+					<p className="mt-1 text-xs text-muted">
+						Quit and reopened in {(restartedMs / 1000).toFixed(1)}s. Send a prompt to check an agent answers.
+					</p>
+				) : null}
 				{restart !== 'idle' ? (
 					<div className="fade-in mt-2 rounded-xl border border-del/40 bg-del/10 px-3 py-2.5 text-left">
 						<p className="text-sm font-medium">
