@@ -68,6 +68,7 @@ import {
 	type AgentOptions,
 	archiveWorkspace,
 	type ChatTab,
+	continueWorkspace,
 	createWorkspace,
 	describeActuator,
 	EFFORT_LABELS,
@@ -1440,6 +1441,55 @@ const server = http.createServer(async (req, res) => {
 				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
 				const result = await mergePr(ws)
 				return json(req, res, result.ok ? 200 : 409, result)
+			}
+
+			// POST /api/workspaces/:id/continue { sessionId? } — press the Continue action
+			// Conductor draws for a merged PR. The native handler checks out a fresh branch,
+			// updates its own workspace record and stages Branch continued.md in the selected
+			// chat. Only it can do all three consistently; this relay keeps its DB read-only.
+			const continueOf = routeParam(routes.continueWorkspace, req.method, pathname)
+			if (continueOf) {
+				const workspaceId = continueOf
+				const ws = reads.getWorkspace(workspaceId)
+				if (!ws) {
+					const known = reads.getAnyWorkspace(workspaceId)
+					if (known?.archived) {
+						return json(req, res, 409, { ok: false, error: 'Archived workspaces cannot be continued.' })
+					}
+					return json(req, res, 404, { error: 'workspace not found' })
+				}
+				const body = JSON.parse((await readBody(req)) || '{}') as { sessionId?: string }
+				const requestedSession = body.sessionId || ws.active_session_id
+				let tab: ChatTab | undefined
+				if (requestedSession) {
+					const located = locateChat(ws, requestedSession)
+					if ('error' in located) return json(req, res, 409, { ok: false, error: located.error })
+					if (body.sessionId && !located.session) {
+						return json(req, res, 409, { ok: false, error: 'chat is no longer one of the workspace’s tabs' })
+					}
+					tab = located.tab
+				}
+				const previousBranch = ws.branch
+				if (!previousBranch) return json(req, res, 409, { ok: false, error: 'workspace has no branch to continue' })
+				const result = await continueWorkspace({ workspace: ws, sessionId: requestedSession, tab })
+				if (!result.ok) return json(req, res, 502, result)
+
+				// AXPress only proves the button accepted a click. Conductor then fetches the
+				// target and changes the worktree asynchronously, so the branch column is the
+				// receipt. A generous wait covers the fetch without ever writing that column.
+				let continued = reads.getWorkspace(workspaceId)
+				for (let i = 0; i < 60 && (!continued?.branch || continued.branch === previousBranch); i++) {
+					await sleep(500)
+					continued = reads.getWorkspace(workspaceId)
+				}
+				if (!continued?.branch || continued.branch === previousBranch) {
+					return json(req, res, 502, {
+						ok: false,
+						strategy: result.strategy,
+						error: 'Conductor did not record a new branch within 30 seconds. Check it on your Mac before retrying.'
+					})
+				}
+				return json(req, res, 200, { ok: true, previousBranch, workspace: continued })
 			}
 
 			// POST /api/workspaces/:id/status { status } — move it between the sidebar's status groups.

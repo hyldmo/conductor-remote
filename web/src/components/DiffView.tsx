@@ -3,7 +3,7 @@ import { MergeBanner } from './MergeBanner.tsx'
 import { Patch } from './Patch.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
-export function DiffView({ workspaceId }: { workspaceId: string }) {
+export function DiffView({ workspaceId, sessionId }: { workspaceId: string; sessionId?: string | null }) {
 	const { data: state } = useWorkspaces()
 	const ws = state?.workspaces.find(w => w.id === workspaceId)
 	// Shares react-query's cache with DiffBody's useDiff (same key) — one fetch, no double request.
@@ -11,7 +11,7 @@ export function DiffView({ workspaceId }: { workspaceId: string }) {
 	const local = diff ? { dirty: diff.dirty, unpushed: diff.unpushed } : undefined
 	return (
 		<div className="pb-safe flex flex-1 flex-col overflow-y-auto">
-			{ws ? <MergeBanner ws={ws} local={local} /> : null}
+			{ws ? <MergeBanner ws={ws} local={local} sessionId={sessionId} /> : null}
 			<DiffBody workspaceId={workspaceId} />
 		</div>
 	)

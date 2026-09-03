@@ -242,7 +242,9 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 - ✅ Live transcript per session (assistant text, tool calls, queued messages),
   incremental polling.
 - ✅ Diff vs the workspace's target branch (file list + colorized patch,
-  including untracked files).
+  including untracked files), with merge controls and **Continue** after a PR
+  lands — the same workspace and chats move onto a fresh branch. Archived chats
+  remain read-only and never show the action.
 - ✅ **Launch and forward dev servers** — the workspace header's Play button
   presses Conductor's selected Run task, expands the repository's named
   `[[preview_urls]]` entries (including `$CONDUCTOR_PORT`), and exposes every local

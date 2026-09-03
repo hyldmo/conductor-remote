@@ -50,7 +50,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   pr.ts           the one read that leaves this box: GitHub PR state, cached and never awaited
                   by /api/state; conflicts are computed locally with `git merge-tree`
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
-  writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
+  writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops;
+                  merged-workspace Continue delegates the branch/store/chat transition to Conductor
   model-cache.ts  the picker labels and starred default Conductor has shown us, keyed by
                   harness, so a workspace with no chat yet can still show the effective model
   conductor-settings.ts  surgical, atomic reads/writes of Claude/Codex new-chat effort
@@ -100,7 +101,7 @@ web/              React PWA (Vite root)
                   behind the Copy on a response and on every fenced block)
   src/components/ Header, WorkspaceList, SessionView, Transcript, Markdown + Code, DiffView,
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
-                  WorkspaceMenu (the status groups, plus Archive), MergeBanner, MessageNav,
+                  WorkspaceMenu (the status groups, plus Archive), MergeBanner (merge + continue), MessageNav,
                   DevServerControls, SearchSheet + SearchPane, ArchivedChat (a hit whose
                   worktree is gone), NewWorkspaceSheet, PlanUsageSheet (the Models panel:
                   provider defaults plus usage), LogsSheet, TokenGate, QRCode +

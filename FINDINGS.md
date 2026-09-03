@@ -197,6 +197,30 @@ a semantic AX menu operation with coordinates plus private bundle internals. It
 is useful for diagnosis and as a manually enabled experiment; the AX path remains
 the safer shipping mechanism.
 
+### ✓ Native Continue action — same workspace, fresh branch
+The merged-workspace **Continue** button is not shorthand for creating another
+workspace. Decompiling the production `renderApp` chunk and checking a workspace
+that had already used it showed the same workspace id, worktree and session ids on
+both sides of the transition. The native operation fetches the PR target, checks
+out a unique branch from it in the existing worktree, then records the new branch
+and clears the old PR title/description. Its durable write is:
+
+```sql
+UPDATE workspaces
+SET branch = ?, placeholder_branch_name = ?, pr_title = NULL, pr_description = NULL
+WHERE id = ?
+```
+
+The component also stages `Branch continued.md` in the active chat with a note
+naming the new branch and its remote/base. That makes a relay-side `git checkout`
+incomplete, and a matching raw SQLite update would violate the read-only DB rule
+while still missing Conductor's live store. The safe actuator is therefore the
+actual AX button, whose visible name is `Continue` and whose tooltip is “Continue
+on a new branch with the same chats.” The relay focuses the phone's selected chat,
+presses one unambiguous shallow match, and uses the read-only branch change as the
+receipt. Conductor exposes the control for merged, non-archived workspaces; the PWA
+and HTTP route enforce the same boundary.
+
 ### △ Built-in app-actions bridge — one DB flag unlocks it, but the connection won't hold
 The same production UI bundle carries a Playwright-style DOM action loop, and it
 is the most principled route found. Once running, the frontend polls
