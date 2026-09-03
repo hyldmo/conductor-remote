@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useModelCatalog, useModels } from '../hooks.ts'
-import { nextEffort } from '../lib/agent.ts'
+import { nextEffort, supportsPlanMode } from '../lib/agent.ts'
 import { client } from '../lib/api.ts'
 import { modelLabel } from '../lib/format.ts'
 import { isLockedError } from '../lib/lock.ts'
@@ -67,6 +67,15 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 	// also leaves the open picker with no row checked.
 	const displayedModel = staged.model ?? (modelLabel(session.model, models) || 'Model')
 	const providerModel = staged.model ?? session.model
+	const planAvailable = supportsPlanMode(session.agent_type, providerModel)
+
+	// A Plan choice can survive in synced/local drafts after switching away from
+	// Claude. Drop it as soon as the effective model no longer has Conductor's
+	// control, or the invisible patch would make the next send fail in AppleScript.
+	useEffect(() => {
+		if (!planAvailable && staged.plan !== undefined) stageAgent(session.id, { plan: undefined })
+	}, [planAvailable, session.id, staged.plan, stageAgent])
+
 	const makeDefault = async (model: string) => {
 		if (settingDefault) return
 		setSettingDefault(model)

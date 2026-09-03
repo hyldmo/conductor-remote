@@ -33,6 +33,11 @@ export function providerForAgent(agentType: string | null, model: string | null)
 	return undefined
 }
 
+/** Conductor currently renders its Plan toggle only for Claude-backed models. */
+export function supportsPlanMode(agentType: string | null, model: string | null): boolean {
+	return providerForAgent(agentType, model) === 'claude'
+}
+
 /** The configured effort a new chat inherits from the provider selected by its model. */
 export function defaultEffortForModel(model: string | null, defaults: DefaultEfforts | undefined): string | undefined {
 	const provider = providerForAgent(null, model)

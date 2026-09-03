@@ -1,6 +1,6 @@
 import { Map as MapIcon, Zap } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { EFFORT_LABELS } from '../lib/agent.ts'
+import { EFFORT_LABELS, supportsPlanMode } from '../lib/agent.ts'
 import { cn } from '../lib/cn.ts'
 import { EffortBars, ProviderMark } from './AgentIcons.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
@@ -62,6 +62,8 @@ export function AgentControls({
 	onPlanChange: () => void
 	status?: ReactNode
 }) {
+	const planAvailable = supportsPlanMode(agentType, providerModel)
+
 	return (
 		<div className="min-w-0 flex-1">
 			<div className="flex min-w-0 items-center gap-0.5">
@@ -123,19 +125,21 @@ export function AgentControls({
 						<span className="max-[340px]:hidden">{effort ? EFFORT_LABELS[effort] : 'Effort'}</span>
 					</button>
 				) : null}
-				<button
-					type="button"
-					onClick={onPlanChange}
-					aria-label={`Plan mode ${plan === undefined ? 'default' : plan ? 'on' : 'off'}`}
-					aria-pressed={plan === true}
-					className={cn(
-						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text',
-						plan && 'text-text',
-						planStaged && 'text-accent'
-					)}
-				>
-					<MapIcon size={17} />
-				</button>
+				{planAvailable ? (
+					<button
+						type="button"
+						onClick={onPlanChange}
+						aria-label={`Plan mode ${plan === undefined ? 'default' : plan ? 'on' : 'off'}`}
+						aria-pressed={plan === true}
+						className={cn(
+							'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text',
+							plan && 'text-text',
+							planStaged && 'text-accent'
+						)}
+					>
+						<MapIcon size={17} />
+					</button>
+				) : null}
 			</div>
 			{status ? <div className="px-2 pt-0.5 text-[11px] text-faint">{status}</div> : null}
 		</div>

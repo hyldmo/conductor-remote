@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { useModelCatalog, useModelDefaults, useRepos } from '../hooks.ts'
-import { defaultEffortForModel, nextEffortOverride } from '../lib/agent.ts'
+import { defaultEffortForModel, nextEffortOverride, supportsPlanMode } from '../lib/agent.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { NEW_WORKSPACE_DRAFT } from '../lib/draft.ts'
@@ -135,16 +135,27 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const models = modelCatalog.data?.groups.flatMap(group => group.models) ?? []
 	const defaultModel = modelCatalog.data?.defaultModel
 	const selectedModel = agent.model ?? defaultModel ?? null
+	const planAvailable = supportsPlanMode(null, selectedModel)
 	// Draw the value this model will inherit without putting it in `agent`: an empty
 	// patch is what lets Conductor own the default when the workspace is created.
 	const inheritedEffort = defaultEffortForModel(selectedModel, modelDefaults.data?.defaultEfforts)
 	const displayedEffort = agent.effort ?? inheritedEffort
 	const anyAgentChoice = Object.keys(agent).length > 0
-	const stageAgent = (patch: AgentPatch) =>
-		setAgent(current => {
-			const next = { ...current, ...patch }
-			return Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined)) as AgentPatch
-		})
+	const stageAgent = useCallback(
+		(patch: AgentPatch) =>
+			setAgent(current => {
+				const next = { ...current, ...patch }
+				return Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined)) as AgentPatch
+			}),
+		[]
+	)
+
+	// A user can enable Plan on Claude and then pick another provider. Remove the
+	// now-hidden choice so workspace creation never carries an option Conductor
+	// cannot apply.
+	useEffect(() => {
+		if (!planAvailable && agent.plan !== undefined) stageAgent({ plan: undefined })
+	}, [planAvailable, agent.plan, stageAgent])
 
 	const removeAttachment = (id: string) => {
 		const attachment = readyAttachments.find(current => current.path === id)
