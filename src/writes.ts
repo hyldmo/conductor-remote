@@ -769,8 +769,8 @@ const CODEX_EFFORT_LABELS: Record<string, string> = {
 /** Translate the stable wire value to the provider's measured composer label. */
 export function effortUiLabel(effort: string, agentType?: string | null): string | undefined {
 	if (agentType === 'codex') return CODEX_EFFORT_LABELS[effort]
-	if (effort === 'none') return undefined
-	return EFFORT_LABELS[effort]
+	if (agentType === 'claude' && effort !== 'none') return EFFORT_LABELS[effort]
+	return undefined
 }
 
 /** What a phone can change about the agent before (or instead of) sending a prompt. */

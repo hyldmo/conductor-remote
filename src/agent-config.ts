@@ -1,4 +1,11 @@
-import { modelAgentType, modelLabel, modelPickerLabel, shortModel } from './shared.ts'
+import {
+	agentTypeCanExposeEffort,
+	agentTypeCanExposeFastMode,
+	modelAgentType,
+	modelLabel,
+	modelPickerLabel,
+	shortModel
+} from './shared.ts'
 
 /** The durable fields needed to compare a requested role snapshot with one chat. */
 export interface AgentConfigState {
@@ -97,6 +104,13 @@ export async function applyAgentConfig(
 		// before this receipt, so the stored full label may legitimately be longer.
 		current = await confirm(deps, state => modelMatches(state, requestedModel, true))
 		if (!current) return { ok: false, error: modelFailure(requestedModel) }
+	}
+
+	if (patch.effort !== undefined && !agentTypeCanExposeEffort(current.agentType)) {
+		return { ok: false, error: 'Conductor does not expose a reasoning control for the selected provider.' }
+	}
+	if (patch.fast !== undefined && !agentTypeCanExposeFastMode(current.agentType)) {
+		return { ok: false, error: 'Conductor does not expose a Fast control for the selected provider.' }
 	}
 
 	const controls: AgentConfigWrite = {}

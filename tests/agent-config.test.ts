@@ -99,6 +99,30 @@ describe('cross-provider agent configuration', () => {
 		expect(prefixWrite).toHaveBeenCalledWith({ model: '5.6 T' })
 	})
 
+	test('rejects stale effort and Fast fields when the selected ACP provider exposes neither control', async () => {
+		const write = vi.fn(async () => ({ ok: true as const }))
+		const current = state({
+			agentType: 'acp',
+			model: 'opencode:opencode-go/muse-spark-1.3-contributor',
+			effort: 'high',
+			fast: false
+		})
+
+		await expect(
+			applyAgentConfig({ effort: 'high' }, { read: () => current, write, wait: async () => undefined })
+		).resolves.toEqual({
+			ok: false,
+			error: 'Conductor does not expose a reasoning control for the selected provider.'
+		})
+		await expect(
+			applyAgentConfig({ fast: false }, { read: () => current, write, wait: async () => undefined })
+		).resolves.toEqual({
+			ok: false,
+			error: 'Conductor does not expose a Fast control for the selected provider.'
+		})
+		expect(write).not.toHaveBeenCalled()
+	})
+
 	test('confirms plan and fast values after applying their deltas', async () => {
 		let current = state({ effort: 'high' })
 		const write = vi.fn(async (options: AgentConfigWrite) => {

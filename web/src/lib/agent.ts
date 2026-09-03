@@ -40,6 +40,18 @@ export function supportsPlanMode(agentType: string | null, model: string | null)
 	return providerForAgent(agentType, model) === 'claude'
 }
 
+/** Conductor currently renders per-session reasoning controls only for these harnesses. */
+export function supportsEffortControl(agentType: string | null, model: string | null): boolean {
+	const provider = providerForAgent(agentType, model)
+	return provider === 'claude' || provider === 'openai'
+}
+
+/** Conductor currently renders its Fast control only for these harnesses. */
+export function supportsFastMode(agentType: string | null, model: string | null): boolean {
+	const provider = providerForAgent(agentType, model)
+	return provider === 'claude' || provider === 'openai'
+}
+
 /** The configured effort a new chat inherits from the provider selected by its model. */
 export function defaultEffortForModel(model: string | null, defaults: DefaultEfforts | undefined): string | undefined {
 	const provider = providerForAgent(null, model)
