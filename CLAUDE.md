@@ -488,7 +488,10 @@ Two asymmetric halves — keep them separate:
     the writes touch the UI: effort is a button whose **label is its own value**
     and which *cycles* (Low → Medium → High → Extra high → Max → Ultracode → wrap),
     so we press until the label matches; Plan is an `AXCheckBox` with readable
-    state; the model picker is an `AXMenu` (labels carry badges — "Opus 5 NEW" —
+    state, but an already-matching `permission_mode` suppresses the UI action
+    entirely — models that cannot enter Plan may not render the checkbox when it
+    is off, so an explicit `plan:false` is a desired state rather than an order to
+    find that control; the model picker is an `AXMenu` (labels carry badges — "Opus 5 NEW" —
     so matching prefers exact then unique-prefix, and `GET …/models` enumerates it
     live rather than hard-coding a list that would rot). **Fast has no readable
     state and only exists for some models**, so the DB decides whether to press it

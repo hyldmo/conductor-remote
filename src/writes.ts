@@ -715,6 +715,20 @@ export interface AgentOptions {
 }
 
 /**
+ * A boolean patch says what state the caller wants, not that the matching UI
+ * control must be pressed. Avoid looking for Plan when Conductor already records
+ * the requested mode — some models do not render that control at all when it is
+ * off. Unknown state remains fail-closed and is sent through to the actuator.
+ */
+export function planSettingForUi(
+	wanted: boolean | undefined,
+	currentPermissionMode: string | null | undefined
+): boolean | undefined {
+	if (wanted === undefined) return undefined
+	return currentPermissionMode === (wanted ? 'plan' : 'default') ? undefined : wanted
+}
+
+/**
  * Apply agent settings to a specific chat: focus its workspace and tab (same
  * verified path as a send), then drive the composer's own controls. Every step
  * confirms the control landed on the requested value and errors out otherwise,
