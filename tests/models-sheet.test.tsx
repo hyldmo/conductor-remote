@@ -55,4 +55,29 @@ describe('Models provider cards', () => {
 			expect(html).not.toContain('Default effort')
 		}
 	})
+
+	test('hides an unused GPT-5.3-Codex-Spark bucket until one of its limits has usage', () => {
+		const buckets: ProviderPlanUsage['buckets'] = [
+			{
+				id: 'codex',
+				label: 'Codex',
+				windows: [{ id: 'codex:primary', label: 'Weekly limit', usedPercent: 5, resetsAt: null }]
+			},
+			{
+				id: 'codex_spark',
+				label: 'GPT-5.3-Codex-Spark',
+				windows: [
+					{ id: 'codex_spark:primary', label: '5-hour limit', usedPercent: 0, resetsAt: null },
+					{ id: 'codex_spark:secondary', label: 'Weekly limit', usedPercent: 0, resetsAt: null }
+				]
+			}
+		]
+
+		const unused = renderToStaticMarkup(<ProviderCard usage={usage({ buckets })} />)
+		expect(unused).not.toContain('GPT-5.3-Codex-Spark')
+
+		buckets[1]!.windows[1]!.usedPercent = 1
+		const used = renderToStaticMarkup(<ProviderCard usage={usage({ buckets })} />)
+		expect(used).toContain('GPT-5.3-Codex-Spark')
+	})
 })
