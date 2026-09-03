@@ -2,6 +2,7 @@ import { Check } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn } from '../lib/cn.ts'
 import type { RepoIcon } from '../lib/types.ts'
+import { toggleRepoFilter } from '../lib/workspace-filter.ts'
 import { RepoAvatar } from './ui.tsx'
 
 export interface RepoChoice {
@@ -17,8 +18,9 @@ export function repoFilterLabel(selected: string[]): string {
 
 /**
  * The multi-select behind both repo filters — the sidebar's View options and the
- * search sheet's. "All repos" is a real row rather than "nothing ticked", because a
- * list with every box empty reads as a filter that hides everything.
+ * search sheet's. An empty selection means no repo constraint. Name that state in a
+ * separate bulk-action strip rather than drawing a checked "All repos" checkbox beside
+ * unchecked repo boxes, which makes the selection model look contradictory.
  */
 export function RepoOptions({
 	repos,
@@ -29,11 +31,46 @@ export function RepoOptions({
 	selected: string[]
 	onChange: (repos: string[]) => void
 }) {
-	const toggle = (repo: string) =>
-		onChange(selected.includes(repo) ? selected.filter(r => r !== repo) : [...selected, repo])
+	const selectedCount = repos.filter(repo => selected.includes(repo.name)).length
+	const unrestricted = selected.length === 0
+	const toggle = (repo: string) => {
+		// Selecting the final repo is the unrestricted state, not a filter that happens
+		// to name every current repo. Normalising it also clears the active-filter dot.
+		onChange(
+			toggleRepoFilter(
+				repos.map(choice => choice.name),
+				selected,
+				repo
+			)
+		)
+	}
 	return (
 		<>
-			<RepoOption checked={selected.length === 0} label="All repos" onChange={() => onChange([])} />
+			{unrestricted ? (
+				<div className="sticky top-0 z-[1] mb-0.5 flex min-h-8 items-center justify-between gap-3 border-b border-border-soft bg-inherit px-2 text-xs">
+					<span className="min-w-0 truncate text-faint">
+						{repos.length ? `All ${repos.length} ${repos.length === 1 ? 'repo' : 'repos'}` : 'No repos'}
+					</span>
+					{repos.length ? (
+						<span className="flex shrink-0 items-center gap-1 font-medium text-muted">
+							<Check size={12} strokeWidth={2.5} aria-hidden />
+							Showing all
+						</span>
+					) : null}
+				</div>
+			) : (
+				<button
+					type="button"
+					onClick={() => onChange([])}
+					aria-label="Show all repos"
+					className="sticky top-0 z-[1] mb-0.5 flex min-h-8 w-full items-center justify-between gap-3 border-b border-border-soft bg-inherit px-2 text-xs active:bg-surface"
+				>
+					<span className="min-w-0 truncate text-faint">
+						{selectedCount} of {repos.length} repos
+					</span>
+					<span className="shrink-0 font-semibold text-accent">Show all</span>
+				</button>
+			)}
 			{repos.map(repo => (
 				<RepoOption
 					key={repo.name}
