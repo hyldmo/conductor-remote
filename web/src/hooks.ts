@@ -597,6 +597,18 @@ export function useModelCatalog() {
 	})
 }
 
+/** Provider plan limits are fetched only while their sheet is open, never on the workspace poll. */
+export function usePlanUsage(enabled: boolean) {
+	return useQuery({
+		queryKey: ['plan-usage'],
+		queryFn: () => client.planUsage(),
+		enabled,
+		staleTime: 60_000,
+		gcTime: Number.POSITIVE_INFINITY,
+		retry: false
+	})
+}
+
 /**
  * Conductor's live model list, stale-while-revalidate through the relay cache.
  *

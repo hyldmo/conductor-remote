@@ -72,6 +72,21 @@ Two asymmetric halves — keep them separate:
     `ps -axo pid=,lstart=,args=` on a 5s cache, **args only** — the environment
     carries Conductor's tokens and is never requested. Cost: the frame scan is 4–8ms
     on the largest chats here and runs only for a chat with a live process.
+  - **Plan usage is provider-owned, so it is the one read that does not come from
+    SQLite.** Conductor's sidebar has a `resource-usage` control, but its value is
+    absent from `conductor.db`; `/api/usage` (`src/plan-usage.ts`) asks the agent CLIs
+    Conductor already bundles instead. Neither path sends a model prompt. Codex has
+    the clean structured shape: start `codex app-server`, initialize, then call
+    `account/rateLimits/read` for its named windows, percentages and reset times.
+    Claude Code 2.1 has an experimental but structured stream-JSON control request,
+    `get_usage`; run it with `--safe-mode --no-session-persistence`, which skips the
+    user's hooks/plugins and leaves no throwaway chat, then discard its local behavior
+    analysis and keep only the subscription windows. Never scrape `/usage`'s TUI or
+    read OAuth credentials directly. Both processes run in parallel only while the
+    phone's usage sheet is open, their reduced response is cached for a minute, and
+    concurrent phones join the same read. Cursor Agent exposes auth but no allowance;
+    OpenCode's `stats` is local token/cost accounting, not provider quota, so both say
+    unavailable rather than inventing a percentage.
 - **Deep links carry the two writes that aren't fragile — creating a workspace
   and focusing one.** The *documented* links
   (conductor.build/docs/reference/deep-links) are

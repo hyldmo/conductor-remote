@@ -58,6 +58,29 @@ the target branch is `git -C <worktree> diff $(git merge-base <base> HEAD)` —
 committed + uncommitted, exactly Conductor's diff view, computed with no
 Conductor involvement at all.
 
+### Plan usage — prompt-free through the provider CLIs
+The sidebar's `resource-usage` value is not stored in Conductor's SQLite DB. The
+two major harnesses do expose it through the exact binaries Conductor bundles:
+
+- **Codex 0.147:** newline-delimited app-server protocol. After `initialize` +
+  `initialized`, `account/rateLimits/read` returns `planType`, named limit buckets,
+  `usedPercent`, `windowDurationMins`, `resetsAt`, and credit state. This is a
+  purpose-built structured read and sends no turn.
+- **Claude Code 2.1.257:** print mode accepts the experimental stream-JSON control
+  request `{subtype:"get_usage"}` and returns the same data the interactive `/usage`
+  dialog renders: subscription type, session/weekly/model-scoped percentages and ISO
+  reset times. `--safe-mode --no-session-persistence` avoids user hooks/plugins and a
+  throwaway persisted session. This is better than either parsing the TUI or calling
+  its private `/api/oauth/usage` endpoint with credentials ourselves, but its own
+  schema says experimental, so the parser also understands the older named-window
+  response.
+
+Cursor Agent has only auth status in its CLI, and OpenCode `stats` totals locally
+recorded tokens/cost rather than a provider subscription allowance. The relay reports
+those two as unavailable. `src/plan-usage.ts` normalizes the supported responses,
+runs them concurrently on demand, coalesces simultaneous reads, and caches the result
+for one minute; no plan read rides the 2.5s workspace poll.
+
 **Durability:** an app update can rename every UI string and both read paths
 keep working. The schema has migrated additively (`_sqlx_migrations`, many
 `ALTER TABLE ADD COLUMN`), so column adds won't break us; only a destructive

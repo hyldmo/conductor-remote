@@ -68,6 +68,8 @@ export const routes = {
 	repos: flat('GET', '/api/repos'),
 	/** Picker labels the relay has previously read from Conductor, grouped by harness. */
 	modelCatalog: flat('GET', '/api/models'),
+	/** Rolling subscription limits, read without a model request from each provider CLI. */
+	planUsage: flat('GET', '/api/usage'),
 	repoIcon: param('GET', '/api/repos/:repo/icon'),
 	/** A temporary image emitted in a chat message, fetched with the phone's auth header. */
 	localImage: param('GET', '/api/local-images/:path'),

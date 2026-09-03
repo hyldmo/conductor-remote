@@ -44,6 +44,7 @@ import {
 	unsubscribeDevice
 } from './notify.ts'
 import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './parked.ts'
+import { PlanUsageService } from './plan-usage.ts'
 import { attachPrStatus } from './pr.ts'
 import { readPrefs, writePrefs } from './prefs.ts'
 import { Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
@@ -102,6 +103,7 @@ const STAGED_ATTACHMENTS_DIR = path.join(stateDir(), 'attachment-staging')
 // relay state alongside the prompt queues. This lets a brand-new workspace choose
 // from a list before Conductor has created its first chat.
 const modelCache = new ModelCache(path.join(stateDir(), 'model-cache.json'))
+const planUsage = new PlanUsageService()
 
 // Full-text index over the chat prose, in the relay's own sidecar DB — never in
 // Conductor's (see src/search.ts). It backfills in the background and is disposable:
@@ -973,6 +975,13 @@ const server = http.createServer(async (req, res) => {
 			// new workspace has no chat yet, so this is its only safe source of choices.
 			if (isRoute(routes.modelCatalog, req.method, pathname)) {
 				return json(req, res, 200, { groups: modelCache.list(), defaultModel: modelCache.defaultModel() })
+			}
+
+			// GET /api/usage — structured subscription limits from the CLIs Conductor
+			// itself bundles. Both reads are prompt-free and cached; `refresh=1` is the
+			// explicit user action in the sheet, never a background poll.
+			if (isRoute(routes.planUsage, req.method, pathname)) {
+				return json(req, res, 200, await planUsage.read(url.searchParams.get('refresh') === '1'))
 			}
 
 			// GET /api/settings — relay preferences plus what the phone needs to edit them:

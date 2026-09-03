@@ -77,6 +77,7 @@ port is live; a mapping already in place is kept wherever it is.
  (React, installable)                 │
                                       ├─ reads:  node:sqlite ⟶ conductor.db   (workspaces, sessions, transcripts)
                                       ├─ reads:  git ⟶ each worktree           (diffs vs target branch)
+                                      ├─ usage: provider CLIs ⟶ rolling plan limits (no model prompt)
                                       ├─ writes: Actuator ⟶ Conductor
                                       │          ├─ applescript (default): osascript ⟶ focused session
                                       │          └─ sidecar (opt-in):      unix socket ⟶ exact session
@@ -89,6 +90,9 @@ port is live; a mapping already in place is kept wherever it is.
   `dist/`, which the relay serves.
 - **Reads are durable.** No Conductor API, no injection — the SQLite schema and
   git worktrees outlive UI changes.
+- **Plan usage is prompt-free.** The usage gauge asks Conductor's bundled Claude
+  and Codex CLIs for structured rolling limits only while the sheet is open, then
+  caches the result for a minute. Cursor/OpenCode say why no plan quota is available.
 - **Writes are the one fragile nerve** and are isolated behind a swappable
   `Actuator` (`src/writes.ts`).
 - **Notifications ride the durable side.** The relay watches the same SQLite for
@@ -228,6 +232,8 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   repo, branch, model, context %, and an unread mark on any workspace whose chats
   finished something you haven't looked at — reading it *on the phone* clears it,
   which Conductor itself only does when you open the workspace on the Mac.
+- ✅ **Plan usage** for Claude Code and Codex — rolling allowance percentages and
+  reset times from their structured CLI protocols, with no model request.
 - ✅ Live transcript per session (assistant text, tool calls, queued messages),
   incremental polling.
 - ✅ Diff vs the workspace's target branch (file list + colorized patch,
@@ -263,12 +269,13 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 `conductor-remote mcp` is an MCP server on stdio. It gives a coding agent the same
 control the phone has, over the same relay.
 
-Two transports, same eighteen tools.
+Two transports, same nineteen tools.
 
 | | |
 |---|---|
 | `search_chats` · `read_chat` | full-text search every chat on this Mac, archived included, then read one |
 | `list_workspaces` · `list_chats` · `workspace_diff` · `list_repos` | what is running, and what it changed |
+| `plan_usage` | prompt-free Claude/Codex subscription allowances and reset times |
 | `create_workspace` | start work in a repo, with an optional first prompt and model/effort/plan/fast choices. Creation uses a deep link; selected agent settings apply before the prompt |
 | `send_prompt` · `stop_turn` | talk to a running agent, or cancel its turn |
 | `split_chat` | move a tangent into a fresh tab, carrying the conversation across as a Conductor attachment |
@@ -328,13 +335,14 @@ of the time.
 | `list_chats` | the chat tabs in a workspace |
 | `workspace_diff` | a workspace's diff against its target branch |
 | `list_repos` | repos a workspace can be created in |
+| `plan_usage` | Claude/Codex rolling subscription limits, without sending a prompt |
 | `create_workspace` | start a new workspace, optionally with a first prompt and agent settings |
 | `send_prompt` | send into an existing chat (drives the real UI) |
 | `stop_turn` | cancel a running answer (drives the real UI) |
 | `set_workspace_status` | set the sidebar status (drives the real UI) |
 | `archive_workspace` | archive a workspace (drives the real UI, deletes the worktree) |
 
-The first six touch nothing. `create_workspace` opens a Conductor deep link, so
+The first seven touch nothing. `create_workspace` opens a Conductor deep link, so
 creation needs no Accessibility and steals no focus. Requested model, effort, plan,
 and fast settings are applied later through Conductor's UI, before the relay sends
 the first prompt. The last four drive Conductor's real window for a few seconds.
@@ -408,7 +416,9 @@ A per-file map, with what each one owns, is in
 - The write path can drive your real agents — keep the token private and the
   bind address off untrusted networks.
 - The relay reads Conductor's SQLite DB **read-only** and never writes to it.
-  Your data stays on your machine — nothing is sent anywhere.
+  Your Conductor data stays on your machine. Opening Plan usage makes the already
+  authenticated Claude/Codex CLI request its account-limit snapshot; it sends no
+  prompt, transcript, or workspace data.
 
 ## Troubleshooting
 
