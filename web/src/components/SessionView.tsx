@@ -158,12 +158,12 @@ export function SessionView() {
 	// The relay writes the transcript and opens the tab. Its returned text contains
 	// Conductor's attachment token, which belongs in the new chat's composer until
 	// the user adds the question that starts the fork.
-	const forkChat = async ({ thinking, tools, through, only }: SplitFormat) => {
+	const forkChat = async ({ thinking, tools, through, only }: SplitFormat, continuation?: string) => {
 		if (!sessionId) return
 		const split = await client.splitChat(sessionId, ws.id, thinking, tools, through, only)
 		if (!split.ok) throw new Error(split.error ?? 'Could not fork this chat')
 		if (!split.sessionId) throw new Error('The new chat opened, but its id was not available')
-		setDraft(split.sessionId, split.text)
+		setDraft(split.sessionId, [split.text, continuation?.trim()].filter(Boolean).join('\n'))
 		setFocusComposerFor(split.sessionId)
 		await queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
 		pickSession(split.sessionId)
@@ -228,6 +228,7 @@ export function SessionView() {
 						workspaceId={ws.id}
 						working={working}
 						actuator={actuator}
+						onFork={prompt => forkChat({ thinking: true, tools: false }, prompt)}
 						focusDraft={sessionId === focusComposerFor}
 						onDraftFocused={() => setFocusComposerFor(null)}
 					/>

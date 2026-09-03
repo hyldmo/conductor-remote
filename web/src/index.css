@@ -16,6 +16,8 @@
 	--color-working: #f5a623;
 	--color-idle: #3ecf8e;
 	--color-done: #5b9dff;
+	/* An inactive provider context whose cheap/fast prompt cache may have cooled. */
+	--color-cold-cache: #d6a85f;
 
 	/* Workspace dot by PR state (src/pr.ts). */
 	--color-pr-merged: #ac47ff;

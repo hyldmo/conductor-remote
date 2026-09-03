@@ -1,11 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUp, Info, LoaderCircle, Paperclip, Square, WifiOff, X } from 'lucide-react'
+import { ArrowUp, GitFork, Info, LoaderCircle, Paperclip, Snowflake, Square, WifiOff, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useSendPrompt } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { enterSubmits } from '../lib/keys.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
+import { coldPromptCache } from '../lib/prompt-cache.ts'
 import type { ActuatorInfo, Attachment, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentBar } from './AgentBar.tsx'
@@ -40,6 +41,7 @@ export function Composer({
 	workspaceId,
 	working,
 	actuator,
+	onFork,
 	focusDraft = false,
 	onDraftFocused
 }: {
@@ -50,6 +52,8 @@ export function Composer({
 	/** Is this chat mid-answer? Conductor's status, or our own optimistic hint (see SessionView). */
 	working: boolean
 	actuator?: ActuatorInfo
+	/** Fork this full chat and keep the composed prompt in the new chat's draft. */
+	onFork?: (prompt: string) => Promise<void>
 	/** A newly forked chat asks to continue from the end of its staged handoff. */
 	focusDraft?: boolean
 	onDraftFocused?: () => void
@@ -65,6 +69,8 @@ export function Composer({
 	const queryClient = useQueryClient()
 	const [stopping, setStopping] = useState(false)
 	const [stopError, setStopError] = useState<string | null>(null)
+	const [forking, setForking] = useState(false)
+	const [forkError, setForkError] = useState<string | null>(null)
 	const ref = useRef<HTMLTextAreaElement>(null)
 	const fileInput = useRef<HTMLInputElement>(null)
 	const cancelledUploads = useRef(new Set<string>())
@@ -74,6 +80,7 @@ export function Composer({
 	const activeAttachments = attachments.filter(attachment => attachment.sessionId === sessionId)
 	const readyAttachments = activeAttachments.filter(attachment => attachment.status === 'ready')
 	const uploading = activeAttachments.some(attachment => attachment.status === 'uploading')
+	const prompt = [...readyAttachments.map(attachment => attachment.token), text.trim()].filter(Boolean).join('\n')
 
 	// Before chats had tabs, drafts used their workspace id. Move one across when
 	// that workspace first opens a chat, so an upgrade keeps text the user had typed.
@@ -115,11 +122,25 @@ export function Composer({
 	// Fire-and-forget: the optimistic bubble (and its inline error on failure) is the
 	// feedback now, so we clear the box immediately instead of awaiting the send.
 	const send = (queue = false) => {
-		const value = [...readyAttachments.map(attachment => attachment.token), text.trim()].filter(Boolean).join('\n')
-		if (!value || uploading || !sessionId || !online) return
-		void sendPrompt({ sessionId, workspaceId, text: value, queue })
+		if (!prompt || uploading || forking || !sessionId || !online) return
+		void sendPrompt({ sessionId, workspaceId, text: prompt, queue })
 		setDraft(draftKey, '')
 		setAttachments(current => current.filter(attachment => attachment.sessionId !== sessionId))
+	}
+
+	const forkDraft = async () => {
+		if (!(onFork && prompt) || uploading || forking || !online) return
+		setForking(true)
+		setForkError(null)
+		try {
+			await onFork(prompt)
+			setDraft(draftKey, '')
+			setAttachments(current => current.filter(attachment => attachment.sessionId !== sessionId))
+		} catch (err) {
+			setForkError(err instanceof Error ? err.message : 'Could not fork this chat')
+		} finally {
+			setForking(false)
+		}
 	}
 
 	const removeAttachment = (id: string) => {
@@ -231,6 +252,7 @@ export function Composer({
 	const precise = actuator?.precise && actuator.available
 	const canStop = working && !!sessionId
 	const canSend = (!!text.trim() || readyAttachments.length > 0) && !uploading
+	const coldCache = !working && canSend && session && onFork ? coldPromptCache(session) : null
 
 	return (
 		<div className="pb-safe border-t border-border-soft bg-bg px-3 pt-2">
@@ -253,6 +275,31 @@ export function Composer({
 						{stopError}
 					</button>
 					{isLockedError(stopError) ? <UnlockLink className="mt-1 inline-block" /> : null}
+				</div>
+			) : null}
+			{coldCache ? (
+				<div className="mb-2 flex items-center gap-2 rounded-xl border border-cold-cache/20 bg-cold-cache/8 px-2.5 py-2 text-cold-cache">
+					<Snowflake size={14} className="shrink-0" />
+					<div className="min-w-0 flex-1">
+						<div className="text-xs font-medium">Prompt cache may be cold</div>
+						<div className="text-[11px] text-muted">Idle past its {coldCache.ttlLabel} window</div>
+						{forkError ? (
+							<div className="mt-0.5 text-[11px] text-del" role="alert">
+								{forkError}
+								{isLockedError(forkError) ? <UnlockLink className="ml-1" /> : null}
+							</div>
+						) : null}
+					</div>
+					<button
+						type="button"
+						onClick={() => void forkDraft()}
+						disabled={forking || !online}
+						title="Start a fresh chat with this transcript attached and keep the draft"
+						className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-cold-cache/12 px-2.5 text-xs font-semibold transition active:scale-[0.97] active:bg-cold-cache/20 disabled:opacity-50"
+					>
+						{forking ? <LoaderCircle size={13} className="animate-spin" /> : <GitFork size={13} />}
+						Fork draft
+					</button>
 				</div>
 			) : null}
 			{/* `has-[textarea:focus]`, not `focus-within`: the controls inside the card take
@@ -310,7 +357,7 @@ export function Composer({
 					ref={ref}
 					rows={1}
 					value={text}
-					disabled={disabled}
+					disabled={disabled || forking}
 					placeholder={disabled ? 'No active session' : 'Send a prompt…'}
 					// text-base is load-bearing: iOS auto-zooms the page when a field under 16px
 					// takes focus, and never zooms back out on blur.
@@ -341,7 +388,7 @@ export function Composer({
 					<button
 						type="button"
 						onClick={() => fileInput.current?.click()}
-						disabled={disabled || !online}
+						disabled={disabled || forking || !online}
 						aria-label="Attach files"
 						className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:text-faint"
 					>
@@ -369,7 +416,7 @@ export function Composer({
 						<button
 							type="button"
 							onClick={() => send()}
-							disabled={disabled || !canSend || !online}
+							disabled={disabled || !canSend || forking || !online}
 							aria-label="Send"
 							className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-white transition active:scale-95 disabled:bg-surface-2 disabled:text-faint"
 						>

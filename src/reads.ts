@@ -107,6 +107,12 @@ export interface SessionRow {
 	created_at: string
 	updated_at: string
 	last_user_message_at: string | null
+	/**
+	 * The prompt-cache lifetime Claude Code actually used for this chat's latest
+	 * cache write, in milliseconds. Null for agents that do not report it (and
+	 * before a Claude prompt is large enough to cache).
+	 */
+	prompt_cache_ttl_ms: number | null
 	/** When the turn now in flight was dispatched — see `listSessions`. Null before Conductor's first queued turn. */
 	turn_started_at: string | null
 	/**
@@ -544,6 +550,17 @@ export class Reads {
 			        s.claude_effort_level, s.codex_thinking_level, s.fast_mode, s.agent_type,
 			        s.context_used_percent, s.unread_count,
 			        s.created_at, s.updated_at, s.last_user_message_at,
+			        (SELECT CASE
+			                  -- Mixed-TTL writes exist, so the shorter conversation tail wins.
+			                  WHEN m.content GLOB '*"ephemeral_5m_input_tokens":[1-9]*' THEN 300000
+			                  WHEN m.content GLOB '*"ephemeral_1h_input_tokens":[1-9]*' THEN 3600000
+			                END
+			           FROM session_messages m
+			          WHERE m.session_id = s.id
+			            AND s.agent_type IN ('claude', 'anthropic')
+			            AND (m.content GLOB '*"ephemeral_5m_input_tokens":[1-9]*'
+			                 OR m.content GLOB '*"ephemeral_1h_input_tokens":[1-9]*')
+			          ORDER BY m.rowid DESC LIMIT 1) AS prompt_cache_ttl_ms,
 			        (SELECT MAX(m.sent_at) FROM session_messages m
 			          WHERE m.session_id = s.id AND m.queue_order IS NOT NULL AND m.sent_at IS NOT NULL) AS turn_started_at
 			 FROM sessions s
