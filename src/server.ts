@@ -75,6 +75,7 @@ import {
 	lockBlocked,
 	newChat,
 	pickActuator,
+	planSettingForUi,
 	restartConductorApp,
 	retryWontHelp,
 	type SendResult,
@@ -462,15 +463,22 @@ async function applyAgentPatch(
 ): Promise<{ ok: boolean; error?: string }> {
 	const located = locateChat(ws, sessionId)
 	if ('error' in located) return { ok: false, error: located.error }
-	const opts: AgentOptions = {
+	const desired: AgentOptions = {
 		effort: patch.effort,
 		plan: patch.plan,
 		model: patch.model,
 		toggleFast: patch.fast === undefined ? false : patch.fast !== Boolean(located.session?.fast_mode)
 	}
+	const opts: AgentOptions = {
+		...desired,
+		plan: planSettingForUi(patch.plan, located.session?.permission_mode)
+	}
 	const result = await setAgentOptions({ workspace: ws, sessionId, tab: located.tab }, opts)
 	if (!result.ok) return { ok: false, error: result.error }
-	if (!(await confirmAgentOptions(ws, sessionId, opts))) {
+	// Confirm the requested state, including settings that needed no UI action.
+	// A model change can redraw controls, so the pre-flight DB read is not itself
+	// enough to call the whole patch successful.
+	if (!(await confirmAgentOptions(ws, sessionId, desired))) {
 		return { ok: false, error: 'Conductor didn’t record the change — it may have been asleep. Try again.' }
 	}
 	if (patch.model) {
