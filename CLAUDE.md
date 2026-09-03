@@ -1367,8 +1367,14 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   managed precedence; a running application can otherwise explicitly advertise
   the complete loopback URL it wants opened. That producer-owned boundary is how
   `yarn dev` carries this relay's dynamic `#token` without teaching the forwarding
-  layer what a relay token is. Each named URL appears in the phone's Open dropdown,
-  and forwarding changes only its origin — path, query and fragment survive. One
+  layer what a relay token is. The source relay publishing that URL is not usually
+  the installed relay serving the phone, so advertisements cross that process
+  boundary through private, workspace-scoped files in
+  `stateDir()/dev-preview-advertisements/`. Each record names its producer PID;
+  consumers ignore a record after its producer dies, and a hash of the workspace ID
+  keeps caller-controlled text out of filenames. Each named URL appears in the
+  phone's Open dropdown, and forwarding changes only its origin — path, query and
+  fragment survive. One
   persisted `tailscale serve` mapping belongs to each local port, so two launch URLs
   on one port reuse one bridge. The relay still discovers the local
   workspace's allocated `CONDUCTOR_PORT` from `ps eww` so it can expand that

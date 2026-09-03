@@ -110,17 +110,21 @@ url = 'http://127.0.0.1:6006/'
 		])
 	})
 
-	test('uses an explicitly advertised full URL before falling back to a detected port', () => {
+	test('shares an explicitly advertised full URL with the relay serving the phone', () => {
 		const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'conductor-remote-advertised-preview-'))
 		closeAfter.push(async () => fs.rmSync(temp, { recursive: true, force: true }))
-		const controller = new DevServerController(path.join(temp, 'forwards.json'))
-		controller.advertisePreviewUrls('workspace-runtime', [
+		const store = path.join(temp, 'forwards.json')
+		const producer = new DevServerController(store)
+		// `yarn dev` advertises from its source relay, while the installed relay is
+		// the process the normal phone PWA asks to forward that workspace.
+		const phoneRelay = new DevServerController(store)
+		producer.advertisePreviewUrls('workspace-runtime', [
 			{
 				name: 'Runtime app',
 				url: 'http://localhost:55300/app?mode=dev#token=declared-by-app'
 			}
 		])
-		const harness = controller as unknown as {
+		const harness = phoneRelay as unknown as {
 			targetsFor: (workspace: Workspace, basePort: number | null, detectedPorts?: number[]) => PreviewTarget[]
 		}
 
@@ -132,6 +136,20 @@ url = 'http://127.0.0.1:6006/'
 			}
 		])
 		expect(harness.targetsFor({ id: 'workspace-other' } as Workspace, 55300, [55300])).toEqual([
+			{ name: 'Port 55300', port: 55300, url: 'http://localhost:55300/' }
+		])
+
+		const advertisementDir = path.join(temp, 'dev-preview-advertisements')
+		const [advertisementName] = fs.readdirSync(advertisementDir)
+		const advertisementFile = path.join(advertisementDir, advertisementName)
+		expect(fs.statSync(advertisementFile).mode & 0o777).toBe(0o600)
+
+		const advertisement = JSON.parse(fs.readFileSync(advertisementFile, 'utf8')) as Record<string, unknown>
+		fs.writeFileSync(advertisementFile, JSON.stringify({ ...advertisement, ownerPid: 2_147_483_647 }))
+		const restartedPhoneRelay = new DevServerController(store) as unknown as {
+			targetsFor: (workspace: Workspace, basePort: number | null, detectedPorts?: number[]) => PreviewTarget[]
+		}
+		expect(restartedPhoneRelay.targetsFor({ id: 'workspace-runtime' } as Workspace, 55300, [55300])).toEqual([
 			{ name: 'Port 55300', port: 55300, url: 'http://localhost:55300/' }
 		])
 	})
