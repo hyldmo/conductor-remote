@@ -31,7 +31,7 @@ const session: Session = {
 }
 
 describe('phone chat tabs', () => {
-	test('keeps selection and close as separate controls', () => {
+	test('hides the close control when there is only one tab', () => {
 		const html = renderToStaticMarkup(
 			<SessionTabs
 				sessions={[session]}
@@ -48,8 +48,30 @@ describe('phone chat tabs', () => {
 		)
 
 		expect(html).toContain('Alpha')
+		expect(html).not.toContain('aria-label="Close Alpha chat"')
+		expect(html.match(/<button/g)).toHaveLength(2)
+	})
+
+	test('keeps selection and close as separate controls with multiple tabs', () => {
+		const secondSession: Session = { ...session, id: 'chat-2', title: 'Beta' }
+		const html = renderToStaticMarkup(
+			<SessionTabs
+				sessions={[session, secondSession]}
+				activeId={session.id}
+				readMarks={{}}
+				promptStates={{}}
+				onSelect={vi.fn()}
+				onNewChat={vi.fn()}
+				onClose={vi.fn()}
+				creating={false}
+				closingId={null}
+				online
+			/>
+		)
+
 		expect(html).toContain('aria-label="Close Alpha chat"')
-		expect(html.match(/<button/g)).toHaveLength(3)
+		expect(html).toContain('aria-label="Close Beta chat"')
+		expect(html.match(/<button/g)).toHaveLength(5)
 	})
 
 	test('keeps New chat reachable after the last tab closes', () => {
