@@ -1,6 +1,7 @@
+import { useId } from 'react'
 import { useDiff, useWorkspaces } from '../hooks.ts'
 import { MergeBanner } from './MergeBanner.tsx'
-import { Patch } from './Patch.tsx'
+import { Patch, scrollToPatchFile } from './Patch.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
 export function DiffView({ workspaceId }: { workspaceId: string }) {
@@ -19,6 +20,7 @@ export function DiffView({ workspaceId }: { workspaceId: string }) {
 
 function DiffBody({ workspaceId }: { workspaceId: string }) {
 	const { data, isLoading, isError, error } = useDiff(workspaceId, true)
+	const anchorPrefix = useId()
 
 	if (isLoading && !data) return <Spinner label="Computing diff…" />
 	if (isError) return <Empty>{(error as Error)?.message}</Empty>
@@ -29,6 +31,7 @@ function DiffBody({ workspaceId }: { workspaceId: string }) {
 				No changes vs <span className="font-mono">{data.base}</span>.
 			</Empty>
 		)
+	const fileAnchorIds = data.files.map((_, index) => `${anchorPrefix}-file-${index}`)
 
 	return (
 		<>
@@ -40,15 +43,27 @@ function DiffBody({ workspaceId }: { workspaceId: string }) {
 			    same width on every row, so a zero count renders as an empty cell — no marker,
 			    no number — and the counts beside it stay put. */}
 			<ul className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1 px-3 py-3 font-mono text-[12px]">
-				{data.files.map(f => (
+				{data.files.map((f, index) => (
 					<li key={f.path} className="col-span-3 grid grid-cols-subgrid items-center">
-						<span className="truncate text-muted">{f.path}</span>
-						<span className="text-right text-add">{f.added ? `+${f.added}` : null}</span>
-						<span className="text-right text-del">{f.removed ? `−${f.removed}` : null}</span>
+						<button
+							type="button"
+							onClick={() => scrollToPatchFile(fileAnchorIds[index])}
+							aria-controls={fileAnchorIds[index]}
+							className="col-span-3 grid min-w-0 grid-cols-subgrid items-center rounded-sm py-0.5 text-left transition hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent active:bg-surface-2"
+						>
+							<span className="truncate text-muted">{f.path}</span>
+							<span className="text-right text-add">{f.added ? `+${f.added}` : null}</span>
+							<span className="text-right text-del">{f.removed ? `−${f.removed}` : null}</span>
+						</button>
 					</li>
 				))}
 			</ul>
-			<Patch patch={data.patch} truncated={data.truncated} className="border-t border-border-soft px-3 py-3" />
+			<Patch
+				patch={data.patch}
+				truncated={data.truncated}
+				fileAnchorIds={fileAnchorIds}
+				className="border-t border-border-soft px-3 py-3"
+			/>
 		</>
 	)
 }
