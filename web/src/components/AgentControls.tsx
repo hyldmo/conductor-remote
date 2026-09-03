@@ -1,5 +1,6 @@
 import { Map as MapIcon, Zap } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { displayedModelPickerLabel } from '../../../src/shared.ts'
 import { EFFORT_LABELS, supportsPlanMode } from '../lib/agent.ts'
 import { cn } from '../lib/cn.ts'
 import { EffortBars, ProviderMark } from './AgentIcons.tsx'
@@ -93,7 +94,7 @@ export function AgentControls({
 								)}
 							>
 								<ProviderMark agentType={agentType} model={providerModel} className="size-[15px]" />
-								<span className="truncate">{model}</span>
+								<span className="truncate">{displayedModelPickerLabel(model)}</span>
 							</button>
 						)}
 					/>
