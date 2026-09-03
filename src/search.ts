@@ -1,10 +1,5 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { Worker } from 'node:worker_threads'
 import { chatCursor } from './chat-cursor.ts'
-import type { ConductorDb } from './db.ts'
-import { HIT_CLOSE, HIT_OPEN } from './shared.ts'
-import { parseMessage } from './transcript.ts'
 
 /**
  * Full-text search over the chat history, in a sidecar DB the relay owns.
@@ -24,7 +19,7 @@ import { parseMessage } from './transcript.ts'
  * together. Skipping it was the original cut and it was wrong: the chat view
  * *renders* thinking, so a hit there opens to something you can read, and the
  * reasoning is where a decision gets explained before the reply summarises it.
- * Note the shape trap behind the source query below: **every thinking block sits
+ * Note the shape trap behind the worker's source query: **every thinking block sits
  * in a row with no text block beside it** (0 of 102,773 rows carry both), so a
  * prefilter written for `"type":"text"` excludes 100% of thinking rather than
  * some of it — the bug that made this cut invisible.
@@ -46,25 +41,6 @@ import { parseMessage } from './transcript.ts'
  * disposable — delete it and the next start rebuilds it.
  */
 
-/** Bump to force a rebuild: a tokenizer or extraction change makes every stored chunk wrong. */
-const SCHEMA_VERSION = 2
-
-/**
- * Source rows advanced per tick. The cursor moves by *scanned* rowid rather than
- * matched rowid, so a caught-up index re-scans nothing — get that wrong and every
- * idle poll re-reads the 3 GB tail looking for rows it already rejected.
- */
-const WINDOW_ROWS = 4000
-
-/** Yield to the event loop between batches: the backfill is ~19ms of blocking work per window. */
-const BACKFILL_PAUSE_MS = 5
-
-/** Once caught up, look for new messages at about the rate a chat produces them. */
-const IDLE_POLL_MS = 15_000
-
-/** A pathological single message can't be allowed to dominate the index. */
-const MAX_CHUNK_CHARS = 64_000
-
 /** How many chunks a query ranks before they are folded into workspaces. */
 const CHUNK_LIMIT = 300
 
@@ -84,9 +60,6 @@ export { HIT_CLOSE, HIT_OPEN } from './shared.ts'
  * minus the parts this index skips (`tool`, `system`).
  */
 export type SearchRole = 'user' | 'assistant' | 'thinking'
-
-/** The `TranscriptEntry` roles this index keeps, and the set `search()` maps a stored role back through. */
-const INDEXED_ROLES = new Set<string>(['user', 'assistant', 'thinking'] satisfies SearchRole[])
 
 export interface SearchHit {
 	sessionId: string
@@ -175,239 +148,147 @@ export function matchQuery(raw: string): string | null {
 /** The tokens `matchQuery` will search for — what a caller matches names against. */
 export { queryTokens } from './shared.ts'
 
-interface ChunkRow {
-	session_id: string
-	src_rowid: number
-	role: string
-	at: string
-	score: number
-	snippet: string
+export interface SearchOptions {
+	limit?: number
+	sessionIds?: string[]
 }
 
-export class SearchIndex {
-	private readonly source: ConductorDb
-	private readonly file: string
-	private db: DatabaseSync | null = null
-	private openError: string | null = null
-	private cursor = 0
-	private caughtUp = false
-	private timer: NodeJS.Timeout | null = null
-	private sourceMax = 0
+interface SearchRequest {
+	id: number
+	type: 'search'
+	raw: string
+	options: SearchOptions
+}
 
-	constructor(source: ConductorDb, file: string) {
-		this.source = source
+export type SearchWorkerRequest = SearchRequest
+
+export type SearchWorkerMessage =
+	| { type: 'status'; status: IndexStatus }
+	| { type: 'log'; level: 'log' | 'warn'; message: string }
+	| { type: 'result'; id: number; hits: SearchHit[] }
+	| { type: 'error'; id: number; error: string }
+
+interface PendingSearch {
+	resolve: (hits: SearchHit[]) => void
+	reject: (error: Error) => void
+}
+
+/**
+ * Main-thread facade for the disposable full-text index.
+ *
+ * `node:sqlite` is synchronous. Keeping its connection here meant a contended
+ * sidecar write, a backfill batch, or an expensive FTS rank stopped every HTTP
+ * route even though Conductor's AppleScript process itself is asynchronous. The
+ * worker owns both SQLite handles now; only small structured-clone messages cross
+ * back to the server thread.
+ */
+export class SearchIndex {
+	private readonly sourceDbPath: string
+	private readonly file: string
+	private worker: Worker | null = null
+	private indexStatus: IndexStatus = { chunks: 0, ready: false, progress: 0 }
+	private nextId = 1
+	private readonly pending = new Map<number, PendingSearch>()
+	private stopping = false
+
+	constructor(sourceDbPath: string, file: string) {
+		this.sourceDbPath = sourceDbPath
 		this.file = file
 	}
 
-	/** Open (or rebuild) the sidecar and start indexing in the background. */
+	/** Spawn the index worker. Search remains a convenience: startup failure is non-fatal. */
 	start(): void {
+		if (this.worker) return
+		this.stopping = false
+		this.indexStatus = { chunks: 0, ready: false, progress: 0 }
+		const module = import.meta.url.endsWith('.ts') ? './search-worker.ts' : './search-worker.js'
 		try {
-			this.open()
+			const worker = new Worker(new URL(module, import.meta.url), {
+				workerData: { sourceDbPath: this.sourceDbPath, file: this.file },
+				// The CLI suppresses node:sqlite's still-experimental warning in the main
+				// isolate; warning state does not cross into a worker.
+				execArgv: [...process.execArgv, '--disable-warning=ExperimentalWarning']
+			})
+			this.worker = worker
+			worker.on('message', message => this.onMessage(message as SearchWorkerMessage))
+			worker.on('error', error => {
+				if (this.worker === worker) this.workerFailed(error.message)
+			})
+			worker.on('exit', code => {
+				if (this.worker !== worker) return
+				this.worker = null
+				if (!this.stopping && !this.indexStatus.error) this.workerFailed(`worker exited with code ${code}`)
+			})
 		} catch (err) {
-			// A search index is a convenience; failing to open one must never stop the relay
-			// serving state, transcripts or sends. Report it on /api/search instead.
-			this.openError = err instanceof Error ? err.message : String(err)
-			console.warn(`⚠ search index unavailable (${this.openError}) — /api/search will report it`)
-			return
+			this.workerFailed(err instanceof Error ? err.message : String(err))
 		}
-		this.schedule(0)
 	}
 
-	stop(): void {
-		if (this.timer) clearTimeout(this.timer)
-		this.timer = null
-	}
-
-	private open(): void {
-		fs.mkdirSync(path.dirname(this.file), { recursive: true })
-		const db = new DatabaseSync(this.file)
-		db.exec('PRAGMA journal_mode = WAL')
-		db.exec('PRAGMA synchronous = NORMAL')
-		// A dev relay on another port shares this file with the LaunchAgent's. WAL lets them
-		// both read; the writer that loses waits rather than throwing away its batch, and a
-		// tick that still fails is retried by the scheduler with nothing lost (the cursor
-		// only advances on commit).
-		db.exec('PRAGMA busy_timeout = 5000')
-		db.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)')
-		const version = Number(this.readMeta(db, 'version') ?? 0)
-		if (version !== SCHEMA_VERSION) {
-			db.exec('DROP TABLE IF EXISTS chunks')
-			db.exec(`
-				CREATE VIRTUAL TABLE chunks USING fts5(
-					body,
-					session_id UNINDEXED,
-					src_rowid UNINDEXED,
-					role UNINDEXED,
-					at UNINDEXED,
-					tokenize='porter unicode61'
-				)
-			`)
-			db.prepare('INSERT OR REPLACE INTO meta(k, v) VALUES (?, ?)').run('version', String(SCHEMA_VERSION))
-			db.prepare('INSERT OR REPLACE INTO meta(k, v) VALUES (?, ?)').run('cursor', '0')
-			if (version) console.log(`search index schema ${version} → ${SCHEMA_VERSION}, rebuilding`)
-		}
-		this.db = db
-		this.cursor = Number(this.readMeta(db, 'cursor') ?? 0)
-	}
-
-	private readMeta(db: DatabaseSync, key: string): string | null {
-		const row = db.prepare('SELECT v FROM meta WHERE k = ?').get(key) as { v?: string } | undefined
-		return row?.v ?? null
-	}
-
-	private schedule(ms: number): void {
-		if (this.timer) clearTimeout(this.timer)
-		this.timer = setTimeout(() => {
-			let more = false
-			try {
-				more = this.tick()
-			} catch (err) {
-				console.warn(`⚠ search index tick failed: ${err instanceof Error ? err.message : err}`)
-			}
-			this.schedule(more ? BACKFILL_PAUSE_MS : IDLE_POLL_MS)
-		}, ms)
-		this.timer.unref?.()
-	}
-
-	/**
-	 * Index one window of source rows. Returns true while there is more to do.
-	 *
-	 * The window is picked by rowid *before* the prose filter runs, so the cursor
-	 * advances past rows that hold nothing worth indexing. Filtering first and
-	 * advancing to the last match instead would leave a caught-up index re-scanning
-	 * every tool_result between the last prose row and the end of the table, every
-	 * poll, forever.
-	 */
-	private tick(): boolean {
-		const db = this.db
-		if (!db) return false
-
-		const window = this.source.query<{ rowid: number }>(
-			'SELECT rowid FROM session_messages WHERE rowid > ? ORDER BY rowid LIMIT ?',
-			[this.cursor, WINDOW_ROWS]
-		)
-		if (!window.length) {
-			this.caughtUp = true
-			return false
-		}
-		const end = window[window.length - 1].rowid
-
-		// Only rows that can hold prose: a plain-text prompt, or a frame carrying a text or
-		// thinking block. Everything else is tool plumbing and the bulk of the bytes.
-		// The thinking clause is not redundant with the text one — the two block types never
-		// share a row (see this file's header), so dropping it drops thinking entirely.
-		const rows = this.source.query<{
-			rowid: number
-			id: string
-			session_id: string
-			role: string | null
-			content: string | null
-			full_message: string | null
-			created_at: string
-			sent_at: string | null
-			queue_order: number | null
-		}>(
-			`SELECT rowid, id, session_id, role, content, full_message, created_at, sent_at, queue_order
-			 FROM session_messages
-			 WHERE rowid > ? AND rowid <= ? AND session_id IS NOT NULL
-			   AND (role = 'user' OR content LIKE '%"type":"text"%' OR content LIKE '%"type":"thinking"%')
-			 ORDER BY rowid`,
-			[this.cursor, end]
-		)
-
-		const insert = db.prepare('INSERT INTO chunks(body, session_id, src_rowid, role, at) VALUES (?, ?, ?, ?, ?)')
-		db.exec('BEGIN')
-		try {
-			for (const row of rows) {
-				// Reuse the transcript parser rather than a second JSON walk: it already knows
-				// that text inside a `type:"user"` frame is injected context and not the user's
-				// words, and indexing something the chat view would never show is how a search
-				// result becomes impossible to find once you open it.
-				for (const entry of parseMessage(row, null)) {
-					if (!INDEXED_ROLES.has(entry.role)) continue
-					const body = entry.text.trim()
-					if (!body) continue
-					insert.run(body.slice(0, MAX_CHUNK_CHARS), row.session_id, row.rowid, entry.role, entry.ts)
-				}
-			}
-			db.prepare('INSERT OR REPLACE INTO meta(k, v) VALUES (?, ?)').run('cursor', String(end))
-			db.exec('COMMIT')
-		} catch (err) {
-			db.exec('ROLLBACK')
-			throw err
-		}
-		this.cursor = end
-		return true
+	async stop(): Promise<void> {
+		this.stopping = true
+		const worker = this.worker
+		this.worker = null
+		this.rejectPending('search index stopped')
+		if (worker) await worker.terminate()
 	}
 
 	status(): IndexStatus {
-		if (this.openError) return { chunks: 0, ready: false, progress: 0, error: this.openError }
-		const db = this.db
-		if (!db) return { chunks: 0, ready: false, progress: 0 }
-		const chunks = Number((db.prepare('SELECT COUNT(*) c FROM chunks').get() as { c: number }).c)
-		if (this.caughtUp) return { chunks, ready: true, progress: 1 }
-		// Only re-read the source's high-water mark while backfilling; it costs a query
-		// and the answer only matters for the progress bar.
-		if (!this.sourceMax) {
-			const max = this.source.query<{ m: number | null }>('SELECT MAX(rowid) m FROM session_messages')[0]?.m
-			this.sourceMax = max ?? 0
-		}
-		const progress = this.sourceMax ? Math.min(1, this.cursor / this.sourceMax) : 0
-		return { chunks, ready: false, progress }
+		return { ...this.indexStatus }
 	}
 
 	/**
-	 * Top matching chunks, best first. Empty when the query has no searchable tokens.
-	 *
-	 * `sessionIds` scopes the ranking, not just the result: it is the repo filter,
-	 * resolved to chat ids by the caller because this index knows nothing about
-	 * workspaces. It has to sit inside the query rather than be applied to the
-	 * chunks it returns, because the `limit` is spent before any post-filter runs
-	 * — a common word fills all 300 slots from the busiest repo and a smaller one
-	 * folds up to nothing. Measured on this Mac's 205k chunks with the largest repo's
-	 * 1,005 chats as the list: +0.3ms on a rare word, +60ms on the worst common-word
-	 * query (165ms → 220ms), still under the phone's 250ms debounce. The list rides
-	 * in as one JSON parameter through `json_each`, so its length never meets
-	 * SQLite's bound-variable limit. An empty list matches nothing, which is the
-	 * right answer for a repo with no chats and never "everything".
+	 * Top matching chunks, best first. The SQLite work happens entirely in the
+	 * worker, so awaiting a slow rank does not stop unrelated API requests.
 	 */
-	search(
-		raw: string,
-		{ limit = CHUNK_LIMIT, sessionIds }: { limit?: number; sessionIds?: string[] } = {}
-	): SearchHit[] {
-		const db = this.db
-		if (!db) return []
-		const match = matchQuery(raw)
-		if (!match) return []
-		if (sessionIds && !sessionIds.length) return []
-		const scope = sessionIds ? 'AND session_id IN (SELECT value FROM json_each(?))' : ''
-		const params = sessionIds
-			? [HIT_OPEN, HIT_CLOSE, match, JSON.stringify(sessionIds), limit]
-			: [HIT_OPEN, HIT_CLOSE, match, limit]
-		let rows: ChunkRow[]
-		try {
-			rows = db
-				.prepare(
-					`SELECT session_id, src_rowid, role, at, -bm25(chunks) AS score,
-					        snippet(chunks, 0, ?, ?, '…', 24) AS snippet
-					 FROM chunks WHERE chunks MATCH ? ${scope} ORDER BY bm25(chunks) LIMIT ?`
-				)
-				.all(...(params as never[])) as unknown as ChunkRow[]
-		} catch (err) {
-			// A MATCH that still fails to parse is a bug in matchQuery, not user error —
-			// report it rather than showing an empty result that looks like "no matches".
-			throw new Error(`search failed for ${JSON.stringify(match)}: ${err instanceof Error ? err.message : err}`)
+	search(raw: string, options: SearchOptions = {}): Promise<SearchHit[]> {
+		if (!matchQuery(raw) || (options.sessionIds && !options.sessionIds.length)) return Promise.resolve([])
+		const worker = this.worker
+		if (!worker || this.indexStatus.error) return Promise.resolve([])
+
+		const id = this.nextId++
+		return new Promise<SearchHit[]>((resolve, reject) => {
+			this.pending.set(id, { resolve, reject })
+			try {
+				worker.postMessage({
+					id,
+					type: 'search',
+					raw,
+					options: { limit: CHUNK_LIMIT, ...options }
+				} satisfies SearchRequest)
+			} catch (error) {
+				this.pending.delete(id)
+				reject(error instanceof Error ? error : new Error(String(error)))
+			}
+		})
+	}
+
+	private onMessage(message: SearchWorkerMessage): void {
+		if (message.type === 'status') {
+			this.indexStatus = message.status
+			return
 		}
-		return rows.map(r => ({
-			sessionId: r.session_id,
-			srcRowid: Number(r.src_rowid),
-			// An index written before SCHEMA_VERSION 2 is dropped on open, so an unknown role
-			// here is a bug rather than an old row — fall back to the neutral one.
-			role: INDEXED_ROLES.has(r.role) ? (r.role as SearchRole) : 'assistant',
-			at: r.at,
-			score: Number(r.score),
-			snippet: r.snippet
-		}))
+		if (message.type === 'log') {
+			console[message.level](message.message)
+			return
+		}
+
+		const pending = this.pending.get(message.id)
+		if (!pending) return
+		this.pending.delete(message.id)
+		if (message.type === 'result') pending.resolve(message.hits)
+		else pending.reject(new Error(message.error))
+	}
+
+	private workerFailed(error: string): void {
+		if (this.indexStatus.error === error) return
+		this.indexStatus = { chunks: 0, ready: false, progress: 0, error }
+		this.rejectPending(error)
+		console.warn(`⚠ search index unavailable (${error}) — /api/search will report it`)
+	}
+
+	private rejectPending(message: string): void {
+		for (const pending of this.pending.values()) pending.reject(new Error(message))
+		this.pending.clear()
 	}
 }
 

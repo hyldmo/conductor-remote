@@ -133,23 +133,41 @@ describe('SearchIndex.search scoped to a chat list', () => {
 		row(2, 'quiet', 'the lamp is on the desk'),
 		row(3, 'other', 'nothing about lights here')
 	]
-	// Only the three source queries `SearchIndex` makes, told apart by shape.
-	const source = {
-		query<T>(sql: string, params: unknown[] = []): T[] {
-			if (sql.includes('MAX(rowid)')) return [{ m: rows.length }] as T[]
-			if (sql.startsWith('SELECT rowid FROM session_messages')) {
-				const [after, limit] = params as [number, number]
-				return rows
-					.filter(r => r.rowid > after)
-					.slice(0, limit)
-					.map(r => ({ rowid: r.rowid })) as T[]
-			}
-			const [after, end] = params as [number, number]
-			return rows.filter(r => r.rowid > after && r.rowid <= end) as T[]
-		}
-	}
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conductor-remote-search-'))
-	const index = new SearchIndex(source as unknown as ConductorDb, path.join(dir, 'search.db'))
+	const sourceFile = path.join(dir, 'source.db')
+	const source = new DatabaseSync(sourceFile)
+	source.exec(`
+		CREATE TABLE session_messages (
+			id TEXT NOT NULL,
+			session_id TEXT,
+			role TEXT,
+			content TEXT,
+			full_message TEXT,
+			created_at TEXT NOT NULL,
+			sent_at TEXT,
+			queue_order INTEGER
+		)
+	`)
+	const insert = source.prepare(`
+		INSERT INTO session_messages (
+			rowid, id, session_id, role, content, full_message, created_at, sent_at, queue_order
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	for (const value of rows) {
+		insert.run(
+			value.rowid,
+			value.id,
+			value.session_id,
+			value.role,
+			value.content,
+			value.full_message,
+			value.created_at,
+			value.sent_at,
+			value.queue_order
+		)
+	}
+	source.close()
+	const index = new SearchIndex(sourceFile, path.join(dir, 'search.db'))
 
 	beforeAll(async () => {
 		index.start()
@@ -159,30 +177,102 @@ describe('SearchIndex.search scoped to a chat list', () => {
 			await new Promise(r => setTimeout(r, 10))
 		}
 	})
-	afterAll(() => {
-		index.stop()
+	afterAll(async () => {
+		await index.stop()
 		fs.rmSync(dir, { recursive: true, force: true })
 	})
 
-	const sessions = (raw: string, opts?: { limit?: number; sessionIds?: string[] }) =>
-		index.search(raw, opts).map(h => h.sessionId)
+	const sessions = async (raw: string, opts?: { limit?: number; sessionIds?: string[] }) =>
+		(await index.search(raw, opts)).map(h => h.sessionId)
 
-	test('unscoped, the dense chat wins the only slot', () => {
-		expect(sessions('lamp', { limit: 1 })).toEqual(['busy'])
+	test('unscoped, the dense chat wins the only slot', async () => {
+		expect(await sessions('lamp', { limit: 1 })).toEqual(['busy'])
 	})
 
-	test('scoped, the slot goes to the chat in scope rather than to nothing', () => {
-		expect(sessions('lamp', { limit: 1, sessionIds: ['quiet'] })).toEqual(['quiet'])
-		expect(sessions('lamp', { sessionIds: ['quiet', 'other'] })).toEqual(['quiet'])
+	test('scoped, the slot goes to the chat in scope rather than to nothing', async () => {
+		expect(await sessions('lamp', { limit: 1, sessionIds: ['quiet'] })).toEqual(['quiet'])
+		expect(await sessions('lamp', { sessionIds: ['quiet', 'other'] })).toEqual(['quiet'])
 	})
 
-	test('an empty list matches nothing, never everything', () => {
-		expect(sessions('lamp', { sessionIds: [] })).toEqual([])
+	test('an empty list matches nothing, never everything', async () => {
+		expect(await sessions('lamp', { sessionIds: [] })).toEqual([])
 	})
 
-	test('no list at all is the old unscoped search', () => {
-		expect(sessions('lamp')).toEqual(['busy', 'quiet'])
+	test('no list at all is the old unscoped search', async () => {
+		expect(await sessions('lamp')).toEqual(['busy', 'quiet'])
 	})
+})
+
+describe('SearchIndex event-loop isolation', () => {
+	test('a contended sidecar writer does not stall the caller thread', async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conductor-remote-search-worker-'))
+		const sourceFile = path.join(dir, 'source.db')
+		const indexFile = path.join(dir, 'search.db')
+		const source = new DatabaseSync(sourceFile)
+		source.exec(`
+				CREATE TABLE session_messages (
+					id TEXT NOT NULL,
+					session_id TEXT,
+					role TEXT,
+					content TEXT,
+					full_message TEXT,
+					created_at TEXT NOT NULL,
+					sent_at TEXT,
+					queue_order INTEGER
+				);
+				INSERT INTO session_messages VALUES (
+					'm1', 'chat', 'user', 'worker isolation lamp', NULL,
+					'2026-09-03 10:00:00', '2026-09-03 10:00:00', NULL
+				);
+			`)
+		source.close()
+
+		// Give the worker a valid WAL sidecar, then hold its sole writer slot. Its
+		// BEGIN IMMEDIATE waits up to five seconds; that wait must remain in the worker.
+		const blocker = new DatabaseSync(indexFile)
+		blocker.exec(`
+				PRAGMA journal_mode = WAL;
+				CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+				CREATE VIRTUAL TABLE chunks USING fts5(
+					body,
+					session_id UNINDEXED,
+					src_rowid UNINDEXED,
+					role UNINDEXED,
+					at UNINDEXED,
+					tokenize='porter unicode61'
+				);
+				INSERT INTO meta VALUES ('version', '2'), ('cursor', '0');
+				BEGIN IMMEDIATE;
+			`)
+
+		const index = new SearchIndex(sourceFile, indexFile)
+		const started = performance.now()
+		const timer = new Promise<number>(resolve => {
+			setTimeout(() => resolve(performance.now() - started), 75)
+		})
+		try {
+			index.start()
+			// A synchronous sqlite wait here makes this roughly 5,000ms. On the worker
+			// path this remains an ordinary timer with generous CI headroom.
+			expect(await timer).toBeLessThan(500)
+		} finally {
+			blocker.exec('ROLLBACK')
+			blocker.close()
+		}
+
+		try {
+			const deadline = Date.now() + 5000
+			while (!index.status().ready) {
+				if (index.status().error) throw new Error(index.status().error)
+				if (Date.now() > deadline) throw new Error('worker index never caught up after releasing the writer')
+				await new Promise(resolve => setTimeout(resolve, 10))
+			}
+			expect((await index.search('isolation')).map(hit => hit.sessionId)).toEqual(['chat'])
+		} finally {
+			await index.stop()
+			fs.rmSync(dir, { recursive: true, force: true })
+		}
+	}, 10_000)
 })
 
 describe('workspace search scope', () => {
