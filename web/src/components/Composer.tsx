@@ -7,17 +7,22 @@ import { enterSubmits } from '../lib/keys.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
 import { coldPromptCache } from '../lib/prompt-cache.ts'
-import type { ActuatorInfo, Attachment, Session } from '../lib/types.ts'
+import type { ActuatorInfo, DraftAttachment, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentBar } from './AgentBar.tsx'
 import { UnlockLink } from './ui.tsx'
 
-type StagedAttachment = Attachment & {
+type PendingAttachment = {
 	id: string
 	sessionId: string
-	status: 'uploading' | 'ready' | 'error'
+	name: string
+	status: 'uploading' | 'error'
 	error?: string
 }
+
+type DisplayAttachment = (DraftAttachment & { id: string; status: 'ready'; error?: never }) | PendingAttachment
+
+const NO_ATTACHMENTS: DraftAttachment[] = []
 
 /**
  * The draft lives in the store (persisted per chat — see lib/draft.ts), not in
@@ -60,7 +65,11 @@ export function Composer({
 }) {
 	const draftKey = sessionId ?? workspaceId
 	const text = useApp(s => s.drafts[draftKey] ?? '')
+	const readyAttachments = useApp(s => s.draftAttachments[draftKey] ?? NO_ATTACHMENTS)
 	const setDraft = useApp(s => s.setDraft)
+	const addDraftAttachment = useApp(s => s.addDraftAttachment)
+	const removeDraftAttachment = useApp(s => s.removeDraftAttachment)
+	const clearDraftContent = useApp(s => s.clearDraftContent)
 	const moveDraft = useApp(s => s.moveDraft)
 	const setFocusedDraft = useApp(s => s.setFocusedDraft)
 	const online = useApp(s => s.online)
@@ -75,11 +84,14 @@ export function Composer({
 	const fileInput = useRef<HTMLInputElement>(null)
 	const cancelledUploads = useRef(new Set<string>())
 	const dragDepth = useRef(0)
-	const [attachments, setAttachments] = useState<StagedAttachment[]>([])
+	const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
 	const [draggingFiles, setDraggingFiles] = useState(false)
-	const activeAttachments = attachments.filter(attachment => attachment.sessionId === sessionId)
-	const readyAttachments = activeAttachments.filter(attachment => attachment.status === 'ready')
-	const uploading = activeAttachments.some(attachment => attachment.status === 'uploading')
+	const activePendingAttachments = pendingAttachments.filter(attachment => attachment.sessionId === sessionId)
+	const activeAttachments: DisplayAttachment[] = [
+		...readyAttachments.map(attachment => ({ ...attachment, id: attachment.path, status: 'ready' as const })),
+		...activePendingAttachments
+	]
+	const uploading = activePendingAttachments.some(attachment => attachment.status === 'uploading')
 	const prompt = [...readyAttachments.map(attachment => attachment.token), text.trim()].filter(Boolean).join('\n')
 
 	// Before chats had tabs, drafts used their workspace id. Move one across when
@@ -124,8 +136,8 @@ export function Composer({
 	const send = (queue = false) => {
 		if (!prompt || uploading || forking || !sessionId || !online) return
 		void sendPrompt({ sessionId, workspaceId, text: prompt, queue })
-		setDraft(draftKey, '')
-		setAttachments(current => current.filter(attachment => attachment.sessionId !== sessionId))
+		clearDraftContent(draftKey)
+		setPendingAttachments(current => current.filter(attachment => attachment.sessionId !== sessionId))
 	}
 
 	const forkDraft = async () => {
@@ -134,8 +146,8 @@ export function Composer({
 		setForkError(null)
 		try {
 			await onFork(prompt)
-			setDraft(draftKey, '')
-			setAttachments(current => current.filter(attachment => attachment.sessionId !== sessionId))
+			clearDraftContent(draftKey)
+			setPendingAttachments(current => current.filter(attachment => attachment.sessionId !== sessionId))
 		} catch (err) {
 			setForkError(err instanceof Error ? err.message : 'Could not fork this chat')
 		} finally {
@@ -144,37 +156,35 @@ export function Composer({
 	}
 
 	const removeAttachment = (id: string) => {
+		if (readyAttachments.some(attachment => attachment.path === id)) {
+			removeDraftAttachment(draftKey, id)
+			return
+		}
 		cancelledUploads.current.add(id)
-		setAttachments(current => current.filter(attachment => attachment.id !== id))
+		setPendingAttachments(current => current.filter(attachment => attachment.id !== id))
 	}
 
 	const addFiles = async (picked: FileList | File[]) => {
 		if (!sessionId || !online) return
 		for (const file of Array.from(picked)) {
 			const id = crypto.randomUUID()
-			setAttachments(current => [
+			setPendingAttachments(current => [
 				...current,
 				{
 					id,
 					sessionId,
 					name: file.name || 'attachment',
-					path: '',
-					bytes: file.size,
-					token: '',
 					status: 'uploading'
 				}
 			])
 			try {
 				const uploaded = await client.uploadAttachment(sessionId, workspaceId, file)
 				if (cancelledUploads.current.delete(id)) continue
-				setAttachments(current =>
-					current.map(attachment =>
-						attachment.id === id ? { ...attachment, ...uploaded.attachment, status: 'ready' } : attachment
-					)
-				)
+				addDraftAttachment(sessionId, uploaded.attachment)
+				setPendingAttachments(current => current.filter(attachment => attachment.id !== id))
 			} catch (err) {
 				if (cancelledUploads.current.delete(id)) continue
-				setAttachments(current =>
+				setPendingAttachments(current =>
 					current.map(attachment =>
 						attachment.id === id
 							? { ...attachment, status: 'error', error: err instanceof Error ? err.message : 'Upload failed' }

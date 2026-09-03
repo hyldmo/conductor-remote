@@ -26,7 +26,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   attachments.ts  writes a real Conductor attachment from outside Conductor: the file under
                   .context/attachments/<id>/, and the @⟦name⟧(path) token the composer parses
   staged-attachments.ts  files picked before a worktree exists; the first-prompt queue moves
-                  them in before it sends the token that refers to them
+                  them in before it sends the token that refers to them; a conservative sweep
+                  removes week-old files absent from both synced drafts and the delivery queue
   search.ts       FTS5 index over chat prose in its OWN sidecar db (stateDir()/search.db);
                   backfills in the background, folds chunk hits up into workspaces
   chat-cursor.ts  the opaque pointer one message in a chat is addressed by, so the MCP
@@ -69,7 +70,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   funnel-watchdog.ts  end-to-end probe of the PUBLIC ingress; re-registers a stale funnel, and
                   can move the Mac to a fallback network when it has no route at all
   settings.ts     relay preferences the phone edits (fallback SSIDs, autoRejoin) → stateDir()/settings.json
-  prefs.ts        durable sync peer for PWA read marks + draft/agent intent → stateDir()/prefs.json
+  prefs.ts        durable sync peer for PWA read marks + draft text/agent/attachment intent
+                  → stateDir()/prefs.json (attachment bytes remain in their existing host paths)
   wifi.ts         networksetup reads + the one narrow write (join a network macOS already knows).
                   All async: it is slowest exactly when the link is wedged, and the relay is one thread
   nosleep-helper.ts  the root half in one place: the shared POSIX-sh body, the helper file it is
@@ -86,7 +88,7 @@ web/              React PWA (Vite root)
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll) / useModels (model list, SWR)
                   useSendPrompt (applies the staged agent settings, then sends)
   src/lib/        api client, types (re-export of src/wire.ts), format helpers, cn, composer
-                  drafts (draft.ts) and staged agent settings (agentDraft.ts), local-first host
+                  drafts (draft.ts), ready attachments and staged agent settings (agentDraft.ts), local-first host
                   preference sync (prefs.ts), read marks (read.ts, the unread this phone has
                   seen), pending sends (pending.ts, optimistic bubbles restored across a reload),
                   push (permission/subscribe/reconcile), the unlock link a locked Mac gets
@@ -106,7 +108,8 @@ web/              React PWA (Vite root)
                   (the Notifications switch with "send a test", plus the Mac section: keep-awake
                   windows and the fallback-network picker). Patch.tsx renders a unified diff for
                   both the workspace diff and an edit step's result
-  src/store.ts    zustand: token + connection status + drafts + staged agent settings + read marks
+  src/store.ts    zustand: token + connection status + drafts (text + ready attachments)
+                  + staged agent settings + read marks
                   + this device's push subscription
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see the PWA self-update trap in CLAUDE.md)

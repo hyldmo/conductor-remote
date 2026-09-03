@@ -57,6 +57,7 @@ import { VIEWING_HEADER, withoutWindowEvidence } from './shared.ts'
 import {
 	discardStagedAttachment,
 	materializeStagedAttachments,
+	pruneStagedAttachments,
 	stageAttachment,
 	stagedAttachments
 } from './staged-attachments.ts'
@@ -421,6 +422,33 @@ const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.j
 	// of burning all three sends into a lock screen nobody is there to see.
 	gate: async () => (await screenLocked()) !== true
 })
+
+/** Unreferenced pre-workspace uploads get one week for an offline device to reconnect. */
+const STAGED_ATTACHMENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+const STAGED_ATTACHMENT_SWEEP_MS = 6 * 60 * 60 * 1000
+
+function referencedStagedAttachments(): Set<string> {
+	const referenced = new Set<string>()
+	for (const draft of Object.values(readPrefs().drafts)) {
+		if (draft.deleted) continue
+		for (const attachment of draft.attachments) {
+			if (attachment.stageId) referenced.add(attachment.stageId)
+		}
+	}
+	for (const prompt of firstPrompts.list()) {
+		for (const stageId of prompt.attachmentIds ?? []) referenced.add(stageId)
+	}
+	return referenced
+}
+
+function sweepStagedAttachments(): void {
+	const removed = pruneStagedAttachments(
+		STAGED_ATTACHMENTS_DIR,
+		referencedStagedAttachments(),
+		STAGED_ATTACHMENT_MAX_AGE_MS
+	)
+	if (removed) console.info(`[relay] removed ${removed} abandoned staged attachment(s)`)
+}
 
 /**
  * Apply staged agent settings to a chat — the shared half of `POST …/agent` and
@@ -1211,7 +1239,7 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, 201, { ok: true, attachment })
 			}
 
-			// DELETE /api/attachments/:id — a file removed from the new-workspace sheet.
+			// DELETE /api/attachments/:id — an upload cancelled before it became a synced draft attachment.
 			const stagedAttachment = routeParam(routes.discardStagedAttachment, req.method, pathname)
 			if (stagedAttachment)
 				return json(req, res, discardStagedAttachment(STAGED_ATTACHMENTS_DIR, stagedAttachment) ? 200 : 404, {
@@ -1940,6 +1968,10 @@ server.listen(cfg.port, cfg.host, () => {
 	// Pick up any first prompt the previous process was still holding — an auto-update
 	// restart lands mid-setup often enough that this is the normal path, not a rare one.
 	firstPrompts.start()
+	// New Workspace uploads are host-side so another device can restore their pills.
+	// Sweep only week-old directories absent from both a draft and the delivery queue.
+	sweepStagedAttachments()
+	setInterval(sweepStagedAttachments, STAGED_ATTACHMENT_SWEEP_MS).unref()
 	// Same for prompts parked behind the lock screen — a lock outlives relay restarts.
 	parkedPrompts.start()
 	// A launchd/self-update restart kills the loopback bridge but not Tailscale's

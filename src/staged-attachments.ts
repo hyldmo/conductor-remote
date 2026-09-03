@@ -89,10 +89,46 @@ export function materializeStagedAttachments(root: string, worktree: string, sta
 	}
 }
 
-/** Discard a file the user removed before creating its workspace. */
+/** Discard an upload that was cancelled before any synced draft could reference it. */
 export function discardStagedAttachment(root: string, stageId: string): boolean {
 	const dir = attachmentDirectory(root, stageId)
 	if (!dir || !fs.existsSync(dir)) return false
 	fs.rmSync(dir, { recursive: true, force: true })
 	return true
+}
+
+/**
+ * Remove abandoned New Workspace uploads without touching a draft or delivery queue
+ * that still names one. Age is measured on the six-character directory, and only
+ * directories matching that exact shape are eligible — a corrupt or hand-added path
+ * is evidence to leave alone, not permission to recurse through it.
+ */
+export function pruneStagedAttachments(
+	root: string,
+	referenced: ReadonlySet<string>,
+	maxAgeMs: number,
+	now = Date.now()
+): number {
+	const base = path.join(root, ATTACHMENT_DIR)
+	let entries: fs.Dirent[]
+	try {
+		entries = fs.readdirSync(base, { withFileTypes: true })
+	} catch {
+		return 0
+	}
+	let removed = 0
+	for (const entry of entries) {
+		if (!entry.isDirectory() || !STAGE_ID.test(entry.name) || referenced.has(entry.name)) continue
+		const directory = attachmentDirectory(root, entry.name)
+		if (!directory) continue
+		try {
+			if (now - fs.statSync(directory).mtimeMs < maxAgeMs) continue
+			fs.rmSync(directory, { recursive: true, force: true })
+			removed += 1
+		} catch {
+			// Cleanup is best-effort. A file being changed or removed concurrently is not
+			// a reason to fail the relay or touch a broader path.
+		}
+	}
+	return removed
 }

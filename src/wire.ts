@@ -37,7 +37,7 @@ import type {
 	PlanUsageWindow,
 	ProviderPlanUsage
 } from './plan-usage.ts'
-import type { Prefs, SyncedDraft } from './prefs.ts'
+import type { DraftAttachment, Prefs, SyncedDraft } from './prefs.ts'
 import type { RepoRow, SearchWorkspace, SessionRow, Workspace } from './reads.ts'
 import type { IndexStatus, SearchResult as SearchEvidence } from './search.ts'
 import type { Settings } from './settings.ts'
@@ -60,6 +60,7 @@ export type {
 	DevServerForward,
 	DevServerResult,
 	DevServerState,
+	DraftAttachment,
 	IndexStatus as SearchIndexStatus,
 	LogEntry,
 	LogFileInfo,

@@ -8,14 +8,27 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { attachmentName, attachmentToken } from './attachments.ts'
 import { stateDir } from './config.ts'
 import type { ParkedAgentPatch } from './parked.ts'
+
+/** A ready file reference carried with one unsent composer draft. The bytes stay on the host. */
+export interface DraftAttachment {
+	name: string
+	path: string
+	bytes: number
+	token: string
+	/** Present only while a New Workspace file is waiting outside its future worktree. */
+	stageId?: string
+}
 
 export interface SyncedDraft {
 	/** Empty is valid when agent settings have been staged before any text is typed. */
 	text: string
 	/** Text and its next-send agent choices are one intent and therefore one revision. */
 	agent: ParkedAgentPatch
+	/** Ready attachments are the same intent; uploads still in flight never leave their source device. */
+	attachments: DraftAttachment[]
 	/** Client-side logical timestamp. Newer revisions win; deletion wins an exact tie. */
 	updatedAt: number
 	/** Kept as a tombstone so an offline device cannot restore an already-sent draft. */
@@ -35,6 +48,11 @@ const MAX_KEY_LENGTH = 256
 const MAX_MARK_LENGTH = 128
 const MAX_DRAFT_LENGTH = 1_000_000
 const MAX_AGENT_LABEL_LENGTH = 256
+const MAX_ATTACHMENTS = 100
+const MAX_ATTACHMENT_NAME_LENGTH = 256
+const MAX_ATTACHMENT_PATH_LENGTH = 1024
+const MAX_ATTACHMENT_TOKEN_LENGTH = 4096
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 function object(raw: unknown): Record<string, unknown> | null {
 	return raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null
@@ -68,15 +86,63 @@ function sanitizeReadMarks(raw: unknown): Record<string, string> {
 	return Object.fromEntries(entries)
 }
 
+function sanitizeAttachment(raw: unknown): DraftAttachment | null {
+	const value = object(raw)
+	if (!value) return null
+	const name = value.name
+	const attachmentPath = value.path
+	const token = value.token
+	const bytes = Number(value.bytes)
+	if (
+		typeof name !== 'string' ||
+		!name ||
+		name.length > MAX_ATTACHMENT_NAME_LENGTH ||
+		typeof attachmentPath !== 'string' ||
+		attachmentPath.length > MAX_ATTACHMENT_PATH_LENGTH ||
+		typeof token !== 'string' ||
+		token.length > MAX_ATTACHMENT_TOKEN_LENGTH ||
+		!Number.isSafeInteger(bytes) ||
+		bytes < 0 ||
+		bytes > MAX_ATTACHMENT_BYTES
+	)
+		return null
+	const match = attachmentPath.match(/^\.context\/attachments\/([A-Za-z0-9]{6})\/([^/]+)$/)
+	if (!match || match[2] !== name || attachmentName(name) !== name || token !== attachmentToken(name, attachmentPath))
+		return null
+	const stageId = value.stageId
+	if (stageId !== undefined && (typeof stageId !== 'string' || stageId !== match[1])) return null
+	return { name, path: attachmentPath, bytes, token, ...(stageId ? { stageId } : {}) }
+}
+
+function sanitizeAttachments(raw: unknown): DraftAttachment[] {
+	if (!Array.isArray(raw)) return []
+	const attachments: DraftAttachment[] = []
+	const seen = new Set<string>()
+	for (const candidate of raw) {
+		const attachment = sanitizeAttachment(candidate)
+		if (!attachment || seen.has(attachment.path)) continue
+		seen.add(attachment.path)
+		attachments.push(attachment)
+		if (attachments.length === MAX_ATTACHMENTS) break
+	}
+	return attachments
+}
+
 function sanitizeDraft(raw: unknown): SyncedDraft | null {
 	const value = object(raw)
 	if (!value) return null
 	const updatedAt = Number(value.updatedAt)
 	if (!Number.isSafeInteger(updatedAt) || updatedAt < 0) return null
 	const deleted = value.deleted === true
-	if (deleted) return { text: '', agent: {}, updatedAt, deleted: true }
+	if (deleted) return { text: '', agent: {}, attachments: [], updatedAt, deleted: true }
 	if (typeof value.text !== 'string' || value.text.length > MAX_DRAFT_LENGTH) return null
-	return { text: value.text, agent: sanitizeAgent(value.agent), updatedAt, deleted: false }
+	return {
+		text: value.text,
+		agent: sanitizeAgent(value.agent),
+		attachments: sanitizeAttachments(value.attachments),
+		updatedAt,
+		deleted: false
+	}
 }
 
 function sanitizeDrafts(raw: unknown): Record<string, SyncedDraft> {
@@ -105,6 +171,17 @@ function sameDraft(a: SyncedDraft, b: SyncedDraft): boolean {
 		a.text === b.text &&
 		a.updatedAt === b.updatedAt &&
 		a.deleted === b.deleted &&
+		a.attachments.length === b.attachments.length &&
+		a.attachments.every((attachment, index) => {
+			const other = b.attachments[index]
+			return (
+				attachment.name === other?.name &&
+				attachment.path === other.path &&
+				attachment.bytes === other.bytes &&
+				attachment.token === other.token &&
+				attachment.stageId === other.stageId
+			)
+		}) &&
 		a.agent.model === b.agent.model &&
 		a.agent.effort === b.agent.effort &&
 		a.agent.plan === b.agent.plan &&
@@ -148,8 +225,16 @@ export class PrefsStore {
 		}
 
 		if (Object.hasOwn(input, 'drafts')) {
+			const rawDrafts = object(input.drafts)
 			for (const [key, draft] of Object.entries(sanitizeDrafts(input.drafts))) {
 				const previous = next.drafts[key]
+				const rawDraft = object(rawDrafts?.[key])
+				// A service-worker-cached client from before attachment sync does not know
+				// this field. Preserve what it cannot represent while still letting its newer
+				// text/settings edit win. Tombstones always clear the whole intent.
+				if (previous && !draft.deleted && rawDraft && !Object.hasOwn(rawDraft, 'attachments')) {
+					draft.attachments = previous.attachments
+				}
 				const wins =
 					!previous ||
 					draft.updatedAt > previous.updatedAt ||

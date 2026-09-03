@@ -8,7 +8,7 @@
 import { AGENT_DRAFT_PREFIX } from './agentDraft.ts'
 import { DRAFT_PREFIX } from './draft.ts'
 import { READ_MARKS_KEY, type ReadMarks } from './read.ts'
-import type { AgentPatch, Prefs, SyncedDraft } from './types.ts'
+import type { AgentPatch, DraftAttachment, Prefs, SyncedDraft } from './types.ts'
 
 const META_KEY = 'conductor-remote-prefs-v1'
 
@@ -23,6 +23,7 @@ interface StorageLike {
 export interface LocalPrefsProjection {
 	drafts: Record<string, string>
 	agentDrafts: Record<string, AgentPatch>
+	draftAttachments: Record<string, DraftAttachment[]>
 	readMarks: ReadMarks
 }
 
@@ -51,14 +52,52 @@ function hasAgent(agent: AgentPatch): boolean {
 	return Object.keys(agent).length > 0
 }
 
+function cleanAttachment(raw: unknown): DraftAttachment | null {
+	const value = object(raw)
+	if (!value) return null
+	if (
+		typeof value.name !== 'string' ||
+		typeof value.path !== 'string' ||
+		typeof value.token !== 'string' ||
+		!Number.isSafeInteger(Number(value.bytes)) ||
+		Number(value.bytes) < 0
+	)
+		return null
+	if (value.stageId !== undefined && typeof value.stageId !== 'string') return null
+	return {
+		name: value.name,
+		path: value.path,
+		bytes: Number(value.bytes),
+		token: value.token,
+		...(value.stageId ? { stageId: value.stageId } : {})
+	}
+}
+
+function cleanAttachments(raw: unknown): DraftAttachment[] {
+	if (!Array.isArray(raw)) return []
+	const seen = new Set<string>()
+	return raw.flatMap(candidate => {
+		const attachment = cleanAttachment(candidate)
+		if (!attachment || seen.has(attachment.path)) return []
+		seen.add(attachment.path)
+		return [attachment]
+	})
+}
+
 function cleanDraft(raw: unknown): SyncedDraft | null {
 	const value = object(raw)
 	if (!value) return null
 	const updatedAt = Number(value.updatedAt)
 	if (!Number.isSafeInteger(updatedAt) || updatedAt < 0) return null
-	if (value.deleted === true) return { text: '', agent: {}, updatedAt, deleted: true }
+	if (value.deleted === true) return { text: '', agent: {}, attachments: [], updatedAt, deleted: true }
 	if (typeof value.text !== 'string') return null
-	return { text: value.text, agent: cleanAgent(value.agent), updatedAt, deleted: false }
+	return {
+		text: value.text,
+		agent: cleanAgent(value.agent),
+		attachments: cleanAttachments(value.attachments),
+		updatedAt,
+		deleted: false
+	}
 }
 
 function sameAgent(a: AgentPatch, b: AgentPatch): boolean {
@@ -66,13 +105,29 @@ function sameAgent(a: AgentPatch, b: AgentPatch): boolean {
 }
 
 function sameDraft(a: SyncedDraft, b: SyncedDraft): boolean {
-	return a.text === b.text && a.updatedAt === b.updatedAt && a.deleted === b.deleted && sameAgent(a.agent, b.agent)
+	return (
+		a.text === b.text &&
+		a.updatedAt === b.updatedAt &&
+		a.deleted === b.deleted &&
+		sameAgent(a.agent, b.agent) &&
+		a.attachments.length === b.attachments.length &&
+		a.attachments.every((attachment, index) => {
+			const other = b.attachments[index]
+			return (
+				attachment.name === other?.name &&
+				attachment.path === other.path &&
+				attachment.bytes === other.bytes &&
+				attachment.token === other.token &&
+				attachment.stageId === other.stageId
+			)
+		})
+	)
 }
 
-function liveDraft(text: string, agent: AgentPatch, updatedAt: number): SyncedDraft {
-	return text || hasAgent(agent)
-		? { text, agent: { ...agent }, updatedAt, deleted: false }
-		: { text: '', agent: {}, updatedAt, deleted: true }
+function liveDraft(text: string, agent: AgentPatch, attachments: DraftAttachment[], updatedAt: number): SyncedDraft {
+	return text || hasAgent(agent) || attachments.length
+		? { text, agent: { ...agent }, attachments: cleanAttachments(attachments), updatedAt, deleted: false }
+		: { text: '', agent: {}, attachments: [], updatedAt, deleted: true }
 }
 
 /** Injectable local store: the browser uses one singleton, tests use a Map-backed Storage. */
@@ -95,23 +150,33 @@ export class LocalPrefs {
 		if (!saved) {
 			const drafts: Record<string, SyncedDraft> = {}
 			for (const id of new Set([...Object.keys(rawDrafts), ...Object.keys(rawAgents)])) {
-				drafts[id] = liveDraft(rawDrafts[id] ?? '', rawAgents[id] ?? {}, 0)
+				drafts[id] = liveDraft(rawDrafts[id] ?? '', rawAgents[id] ?? {}, [], 0)
 			}
 			this.prefs = { readMarks: this.readRawMarks(), drafts }
 		} else {
 			const drafts = { ...savedDrafts }
 			for (const id of new Set([...Object.keys(savedDrafts), ...Object.keys(rawDrafts), ...Object.keys(rawAgents)])) {
-				const raw = liveDraft(rawDrafts[id] ?? '', rawAgents[id] ?? {}, savedDrafts[id]?.updatedAt ?? 0)
+				const raw = liveDraft(rawDrafts[id] ?? '', rawAgents[id] ?? {}, [], savedDrafts[id]?.updatedAt ?? 0)
 				const metadata = savedDrafts[id]
+				const attachmentOnly =
+					metadata &&
+					!metadata.deleted &&
+					metadata.attachments.length > 0 &&
+					!metadata.text &&
+					!hasAgent(metadata.agent) &&
+					raw.deleted
 				// An older cached build only knows the legacy keys. A mismatch is therefore a
 				// real local edit (including a send clearing the last value), not stale metadata.
+				// Attachment-only drafts are the exception: legacy keys cannot represent them,
+				// so their absence is the expected mirror rather than evidence of deletion.
 				if (
-					!metadata ||
-					metadata.text !== raw.text ||
-					metadata.deleted !== raw.deleted ||
-					!sameAgent(metadata.agent, raw.agent)
+					!attachmentOnly &&
+					(!metadata ||
+						metadata.text !== raw.text ||
+						metadata.deleted !== raw.deleted ||
+						!sameAgent(metadata.agent, raw.agent))
 				) {
-					drafts[id] = liveDraft(raw.text, raw.agent, this.tick())
+					drafts[id] = liveDraft(raw.text, raw.agent, [], this.tick())
 					this.touched.add(id)
 				}
 			}
@@ -124,7 +189,10 @@ export class LocalPrefs {
 		return {
 			readMarks: { ...this.prefs.readMarks },
 			drafts: Object.fromEntries(
-				Object.entries(this.prefs.drafts).map(([id, draft]) => [id, { ...draft, agent: { ...draft.agent } }])
+				Object.entries(this.prefs.drafts).map(([id, draft]) => [
+					id,
+					{ ...draft, agent: { ...draft.agent }, attachments: draft.attachments.map(attachment => ({ ...attachment })) }
+				])
 			)
 		}
 	}
@@ -132,12 +200,16 @@ export class LocalPrefs {
 	project(): LocalPrefsProjection {
 		const drafts: Record<string, string> = {}
 		const agentDrafts: Record<string, AgentPatch> = {}
+		const draftAttachments: Record<string, DraftAttachment[]> = {}
 		for (const [id, draft] of Object.entries(this.prefs.drafts)) {
 			if (draft.deleted) continue
 			drafts[id] = draft.text
 			if (hasAgent(draft.agent)) agentDrafts[id] = { ...draft.agent }
+			if (draft.attachments.length) {
+				draftAttachments[id] = draft.attachments.map(attachment => ({ ...attachment }))
+			}
 		}
-		return { drafts, agentDrafts, readMarks: { ...this.prefs.readMarks } }
+		return { drafts, agentDrafts, draftAttachments, readMarks: { ...this.prefs.readMarks } }
 	}
 
 	currentGeneration(): number {
@@ -145,21 +217,31 @@ export class LocalPrefs {
 	}
 
 	setDraft(id: string, text: string, agent: AgentPatch): LocalPrefsProjection {
-		this.setLocal(id, text, agent)
+		this.setLocal(id, text, agent, this.prefs.drafts[id]?.attachments ?? [])
 		return this.project()
 	}
 
 	setAgent(id: string, agent: AgentPatch, text: string): LocalPrefsProjection {
-		this.setLocal(id, text, agent)
+		this.setLocal(id, text, agent, this.prefs.drafts[id]?.attachments ?? [])
+		return this.project()
+	}
+
+	setAttachments(id: string, attachments: DraftAttachment[], text: string, agent: AgentPatch): LocalPrefsProjection {
+		this.setLocal(id, text, agent, attachments)
+		return this.project()
+	}
+
+	setContent(id: string, text: string, agent: AgentPatch, attachments: DraftAttachment[]): LocalPrefsProjection {
+		this.setLocal(id, text, agent, attachments)
 		return this.project()
 	}
 
 	moveDraft(fromId: string, toId: string): LocalPrefsProjection {
 		const from = this.prefs.drafts[fromId]
 		const to = this.prefs.drafts[toId]
-		if (!from || from.deleted || !from.text || fromId === toId || (to && !to.deleted)) return this.project()
-		this.prefs.drafts[fromId] = liveDraft('', {}, this.tick())
-		this.prefs.drafts[toId] = liveDraft(from.text, from.agent, this.tick())
+		if (!from || from.deleted || fromId === toId || (to && !to.deleted)) return this.project()
+		this.prefs.drafts[fromId] = liveDraft('', {}, [], this.tick())
+		this.prefs.drafts[toId] = liveDraft(from.text, from.agent, from.attachments, this.tick())
 		this.touched.add(fromId)
 		this.touched.add(toId)
 		this.changed()
@@ -175,6 +257,7 @@ export class LocalPrefs {
 
 	/** Merge the host copy without ever replacing a composer the user is actively editing. */
 	merge(remoteRaw: Prefs, focusedDraft: string | null): MergeResult {
+		const rawRemoteDrafts = object(object(remoteRaw)?.drafts)
 		const remote = this.cleanPrefs(remoteRaw)
 		// Once a revision has been observed, every later local edit must sort after it
 		// even when another device's wall clock is far ahead of this one.
@@ -194,6 +277,13 @@ export class LocalPrefs {
 		for (const id of new Set([...Object.keys(this.prefs.drafts), ...Object.keys(remote.drafts)])) {
 			const local = this.prefs.drafts[id]
 			const incoming = remote.drafts[id]
+			const rawIncoming = object(rawRemoteDrafts?.[id])
+			// During rollout a new PWA can briefly talk to the previous relay build. That
+			// relay accepts the extra field but cannot echo it, so absence means “unknown”,
+			// not an explicit empty list. A tombstone still clears the whole draft.
+			if (local && incoming && !incoming.deleted && rawIncoming && !Object.hasOwn(rawIncoming, 'attachments')) {
+				incoming.attachments = local.attachments.map(attachment => ({ ...attachment }))
+			}
 			if (!local && incoming) {
 				this.prefs.drafts[id] = incoming
 				changed = true
@@ -207,7 +297,8 @@ export class LocalPrefs {
 
 			const protect =
 				focusedDraft === id &&
-				(this.touched.has(id) || (!local.deleted && (local.text.length > 0 || hasAgent(local.agent))))
+				(this.touched.has(id) ||
+					(!local.deleted && (local.text.length > 0 || hasAgent(local.agent) || local.attachments.length > 0)))
 			const incomingWins =
 				incoming.updatedAt > local.updatedAt ||
 				(incoming.updatedAt === local.updatedAt && (incoming.deleted || !local.deleted))
@@ -237,8 +328,8 @@ export class LocalPrefs {
 		for (const listener of this.listeners) listener(true)
 	}
 
-	private setLocal(id: string, text: string, agent: AgentPatch): void {
-		this.prefs.drafts[id] = liveDraft(text, cleanAgent(agent), this.tick())
+	private setLocal(id: string, text: string, agent: AgentPatch, attachments: DraftAttachment[]): void {
+		this.prefs.drafts[id] = liveDraft(text, cleanAgent(agent), attachments, this.tick())
 		this.touched.add(id)
 		this.changed()
 	}
@@ -354,6 +445,18 @@ export const setLocalDraft = (id: string, text: string, agent: AgentPatch): Loca
 	browserPrefs().setDraft(id, text, agent)
 export const setLocalAgent = (id: string, agent: AgentPatch, text: string): LocalPrefsProjection =>
 	browserPrefs().setAgent(id, agent, text)
+export const setLocalAttachments = (
+	id: string,
+	attachments: DraftAttachment[],
+	text: string,
+	agent: AgentPatch
+): LocalPrefsProjection => browserPrefs().setAttachments(id, attachments, text, agent)
+export const setLocalDraftContent = (
+	id: string,
+	text: string,
+	agent: AgentPatch,
+	attachments: DraftAttachment[]
+): LocalPrefsProjection => browserPrefs().setContent(id, text, agent, attachments)
 export const moveLocalDraft = (fromId: string, toId: string): LocalPrefsProjection =>
 	browserPrefs().moveDraft(fromId, toId)
 export const setLocalReadMark = (id: string, at: string): LocalPrefsProjection => browserPrefs().markRead(id, at)
