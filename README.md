@@ -147,9 +147,12 @@ Open that on the phone and **Add to Home Screen**. The token is stored in
 can't read your sessions.
 
 Read marks and unsent prompt drafts stay local-first for offline use and are also
-mirrored to `~/Library/Application Support/conductor-remote/prefs.json`. That durable
-copy survives a PWA hostname/origin change and restores the same state on another
-authenticated device. Access tokens and in-flight send state remain device-local.
+mirrored to `~/Library/Application Support/conductor-remote/prefs.json`. A draft
+includes its ready attachments and staged agent choices; file bytes stay in the
+workspace or the relay's pre-workspace staging directory. That durable copy survives
+a PWA hostname/origin change and restores the same state on another authenticated
+device. Access tokens, uploads still in flight, and in-flight send state remain
+device-local.
 
 ### Deploy (run on login as a background service)
 

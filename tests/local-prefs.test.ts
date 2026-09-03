@@ -27,6 +27,12 @@ class MemoryStorage {
 }
 
 const remote = (patch: Partial<Prefs> = {}): Prefs => ({ readMarks: {}, drafts: {}, ...patch })
+const attachment = {
+	name: 'diagram.png',
+	path: '.context/attachments/abc123/diagram.png',
+	bytes: 42,
+	token: '@⟦diagram.png⟧(.context%2Fattachments%2Fabc123%2Fdiagram.png)'
+}
 
 describe('local-first preference sync', () => {
 	test('migrates the legacy text and agent keys without inventing a recent revision', () => {
@@ -57,7 +63,15 @@ describe('local-first preference sync', () => {
 		const merged = prefs.merge(
 			remote({
 				readMarks: { chat: '2026-08-10' },
-				drafts: { chat: { text: 'from the phone', agent: { effort: 'high' }, updatedAt: 10, deleted: false } }
+				drafts: {
+					chat: {
+						text: 'from the phone',
+						agent: { effort: 'high' },
+						attachments: [attachment],
+						updatedAt: 10,
+						deleted: false
+					}
+				}
 			}),
 			null
 		)
@@ -65,15 +79,21 @@ describe('local-first preference sync', () => {
 		expect(merged.state).toEqual({
 			drafts: { chat: 'from the phone' },
 			agentDrafts: { chat: { effort: 'high' } },
+			draftAttachments: { chat: [attachment] },
 			readMarks: { chat: '2026-08-10' }
 		})
 	})
 
 	test('does not let an offline stale copy resurrect a tombstoned draft', () => {
 		const prefs = new LocalPrefs(new MemoryStorage())
-		prefs.merge(remote({ drafts: { chat: { text: '', agent: {}, updatedAt: 30, deleted: true } } }), null)
+		prefs.merge(
+			remote({ drafts: { chat: { text: '', agent: {}, attachments: [], updatedAt: 30, deleted: true } } }),
+			null
+		)
 		const merged = prefs.merge(
-			remote({ drafts: { chat: { text: 'already sent', agent: {}, updatedAt: 20, deleted: false } } }),
+			remote({
+				drafts: { chat: { text: 'already sent', agent: {}, attachments: [attachment], updatedAt: 20, deleted: false } }
+			}),
 			null
 		)
 		expect(merged.state.drafts.chat).toBeUndefined()
@@ -86,7 +106,15 @@ describe('local-first preference sync', () => {
 		prefs.setDraft('chat', 'typing here', {})
 		const merged = prefs.merge(
 			remote({
-				drafts: { chat: { text: 'other device', agent: {}, updatedAt: Date.now() + 100_000, deleted: false } }
+				drafts: {
+					chat: {
+						text: 'other device',
+						agent: {},
+						attachments: [attachment],
+						updatedAt: Date.now() + 100_000,
+						deleted: false
+					}
+				}
 			}),
 			'chat'
 		)
@@ -98,7 +126,7 @@ describe('local-first preference sync', () => {
 	test('lets an untouched empty focused composer restore from the host', () => {
 		const prefs = new LocalPrefs(new MemoryStorage())
 		const merged = prefs.merge(
-			remote({ drafts: { chat: { text: 'restore me', agent: {}, updatedAt: 5, deleted: false } } }),
+			remote({ drafts: { chat: { text: 'restore me', agent: {}, attachments: [], updatedAt: 5, deleted: false } } }),
 			'chat'
 		)
 		expect(merged.state.drafts.chat).toBe('restore me')
@@ -108,7 +136,9 @@ describe('local-first preference sync', () => {
 		const prefs = new LocalPrefs(new MemoryStorage())
 		const remoteClock = Date.now() + 100_000
 		prefs.merge(
-			remote({ drafts: { chat: { text: 'remote first', agent: {}, updatedAt: remoteClock, deleted: false } } }),
+			remote({
+				drafts: { chat: { text: 'remote first', agent: {}, attachments: [], updatedAt: remoteClock, deleted: false } }
+			}),
 			null
 		)
 		prefs.setDraft('chat', 'local second', {})
@@ -123,6 +153,69 @@ describe('local-first preference sync', () => {
 		expect(prefs.snapshot().drafts.chat).toMatchObject({ text: '', agent: { model: 'Codex' }, deleted: false })
 		prefs.setAgent('chat', {}, '')
 		expect(prefs.snapshot().drafts.chat).toMatchObject({ text: '', agent: {}, deleted: true })
+	})
+
+	test('keeps ready attachments in the same revision as text and settings', () => {
+		const prefs = new LocalPrefs(new MemoryStorage())
+		prefs.setAttachments('chat', [attachment], '', {})
+		expect(prefs.project()).toMatchObject({
+			drafts: { chat: '' },
+			draftAttachments: { chat: [attachment] }
+		})
+
+		prefs.setDraft('chat', 'describe this', {})
+		expect(prefs.snapshot().drafts.chat.attachments).toEqual([attachment])
+
+		prefs.setAttachments('chat', [], 'describe this', {})
+		expect(prefs.snapshot().drafts.chat).toMatchObject({ text: 'describe this', attachments: [], deleted: false })
+		prefs.setDraft('chat', '', {})
+		expect(prefs.snapshot().drafts.chat).toMatchObject({ attachments: [], deleted: true })
+	})
+
+	test('clears sent text and attachments together without dropping staged settings', () => {
+		const prefs = new LocalPrefs(new MemoryStorage())
+		prefs.setContent('chat', 'send me', { model: 'Codex' }, [attachment])
+
+		const projected = prefs.setContent('chat', '', { model: 'Codex' }, [])
+		expect(projected).toEqual({
+			drafts: { chat: '' },
+			agentDrafts: { chat: { model: 'Codex' } },
+			draftAttachments: {},
+			readMarks: {}
+		})
+		expect(prefs.snapshot().drafts.chat).toMatchObject({
+			text: '',
+			agent: { model: 'Codex' },
+			attachments: [],
+			deleted: false
+		})
+	})
+
+	test('restores an attachment-only draft after this device reloads', () => {
+		const storage = new MemoryStorage()
+		const first = new LocalPrefs(storage)
+		first.setAttachments('chat', [attachment], '', {})
+		const reloaded = new LocalPrefs(storage)
+		expect(reloaded.project().draftAttachments.chat).toEqual([attachment])
+	})
+
+	test('does not let an older relay strip attachment fields it cannot echo', () => {
+		const prefs = new LocalPrefs(new MemoryStorage())
+		prefs.setAttachments('chat', [attachment], 'caption', {})
+		const updatedAt = prefs.snapshot().drafts.chat.updatedAt
+		const merged = prefs.merge(
+			remote({ drafts: { chat: { text: 'caption', agent: {}, updatedAt, deleted: false } as never } }),
+			null
+		)
+		expect(merged.state.draftAttachments.chat).toEqual([attachment])
+	})
+
+	test('moves an attachment-only legacy workspace draft to its first chat', () => {
+		const prefs = new LocalPrefs(new MemoryStorage())
+		prefs.setAttachments('workspace', [attachment], '', {})
+		const moved = prefs.moveDraft('workspace', 'chat')
+		expect(moved.draftAttachments).toEqual({ chat: [attachment] })
+		expect(prefs.snapshot().drafts.workspace.deleted).toBe(true)
 	})
 
 	test('takes the maximum read mark in both directions', () => {

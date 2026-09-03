@@ -215,7 +215,7 @@ export const client = {
 	filePreview: (reference: string) => api<FilePreviewResponse>(routes.filePreview.path(reference)),
 	/** Keep a file on the relay until the workspace it belongs to exists. */
 	stageAttachment: (file: File) => upload<StageAttachmentResult>(routes.stageAttachment.path(), file),
-	/** Remove a staged file when it is taken off the new-workspace prompt. */
+	/** Remove an upload cancelled before it became a synced draft attachment. */
 	discardStagedAttachment: (stageId: string) =>
 		api<{ ok: boolean }>(routes.discardStagedAttachment.path(stageId), {
 			method: routes.discardStagedAttachment.method

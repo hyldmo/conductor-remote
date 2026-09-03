@@ -7,11 +7,13 @@ import {
 	loadLocalPrefs,
 	moveLocalDraft,
 	setLocalAgent,
+	setLocalAttachments,
 	setLocalDraft,
+	setLocalDraftContent,
 	setLocalReadMark
 } from './lib/prefs.ts'
 import type { ReadMarks } from './lib/read.ts'
-import type { AgentPatch, UpdateStatus } from './lib/types.ts'
+import type { AgentPatch, DraftAttachment, UpdateStatus } from './lib/types.ts'
 
 let offlineTimer: ReturnType<typeof setTimeout> | null = null
 const initialPrefs = loadLocalPrefs()
@@ -114,6 +116,8 @@ interface AppState {
 	pending: PendingMessage[]
 	/** Unsent composer text per chat, mirrored to localStorage (see lib/draft.ts). */
 	drafts: Record<string, string>
+	/** Ready host-side files carried atomically with each composer draft. */
+	draftAttachments: Record<string, DraftAttachment[]>
 	/**
 	 * Agent settings chosen on the phone but not yet pushed into Conductor, per
 	 * session id (mirrored to localStorage — see lib/agentDraft.ts). A model or
@@ -160,6 +164,10 @@ interface AppState {
 	failPending: (id: string, error: string) => void
 	removePending: (id: string) => void
 	setDraft: (chatId: string, text: string) => void
+	addDraftAttachment: (chatId: string, attachment: DraftAttachment) => void
+	removeDraftAttachment: (chatId: string, path: string) => void
+	/** Clear sent text and files together while preserving agent choices still being applied. */
+	clearDraftContent: (chatId: string) => void
 	/** Move a legacy workspace-keyed draft to its first opened chat. */
 	moveDraft: (fromId: string, toId: string) => void
 	/** Stage an agent change for the next send. A key set to `undefined` unstages it. */
@@ -197,6 +205,7 @@ export const useApp = create<AppState>((set, get) => {
 		workingHints: {},
 		pending: loadPending(),
 		drafts: initialPrefs.drafts,
+		draftAttachments: initialPrefs.draftAttachments,
 		agentDrafts: initialPrefs.agentDrafts,
 		readMarks: initialPrefs.readMarks,
 		focusedDraft: null,
@@ -246,14 +255,42 @@ export const useApp = create<AppState>((set, get) => {
 		removePending: id => savePending(get().pending.filter(p => p.id !== id)),
 		setDraft: (chatId, text) => {
 			const saved = setLocalDraft(chatId, text, get().agentDrafts[chatId] ?? {})
-			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts })
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })
+		},
+		addDraftAttachment: (chatId, attachment) => {
+			const current = get().draftAttachments[chatId] ?? []
+			if (current.some(candidate => candidate.path === attachment.path)) return
+			const saved = setLocalAttachments(
+				chatId,
+				[...current, attachment],
+				get().drafts[chatId] ?? '',
+				get().agentDrafts[chatId] ?? {}
+			)
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })
+		},
+		removeDraftAttachment: (chatId, attachmentPath) => {
+			const current = get().draftAttachments[chatId] ?? []
+			const next = current.filter(attachment => attachment.path !== attachmentPath)
+			if (next.length === current.length) return
+			const saved = setLocalAttachments(chatId, next, get().drafts[chatId] ?? '', get().agentDrafts[chatId] ?? {})
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })
+		},
+		clearDraftContent: chatId => {
+			const saved = setLocalDraftContent(chatId, '', get().agentDrafts[chatId] ?? {}, [])
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })
 		},
 		moveDraft: (fromId, toId) => {
 			const drafts = get().drafts
 			const text = drafts[fromId]
-			if (!text || fromId === toId || drafts[toId] !== undefined) return
+			const hasSource =
+				text !== undefined || get().agentDrafts[fromId] !== undefined || get().draftAttachments[fromId] !== undefined
+			const hasTarget =
+				drafts[toId] !== undefined ||
+				get().agentDrafts[toId] !== undefined ||
+				get().draftAttachments[toId] !== undefined
+			if (!hasSource || fromId === toId || hasTarget) return
 			const saved = moveLocalDraft(fromId, toId)
-			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts })
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })
 		},
 		markRead: (sessionId, at) => {
 			// The session poll re-fires this every couple of seconds while a chat is open;
@@ -264,7 +301,7 @@ export const useApp = create<AppState>((set, get) => {
 		stageAgent: (sessionId, patch) => {
 			const next = prunePatch({ ...get().agentDrafts[sessionId], ...patch })
 			const saved = setLocalAgent(sessionId, next, get().drafts[sessionId] ?? '')
-			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts })
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })
 		},
 		// Key by key rather than wholesale: a setting changed *while* the send was in
 		// flight is staged for the next one, and clearing the whole entry would eat it.
@@ -278,10 +315,15 @@ export const useApp = create<AppState>((set, get) => {
 				fast: current.fast === applied.fast ? undefined : current.fast
 			})
 			const saved = setLocalAgent(sessionId, next, get().drafts[sessionId] ?? '')
-			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts })
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })
 		},
 		applySyncedPrefs: prefs =>
-			set({ drafts: prefs.drafts, agentDrafts: prefs.agentDrafts, readMarks: prefs.readMarks }),
+			set({
+				drafts: prefs.drafts,
+				agentDrafts: prefs.agentDrafts,
+				draftAttachments: prefs.draftAttachments,
+				readMarks: prefs.readMarks
+			}),
 		setFocusedDraft: focusedDraft => set({ focusedDraft }),
 		setPush: push => set({ push }),
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),

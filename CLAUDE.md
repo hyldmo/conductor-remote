@@ -497,11 +497,16 @@ Two asymmetric halves — keep them separate:
     representation (including for an older cached PWA), and stores revision metadata
     beside them. A 700ms idle debounce, textarea blur, backgrounding, and reconnect
     flush snapshots to `stateDir()/prefs.json`; a 15s poll pulls another device's edits.
-    Text and its staged agent patch share one revision. Clearing both writes a tombstone,
-    so an offline stale browser cannot resurrect a prompt already sent elsewhere; a
-    focused composer is protected from remote replacement, and the logical clock advances
-    beyond every remote timestamp it observes. The token, optimistic pending sends, and
-    the new-workspace "Send immediately" habit remain device-local on purpose.
+    Text, ready attachment descriptors and the staged agent patch share one revision.
+    Attachment bytes are already host-side — in the worktree for a chat, or under the
+    relay's pre-workspace staging root — so another authenticated device needs only that
+    descriptor to restore the same file pill. Uploads still in flight remain device-local.
+    Clearing the sent text and files writes a tombstone, so an offline stale browser cannot
+    resurrect a prompt already sent elsewhere; a focused composer is protected from remote
+    replacement, and the logical clock advances beyond every remote timestamp it observes.
+    Unreferenced staged files are reclaimed only after a week, preserving an offline
+    device's revision through the sync window. The token, optimistic pending sends, and the
+    new-workspace "Send immediately" habit remain device-local on purpose.
 
     **Workspace status** (`setWorkspaceStatus`, `POST /api/workspaces/:id/status`)
     is the one write that touches no pane at all — it right-clicks the workspace's

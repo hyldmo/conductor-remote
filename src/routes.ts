@@ -87,7 +87,7 @@ export const routes = {
 	toolImage: param('GET', '/api/tool-images/:reference'),
 	/** Temporarily hold a file while the phone creates the workspace it will belong to. */
 	stageAttachment: flat('POST', '/api/attachments'),
-	/** Drop a staged file the user removed before creating its workspace. */
+	/** Drop an upload cancelled before it became a synced draft attachment. */
 	discardStagedAttachment: param('DELETE', '/api/attachments/:attachmentId'),
 	logs: flat('GET', '/api/logs'),
 	/**

@@ -7,6 +7,7 @@ import { attachmentTokens } from '../src/shared.ts'
 import {
 	discardStagedAttachment,
 	materializeStagedAttachments,
+	pruneStagedAttachments,
 	stageAttachment,
 	stagedAttachments
 } from '../src/staged-attachments.ts'
@@ -109,5 +110,23 @@ describe('attachment storage', () => {
 
 		discardStagedAttachment(staging, staged.stageId)
 		expect(stagedAttachments(staging, [staged.stageId])).toBeNull()
+	})
+
+	test('prunes only old unreferenced staging directories', () => {
+		const root = temporaryRoot()
+		const staging = path.join(root, 'staging')
+		const old = stageAttachment(staging, 'old.txt', Buffer.from('old'))
+		const kept = stageAttachment(staging, 'kept.txt', Buffer.from('kept'))
+		const recent = stageAttachment(staging, 'recent.txt', Buffer.from('recent'))
+		const now = Date.now()
+		for (const attachment of [old, kept]) {
+			const directory = path.dirname(path.join(staging, attachment.path))
+			fs.utimesSync(directory, new Date(now - 10_000), new Date(now - 10_000))
+		}
+
+		expect(pruneStagedAttachments(staging, new Set([kept.stageId]), 5_000, now)).toBe(1)
+		expect(stagedAttachments(staging, [old.stageId])).toBeNull()
+		expect(stagedAttachments(staging, [kept.stageId])).not.toBeNull()
+		expect(stagedAttachments(staging, [recent.stageId])).not.toBeNull()
 	})
 })

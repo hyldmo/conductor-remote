@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, LoaderCircle, Paperclip, X } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { useModelCatalog, useModelDefaults, useRepos } from '../hooks.ts'
@@ -10,7 +10,7 @@ import { cn } from '../lib/cn.ts'
 import { NEW_WORKSPACE_DRAFT } from '../lib/draft.ts'
 import { enterSubmits } from '../lib/keys.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
-import type { AgentPatch } from '../lib/types.ts'
+import type { AgentPatch, DraftAttachment } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentControls } from './AgentControls.tsx'
 import { RepoAvatar } from './ui.tsx'
@@ -21,10 +21,13 @@ const SEND_NOW_KEY = 'conductor-remote-send-immediately'
 type PendingAttachment = {
 	id: string
 	name: string
-	stageId?: string
-	status: 'uploading' | 'ready' | 'error'
+	status: 'uploading' | 'error'
 	error?: string
 }
+
+type DisplayAttachment = (DraftAttachment & { id: string; status: 'ready'; error?: never }) | PendingAttachment
+
+const NO_ATTACHMENTS: DraftAttachment[] = []
 
 function loadSendNow(): boolean {
 	try {
@@ -75,7 +78,20 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	// The prompt is a draft in the store, not state here: this sheet unmounts the
 	// moment it is closed, and the text has to outlive that (see lib/draft.ts).
 	const prompt = useApp(s => s.drafts[NEW_WORKSPACE_DRAFT] ?? '')
+	const draftAttachments = useApp(s => s.draftAttachments[NEW_WORKSPACE_DRAFT] ?? NO_ATTACHMENTS)
+	// Only pre-workspace uploads can seed a new worktree. Ignore a malformed or
+	// legacy descriptor without its staging id rather than drawing a pill we cannot send.
+	const readyAttachments = useMemo(
+		() =>
+			draftAttachments.filter(
+				(attachment): attachment is DraftAttachment & { stageId: string } => !!attachment.stageId
+			),
+		[draftAttachments]
+	)
 	const setDraft = useApp(s => s.setDraft)
+	const addDraftAttachment = useApp(s => s.addDraftAttachment)
+	const removeDraftAttachment = useApp(s => s.removeDraftAttachment)
+	const clearDraftContent = useApp(s => s.clearDraftContent)
 	const setFocusedDraft = useApp(s => s.setFocusedDraft)
 	const setPrompt = (text: string) => setDraft(NEW_WORKSPACE_DRAFT, text)
 	const [agent, setAgent] = useState<AgentPatch>({})
@@ -86,7 +102,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const fileInput = useRef<HTMLInputElement>(null)
 	const cancelledUploads = useRef(new Set<string>())
 	const dragDepth = useRef(0)
-	const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+	const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
 	const [draggingFiles, setDraggingFiles] = useState(false)
 	const navigate = useNavigate()
 	const queryClient = useQueryClient()
@@ -109,9 +125,12 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 		if (repos.length && !repos.some(r => r.name === repo)) setRepo(repos[0].name)
 	}, [repo, repos])
 
-	const readyAttachments = attachments.filter(attachment => attachment.status === 'ready' && attachment.stageId)
-	const uploading = attachments.some(attachment => attachment.status === 'uploading')
-	const attachmentError = attachments.some(attachment => attachment.status === 'error')
+	const attachments: DisplayAttachment[] = [
+		...readyAttachments.map(attachment => ({ ...attachment, id: attachment.path, status: 'ready' as const })),
+		...pendingAttachments
+	]
+	const uploading = pendingAttachments.some(attachment => attachment.status === 'uploading')
+	const attachmentError = pendingAttachments.some(attachment => attachment.status === 'error')
 	const hasInitialPrompt = !!prompt.trim() || readyAttachments.length > 0
 	const models = modelCatalog.data?.groups.flatMap(group => group.models) ?? []
 	const defaultModel = modelCatalog.data?.defaultModel
@@ -128,38 +147,33 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 		})
 
 	const removeAttachment = (id: string) => {
-		const attachment = attachments.find(current => current.id === id)
+		const attachment = readyAttachments.find(current => current.path === id)
+		if (attachment) {
+			removeDraftAttachment(NEW_WORKSPACE_DRAFT, attachment.path)
+			// Keep the bytes through the sync window: another offline/focused device may
+			// still hold this revision. The relay reclaims an unreferenced copy after a week.
+			return
+		}
 		cancelledUploads.current.add(id)
-		discardAttachment(attachment?.stageId)
-		setAttachments(current => current.filter(attachment => attachment.id !== id))
+		setPendingAttachments(current => current.filter(attachment => attachment.id !== id))
 	}
 
 	const addFiles = async (picked: FileList | File[]) => {
 		if (!online) return
 		for (const file of Array.from(picked)) {
 			const id = crypto.randomUUID()
-			setAttachments(current => [...current, { id, name: file.name || 'attachment', status: 'uploading' }])
+			setPendingAttachments(current => [...current, { id, name: file.name || 'attachment', status: 'uploading' }])
 			try {
 				const uploaded = await client.stageAttachment(file)
 				if (cancelledUploads.current.delete(id)) {
 					discardAttachment(uploaded.attachment.stageId)
 					continue
 				}
-				setAttachments(current =>
-					current.map(attachment =>
-						attachment.id === id
-							? {
-									...attachment,
-									name: uploaded.attachment.name,
-									stageId: uploaded.attachment.stageId,
-									status: 'ready'
-								}
-							: attachment
-					)
-				)
+				addDraftAttachment(NEW_WORKSPACE_DRAFT, uploaded.attachment)
+				setPendingAttachments(current => current.filter(attachment => attachment.id !== id))
 			} catch (err) {
 				if (cancelledUploads.current.delete(id)) continue
-				setAttachments(current =>
+				setPendingAttachments(current =>
 					current.map(attachment =>
 						attachment.id === id
 							? { ...attachment, status: 'error', error: err instanceof Error ? err.message : 'Upload failed' }
@@ -206,16 +220,14 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 		chooseFiles(event.dataTransfer.files)
 	}
 
-	// The typed prompt survives this (it is a draft), the staged files do not: a file
-	// left staged is a copy sitting on the relay for a sheet nobody may reopen, and
-	// re-picking one is a tap. Text is the part that cannot be re-made.
+	// Ready files are part of the synced draft and survive this sheet. An upload still
+	// in flight has no durable reference yet, so cancel it and discard its late result.
 	const close = useCallback(() => {
-		for (const attachment of attachments) {
+		for (const attachment of pendingAttachments) {
 			cancelledUploads.current.add(attachment.id)
-			discardAttachment(attachment.stageId)
 		}
 		onClose()
-	}, [attachments, onClose])
+	}, [pendingAttachments, onClose])
 
 	const create = async () => {
 		const text = prompt.trim()
@@ -239,7 +251,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 			await queryClient.invalidateQueries({ queryKey: ['state'] })
 			// The relay owns the prompt now (src/firstprompt.ts) and the new chat shows it,
 			// so this is the one exit that drops the draft. Closing keeps it.
-			setPrompt('')
+			clearDraftContent(NEW_WORKSPACE_DRAFT)
 			onClose()
 			navigate(`/w/${r.workspaceId}`)
 		} catch (e) {
