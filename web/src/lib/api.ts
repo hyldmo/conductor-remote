@@ -309,9 +309,12 @@ export const client = {
 	 * The relay answers from a local index, so this is a poll-budget call even though
 	 * it searches every conversation on the Mac.
 	 */
-	search: (q: string, repos: string[] = []) => {
+	search: (q: string, repos: string[] = [], includeArchived = true) => {
 		const params = new URLSearchParams({ q })
 		for (const repo of repos) params.append('repo', repo)
+		// Omit the default so this client remains compatible with older relays and the
+		// ordinary URL stays compact. Existing callers therefore keep archived search.
+		if (!includeArchived) params.set('archived', '0')
 		return api<SearchResponse>(`${routes.search.path()}?${params}`)
 	},
 	/** Drop a first prompt the relay couldn't deliver, once the user has dealt with it. */
@@ -418,14 +421,14 @@ export const client = {
 
 	/** Observe a workspace's selected Run task without touching Conductor's UI. */
 	devServer: (workspaceId: string) => api<DevServerState>(routes.devServer.path(workspaceId)),
-	/** Press Run when needed, wait for CONDUCTOR_PORT, then expose it to this tailnet. */
+	/** Press Run when needed, then expose its configured preview URLs to this tailnet. */
 	startDevServer: (workspaceId: string) =>
 		api<DevServerResult>(
 			routes.startDevServer.path(workspaceId),
 			{ method: routes.startDevServer.method },
 			DEV_SERVER_TIMEOUT_MS
 		),
-	/** Press Stop and remove only the Tailscale Serve mapping this relay created. */
+	/** Press Stop and remove only the Tailscale Serve mappings this relay created. */
 	stopDevServer: (workspaceId: string) =>
 		api<DevServerResult>(
 			routes.stopDevServer.path(workspaceId),

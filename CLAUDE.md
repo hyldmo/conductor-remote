@@ -1176,9 +1176,16 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
 - **Workspace dev-server forwards are always tailnet-only, regardless of `EXPOSE`.**
   `src/dev-server.ts` presses Conductor's selected Run/Stop task through the same
   fail-closed Accessibility path as other writes; Conductor still owns the process
-  and its cleanup. The relay discovers that process's allocated `CONDUCTOR_PORT`
-  from `ps eww` only after Run (never log the snapshot — it contains environments
-  and secrets), then gives it a separate root-mounted `tailscale serve` HTTPS port.
+  and its cleanup. **Preview intent comes from Conductor's own documented
+  `preview_urls` setting**, resolved with its user → shared repo → repo-local →
+  managed precedence. Each named loopback HTTP URL gets its own persisted
+  `tailscale serve` HTTPS port and appears in the phone's Open dropdown; two paths
+  on one local port reuse one bridge. The relay still discovers the local
+  workspace's allocated `CONDUCTOR_PORT` from `ps eww` so it can expand that
+  template (never log the snapshot — it contains environments and secrets). This
+  is a process-environment read, not terminal-output scraping. If a repo has no
+  configured previews, Conductor's detected Open-button ports and then the base
+  allocation remain compatibility fallbacks.
   **A start whose port already listens presses nothing** — forwarding is relay-only
   work, measured at **0.4s** against the Accessibility path's tens of seconds, and it
   steals no focus. That is what lets the phone open the tab from the same tap:
@@ -1192,13 +1199,14 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   than any cached snapshot.
   A loopback bridge rewrites the public Host/Origin to localhost and tunnels raw
   WebSocket upgrades, which keeps strict Vite-style host checks and HMR working.
-  `dev-forwards.json` is the ownership receipt: remove or replace only the exact
-  Serve target it records, because every other mapping belongs to the user. It also
-  records the bridge process and a private loopback challenge: `yarn dev` runs a
-  second relay beside the LaunchAgent, and a node-watch restart must not steal the
-  installed relay's live forward. On an owning relay restart, rebuild the ephemeral
-  bridge only when that exact old mapping and the target process still exist;
-  otherwise retain enough evidence for safe cleanup.
+  `dev-forwards.json` is the ownership receipt: one record per workspace/local-port
+  pair, and remove or replace only the exact Serve target it records because every
+  other mapping belongs to the user. Its version stays additive so an installed
+  relay and a source `yarn dev` relay can share it during an update. Each record also
+  names the bridge process and a private loopback challenge: a node-watch restart
+  must not steal the installed relay's live forwards. On an owning relay restart,
+  rebuild each ephemeral bridge only when that exact old mapping and target process
+  still exist; otherwise retain enough evidence for safe cleanup.
 - **The LaunchAgent plist *is* the daemon's environment, and `process.env` in a shell is
   not.** `service install` bakes every runtime knob into the plist (`buildPlist`), so the
   daemon reads its port, its DB path and its Funnel posture from there and from nothing

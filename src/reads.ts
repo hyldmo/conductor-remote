@@ -410,41 +410,48 @@ export class Reads {
 	}
 
 	/**
-	 * Every chat in the named repos, archived workspaces included — the repo filter
-	 * as the search index needs it, since its chunks carry a chat id and nothing else.
-	 * Names, not ids, because names are what the phone's picker and `list_repos` hold.
+	 * Every chat in the requested search scope. The index only carries chat ids, so
+	 * repo and archive filters have to be resolved here before ranking. Names, not repo
+	 * ids, because names are what the phone's picker and `list_repos` hold.
 	 */
-	sessionIdsInRepos(names: string[]): string[] {
-		if (!names.length) return []
-		const holes = names.map(() => '?').join(',')
+	searchSessionIds(repos: string[] | undefined, includeArchived: boolean): string[] {
+		if (repos && !repos.length) return []
+		const scope = [
+			...(repos ? [`r.name IN (${repos.map(() => '?').join(',')})`] : []),
+			...(!includeArchived ? ["w.state IS NOT 'archived'"] : [])
+		]
 		return this.db
 			.query<{ id: string }>(
 				`SELECT s.id FROM sessions s
 				 JOIN workspaces w ON w.id = s.workspace_id
-				 JOIN repos r ON r.id = w.repository_id
-				 WHERE r.name IN (${holes})`,
-				names
+				 LEFT JOIN repos r ON r.id = w.repository_id
+				${scope.length ? ` WHERE ${scope.join(' AND ')}` : ''}`,
+				repos ?? []
 			)
 			.map(r => r.id)
 	}
 
 	/**
 	 * Workspaces whose own identity matches every token — name, PR title, branch,
-	 * worktree codename or repo. Archived included, same reason as `searchTargets`.
-	 * `repos` narrows to those repos by name; an empty list matches nothing.
+	 * worktree codename or repo. Archived are included by default, for the same reason
+	 * as `searchTargets`; `includeArchived` lets the phone narrow the search to current
+	 * work. `repos` narrows to those repos by name; an empty list matches nothing.
 	 *
 	 * This is the half of search the transcript index cannot do. A workspace named for
 	 * the thing you are looking for may never have said those words in its chat, and
 	 * one whose chat is empty has no chunks at all.
 	 */
-	findWorkspacesByName(tokens: string[], limit = 20, repos?: string[]): SearchWorkspace[] {
+	findWorkspacesByName(tokens: string[], limit = 20, repos?: string[], includeArchived = true): SearchWorkspace[] {
 		if (!tokens.length) return []
 		if (repos && !repos.length) return []
 		const fields = ['w.workspace_name', 'w.pr_title', 'w.branch', 'w.directory_name', 'r.name']
 		// AND across tokens, OR across fields: "auk lamp" should find the lamp workspace in
 		// the auk repo, where no single column holds both words.
 		const byToken = tokens.map(() => `(${fields.map(f => `${f} LIKE ? ESCAPE '\\'`).join(' OR ')})`)
-		const scope = repos ? [`r.name IN (${repos.map(() => '?').join(',')})`] : []
+		const scope = [
+			...(repos ? [`r.name IN (${repos.map(() => '?').join(',')})`] : []),
+			...(!includeArchived ? ["w.state IS NOT 'archived'"] : [])
+		]
 		const where = [...byToken, ...scope].join(' AND ')
 		const params = [...tokens.flatMap(t => fields.map(() => `%${escapeLike(t)}%`)), ...(repos ?? [])]
 		const rows = this.db.query<{

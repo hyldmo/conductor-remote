@@ -4,6 +4,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import type { ConductorDb } from '../src/db.ts'
+import { Reads } from '../src/reads.ts'
 import { matchQuery, SearchIndex } from '../src/search.ts'
 
 /**
@@ -181,5 +182,69 @@ describe('SearchIndex.search scoped to a chat list', () => {
 
 	test('no list at all is the old unscoped search', () => {
 		expect(sessions('lamp')).toEqual(['busy', 'quiet'])
+	})
+})
+
+describe('workspace search scope', () => {
+	const raw = new DatabaseSync(':memory:')
+	raw.exec(`
+		CREATE TABLE repos (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			icon TEXT,
+			root_path TEXT,
+			remote_url TEXT
+		);
+		CREATE TABLE workspaces (
+			id TEXT PRIMARY KEY,
+			workspace_name TEXT,
+			pr_title TEXT,
+			branch TEXT,
+			directory_name TEXT,
+			state TEXT,
+			updated_at TEXT NOT NULL,
+			repository_id TEXT
+		);
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT
+		);
+		INSERT INTO repos VALUES
+			('repo-1', 'one', NULL, NULL, NULL),
+			('repo-2', 'two', NULL, NULL, NULL);
+		INSERT INTO workspaces VALUES
+			('live', 'Lamp current', NULL, 'feat/lamp', 'lamp-v1', 'ready', '2026-09-02', 'repo-1'),
+			('archived', 'Lamp old', NULL, 'fix/lamp', 'lamp-v2', 'archived', '2026-09-01', 'repo-1'),
+			('unknown', 'Lamp unknown', NULL, 'try/lamp', 'lamp-v3', NULL, '2026-08-31', 'repo-2');
+		INSERT INTO sessions VALUES
+			('live-chat', 'live'),
+			('archived-chat', 'archived'),
+			('unknown-chat', 'unknown');
+	`)
+	const db = {
+		query<T>(sql: string, params: unknown[] = []): T[] {
+			return raw.prepare(sql).all(...(params as never[])) as T[]
+		}
+	} as unknown as ConductorDb
+	const reads = new Reads(db, '/unused')
+	const ids = (values: string[]) => [...values].sort()
+	afterAll(() => raw.close())
+
+	test('keeps archived chats in the default scope', () => {
+		expect(ids(reads.searchSessionIds(undefined, true))).toEqual(['archived-chat', 'live-chat', 'unknown-chat'])
+	})
+
+	test('excludes only archived chats before full-text ranking', () => {
+		expect(ids(reads.searchSessionIds(undefined, false))).toEqual(['live-chat', 'unknown-chat'])
+		expect(reads.searchSessionIds(['one'], false)).toEqual(['live-chat'])
+	})
+
+	test('applies the same archive scope to workspace-name matches', () => {
+		expect(reads.findWorkspacesByName(['lamp']).map(w => w.id)).toContain('archived')
+		expect(reads.findWorkspacesByName(['lamp'], 20, undefined, false).map(w => w.id)).toEqual(
+			expect.arrayContaining(['live', 'unknown'])
+		)
+		expect(reads.findWorkspacesByName(['lamp'], 20, undefined, false).map(w => w.id)).not.toContain('archived')
+		expect(reads.findWorkspacesByName(['lamp'], 20, ['one'], false).map(w => w.id)).toEqual(['live'])
 	})
 })
