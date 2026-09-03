@@ -27,6 +27,16 @@ export interface TranscriptEntry {
 	 * only thing that pairs the two, which sit in different `session_messages` rows.
 	 */
 	toolUseId?: string
+	/**
+	 * The agent tool call whose transcript this frame belongs to.
+	 *
+	 * Conductor writes delegated-agent frames into the parent chat and points every one
+	 * back at the spawning `tool_use`. The phone uses this durable join to nest the work
+	 * under that call even when the parent keeps speaking while the subagent runs.
+	 */
+	parentToolUseId?: string
+	/** Human label for a tool call that spawned a subagent. Present only on that call. */
+	subagentLabel?: string
 	/** A tool result's output, clipped. The phone folds it onto the call row. */
 	output?: string
 	/** True when `output` is a unified diff (an edit's result), so the phone colours it. */
@@ -70,6 +80,13 @@ interface SdkBlock {
 	id?: string
 	/** On a `tool_result` block: the `tool_use` it answers. */
 	tool_use_id?: string
+}
+
+interface SdkFrame {
+	type?: string
+	subtype?: string
+	parent_tool_use_id?: unknown
+	message?: { content?: SdkBlock[] }
 }
 
 /** One block of a `tool_result`'s content array. */
@@ -117,6 +134,25 @@ function stripWorktree(s: string, worktree: string | null): string {
 	// Conductor prefixes commands with `cd <worktree>` (newline- or &&-joined) — drop the whole clause.
 	if (s.startsWith(`cd ${worktree}`)) s = s.slice(`cd ${worktree}`.length).replace(/^\s*(&&)?\s*/, '')
 	return s.replaceAll(`${worktree}/`, '').replaceAll(worktree, '.')
+}
+
+/** A label for the two agent-call shapes currently written by Conductor. */
+function subagentLabel(name: string, input: unknown): string | undefined {
+	if (!input || typeof input !== 'object') return undefined
+	const o = input as Record<string, unknown>
+	if (name === 'Agent' || name === 'Task') {
+		return str(o.description) ?? str(o.subagent_type) ?? 'Subagent'
+	}
+	// Codex collaboration is exposed under this SDK name today. Keep the suffix match
+	// tolerant of snake/dotted spellings so a transport rename does not flatten every
+	// child frame while the durable parent id still says exactly where it belongs.
+	if (!/(?:^|[_.:])spawn_?agent$/i.test(name)) return undefined
+	const agentPath = str(o.agent_path)
+	const raw =
+		(agentPath ? agentPath.split('/').filter(Boolean).at(-1) : undefined) ?? str(o.task_name) ?? str(o.agent_nickname)
+	if (!raw) return 'Subagent'
+	const words = raw.replace(/[-_]+/g, ' ').trim()
+	return words ? words[0].toUpperCase() + words.slice(1) : 'Subagent'
 }
 
 /**
@@ -256,12 +292,14 @@ export function parseMessage(row: RawRow, worktree: string | null = null): Trans
 		return [{ ...base, id: row.id, role: 'user', text: content }]
 	}
 
-	let parsed: { type?: string; subtype?: string; message?: { content?: SdkBlock[] } }
+	let parsed: SdkFrame
 	try {
 		parsed = JSON.parse(content)
 	} catch {
 		return [{ ...base, id: row.id, role: 'system', text: clip(content, 200) }]
 	}
+	const parentToolUseId = str(parsed.parent_tool_use_id)
+	const frameBase = { ...base, ...(parentToolUseId ? { parentToolUseId } : {}) }
 
 	// Bookkeeping frames: hooks, init, token accounting, end-of-turn results.
 	if (parsed.type === 'system' || parsed.type === 'result') return []
@@ -274,19 +312,19 @@ export function parseMessage(row: RawRow, worktree: string | null = null): Trans
 	// already plain, and inventing a phrase here would drift from what the desktop shows.
 	if (parsed.type === 'error') {
 		const said = str((parsed as { content?: unknown }).content)
-		if (said) return [{ ...base, id: row.id, role: 'system', text: clip(said, 200) }]
+		if (said) return [{ ...frameBase, id: row.id, role: 'system', text: clip(said, 200) }]
 	}
 
 	const blocks = parsed.message?.content
 	if (!Array.isArray(blocks)) {
 		if (parsed.type === 'user' || parsed.type === 'assistant') return []
 		// Unknown frame shape — keep a dim raw dump so Conductor drift stays visible.
-		return [{ ...base, id: row.id, role: 'system', text: clip(content, 200) }]
+		return [{ ...frameBase, id: row.id, role: 'system', text: clip(content, 200) }]
 	}
 
 	const entries: TranscriptEntry[] = []
 	const push = (e: Pick<TranscriptEntry, 'role' | 'text'> & Partial<TranscriptEntry>) =>
-		entries.push({ ...base, ...e, id: `${row.id}:${entries.length}` })
+		entries.push({ ...frameBase, ...e, id: `${row.id}:${entries.length}` })
 
 	// Images are numbered per row, because that is all a reference needs to find one again
 	// (`toolImageAt`) and a row may hold several results.
@@ -308,7 +346,14 @@ export function parseMessage(row: RawRow, worktree: string | null = null): Trans
 			if (text) push({ role: 'thinking', text })
 		} else if (b.type === 'tool_use' && typeof b.name === 'string') {
 			flush()
-			push({ role: 'tool', tool: b.name, toolUseId: str(b.id), ...summarizeToolUse(b.name, b.input, worktree) })
+			const label = subagentLabel(b.name, b.input)
+			push({
+				role: 'tool',
+				tool: b.name,
+				toolUseId: str(b.id),
+				...(label ? { subagentLabel: label } : {}),
+				...summarizeToolUse(b.name, b.input, worktree)
+			})
 		} else if (b.type === 'tool_result') {
 			// A result is written to a later row than the call it answers — anything slower than
 			// the 1s poll lands a tick or more behind it — so it travels as its own entry naming
