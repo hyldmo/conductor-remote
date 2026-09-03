@@ -202,7 +202,6 @@ function ThemeRow() {
 					))}
 				</div>
 			</fieldset>
-			<p className="mt-1 text-xs text-muted">System follows this device’s appearance.</p>
 		</div>
 	)
 }
