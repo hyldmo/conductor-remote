@@ -466,13 +466,16 @@ export const client = {
 			ACTION_TIMEOUT_MS
 		),
 
-	/** Observe a workspace's selected Run task without touching Conductor's UI. */
+	/** Observe a workspace's Run configs without touching Conductor's UI. */
 	devServer: (workspaceId: string) => api<DevServerState>(routes.devServer.path(workspaceId)),
-	/** Press Run when needed, then expose its configured preview URLs to this tailnet. */
-	startDevServer: (workspaceId: string) =>
+	/** Start one Run config when needed, then expose its preview URLs to this tailnet. */
+	startDevServer: (workspaceId: string, runConfigId?: string) =>
 		api<DevServerResult>(
 			routes.startDevServer.path(workspaceId),
-			{ method: routes.startDevServer.method },
+			{
+				method: routes.startDevServer.method,
+				body: runConfigId ? JSON.stringify({ runConfigId }) : undefined
+			},
 			DEV_SERVER_TIMEOUT_MS
 		),
 	/** Press Stop and remove only the Tailscale Serve mappings this relay created. */

@@ -27,6 +27,7 @@ import { promisify } from 'node:util'
 import { stateDir } from './config.ts'
 import { type PreviewTarget, previewUrlSettings, resolvePreviewTargets } from './preview-urls.ts'
 import type { Workspace } from './reads.ts'
+import { type DevRunConfig, runConfigsFor } from './run-configs.ts'
 import type { ServeStatus } from './tailscale.ts'
 import { magicDnsName, tailscaleBin } from './tailscale.ts'
 import { setRunTask } from './writes.ts'
@@ -51,6 +52,8 @@ export interface DevServerState {
 	url: string | null
 	/** Configured or detected previews, in Conductor's Open-menu order. */
 	forwards: DevServerForward[]
+	/** Named Run choices visible in Conductor for this local workspace. */
+	runConfigs: DevRunConfig[]
 	/** The selected Conductor Run task, known after a start/stop action. */
 	task?: string
 	/** Why this workspace cannot currently be controlled or forwarded. */
@@ -664,6 +667,7 @@ export class DevServerController {
 
 	async state(workspace: Workspace): Promise<DevServerState> {
 		this.refreshTailscale()
+		const runConfigs = runConfigsFor(workspace)
 		const basePort = await this.portFor(workspace.id)
 		if (basePort) this.ports.set(workspace.id, basePort)
 		const targets = this.targetsFor(workspace, basePort)
@@ -728,6 +732,7 @@ export class DevServerController {
 			port: primary?.port ?? basePort,
 			url: firstForwarded?.url ?? null,
 			forwards,
+			runConfigs,
 			error
 		}
 	}
@@ -746,8 +751,28 @@ export class DevServerController {
 		return action
 	}
 
-	start(workspace: Workspace): Promise<DevServerResult> {
+	start(workspace: Workspace, runConfigId?: string): Promise<DevServerResult> {
 		return this.exclusive(workspace, async () => {
+			const runConfigs = runConfigsFor(workspace)
+			const selected = runConfigId ? runConfigs.find(config => config.id === runConfigId) : undefined
+			// Conductor still renders its desktop chooser for one named config. Resolve
+			// that sole choice here so the phone stays one-tap while the actuator can
+			// select the exact menu item instead of inheriting desktop selection state.
+			const taskConfig = selected ?? (runConfigs.length === 1 ? runConfigs[0] : undefined)
+			if (runConfigId && !selected) {
+				return {
+					ok: false,
+					...(await this.state(workspace)),
+					error: `Run config ${runConfigId} is not available in this workspace`
+				}
+			}
+			if (runConfigs.length > 1 && !selected) {
+				return {
+					ok: false,
+					...(await this.state(workspace)),
+					error: 'Choose which Run config to start'
+				}
+			}
 			this.refreshTailscale()
 			if (!this.bin || !this.host) return { ok: false, ...(await this.state(workspace)) }
 			try {
@@ -770,7 +795,7 @@ export class DevServerController {
 			// from the Mac, and stays inside the tap activation a phone can open a
 			// tab with. Pressing Run here would also assert a pane for a press it
 			// then decides not to make.
-			if (primaryPort && (await tcpOpen(primaryPort))) {
+			if (!selected && primaryPort && (await tcpOpen(primaryPort))) {
 				try {
 					await this.forwardAll(workspace.id, basePort, targets)
 					return { ok: true, ...(await this.state(workspace)), changed: false }
@@ -783,7 +808,7 @@ export class DevServerController {
 					}
 				}
 			}
-			const run = await setRunTask(workspace, true)
+			const run = await setRunTask(workspace, true, taskConfig?.name)
 			if (!run.ok) return { ok: false, ...(await this.state(workspace)), error: run.error }
 			basePort ??= await workspacePort(workspace.id)
 			if (basePort) this.ports.set(workspace.id, basePort)

@@ -39,6 +39,7 @@ import type {
 } from './plan-usage.ts'
 import type { DraftAttachment, Prefs, SyncedDraft } from './prefs.ts'
 import type { RepoRow, SearchWorkspace, SessionRow, Workspace } from './reads.ts'
+import type { DevRunConfig } from './run-configs.ts'
 import type { IndexStatus, SearchResult as SearchEvidence } from './search.ts'
 import type { Settings } from './settings.ts'
 import type { TranscriptEntry } from './transcript.ts'
@@ -57,6 +58,7 @@ export type {
 	CachedModelGroup,
 	DefaultEfforts,
 	DeviceInfo as PushDevice,
+	DevRunConfig,
 	DevServerForward,
 	DevServerResult,
 	DevServerState,

@@ -250,15 +250,17 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   lands — the same workspace and chats move onto a fresh branch. Archived chats
   remain read-only and never show the action.
 - ✅ **Launch and forward dev servers** — the workspace header's Play button
-  presses Conductor's selected Run task, expands the repository's named
-  `[[preview_urls]]` entries (including `$CONDUCTOR_PORT`), and exposes every local
-  HTTP preview at its own tailnet-only HTTPS URL. The primary preview opens
-  directly; additional previews appear in its dropdown. Repositories without
-  `preview_urls` retain detected-port fallback behavior. Open and Stop controls
-  appear once it is running; Stop uses Conductor's own button and removes only
-  this relay's Serve mappings. Forwarding a server that is already up presses
-  nothing in Conductor, so it takes about a second and opens the tab from that
-  same tap. This requires a Run task configured
+  starts Conductor's Run task directly when there is one choice. With multiple
+  named `[scripts.run.<id>]` configs it opens a menu and asks which one to start
+  every time—there is no remembered default. The relay then expands the
+  repository's named `[[preview_urls]]` entries (including `$CONDUCTOR_PORT`) and
+  exposes every local HTTP preview at its own tailnet-only HTTPS URL. The primary
+  preview opens directly; additional previews appear in its dropdown.
+  Repositories without `preview_urls` retain detected-port fallback behavior.
+  Open and Stop controls appear once it is running; Stop uses Conductor's own
+  button and removes only this relay's Serve mappings. Forwarding a server that
+  is already up presses nothing in Conductor, so it takes about a second and
+  opens the tab from that same tap. This requires a Run task configured
   in Conductor and Tailscale on the viewing device, even when the relay itself
   uses public Funnel.
 - ✅ **Send prompt** — two strategies:

@@ -1172,6 +1172,78 @@ on runTaskButton(tg)
 	return item 1 of matches
 end runTaskButton
 
+on runTaskChooser(tg)
+	set found to {}
+	tell application "System Events" to tell process "Conductor"
+		repeat with entry in (get UI elements of tg whose role is "AXPopUpButton")
+			set node to contents of entry
+			if (my axName(node)) is "Select task" then set end of found to node
+		end repeat
+	end tell
+	if (count of found) is 0 then return missing value
+	if (count of found) > 1 then error "Conductor exposed more than one Run task chooser"
+	return item 1 of found
+end runTaskChooser
+
+on openRunTaskMenu(tg)
+	-- Multiple Run configs live behind a Radix pop-up. AXPress is advertised but
+	-- does nothing on this control; focusing it and pressing Space opens the real
+	-- AXMenu. Choosing an item starts the task immediately — there is no second
+	-- press on the primary Run button. "Configure" is Conductor's own trailing
+	-- command, not a task choice.
+	set chooser to my runTaskChooser(tg)
+	if chooser is missing value then error "this workspace has no Run config chooser"
+	tell application "System Events" to tell process "Conductor"
+		set value of attribute "AXFocused" of chooser to true
+	end tell
+	tell application "System Events" to key code 49
+	delay 0.4
+	set choices to {}
+	set wa to my webArea()
+	tell application "System Events" to tell process "Conductor"
+		repeat with m in (get UI elements of wa whose role is "AXMenu")
+			repeat with entry in (get UI elements of m whose role is "AXMenuItem")
+				set node to contents of entry
+				set label to my axName(node)
+				if label is not "" and label is not "Configure" then set end of choices to node
+			end repeat
+		end repeat
+	end tell
+	return choices
+end openRunTaskMenu
+
+on startRunTaskNamed(tg, wantedTask)
+	try
+		set matches to {}
+		repeat with entry in my openRunTaskMenu(tg)
+			set node to contents of entry
+			if (my axName(node)) is wantedTask then set end of matches to node
+		end repeat
+		if (count of matches) is 0 then error "no Run config named " & wantedTask
+		if (count of matches) > 1 then error "several Run configs match " & wantedTask
+		tell application "System Events" to tell process "Conductor"
+			perform action "AXPress" of item 1 of matches
+		end tell
+	on error errText number errNum
+		tell application "System Events" to key code 53
+		error errText number errNum
+	end try
+end startRunTaskNamed
+
+on startSoleRunTask(tg)
+	try
+		set choices to my openRunTaskMenu(tg)
+		if (count of choices) is 0 then error "Conductor's Run menu contains no tasks"
+		if (count of choices) > 1 then error "choose which Run config to start"
+		tell application "System Events" to tell process "Conductor"
+			perform action "AXPress" of item 1 of choices
+		end tell
+	on error errText number errNum
+		tell application "System Events" to key code 53
+		error errText number errNum
+	end try
+end startSoleRunTask
+
 on runTaskState(btn)
 	set label to my axName(btn)
 	if label starts with "Stop " then return "running"
@@ -1197,7 +1269,7 @@ on openRunPorts(tg)
 	return found
 end openRunPorts
 
-on setRunTask(wantRunning)
+on setRunTask(wantRunning, wantedTask)
 	my activateConductor()
 	my focusWorkspace()
 	set tg to my runStrip()
@@ -1208,11 +1280,20 @@ on setRunTask(wantRunning)
 	set wantedState to "stopped"
 	if wantRunning then set wantedState to "running"
 	set changed to "false"
+	if wantRunning and wantedTask is not "" and beforeState is "running" and taskName is not wantedTask then error taskName & " is already running; stop it before starting " & wantedTask
 
 	if beforeState is not wantedState then
-		tell application "System Events" to tell process "Conductor"
-			perform action "AXPress" of btn
-		end tell
+		if wantRunning and wantedTask is not "" then
+			my startRunTaskNamed(tg, wantedTask)
+		else if wantRunning and (my runTaskChooser(tg)) is not missing value then
+			-- Legacy settings carry no name to the relay. Preserve their one-tap
+			-- behavior only when the live menu independently confirms one choice.
+			my startSoleRunTask(tg)
+		else
+			tell application "System Events" to tell process "Conductor"
+				perform action "AXPress" of btn
+			end tell
+		end if
 		set changed to "true"
 	end if
 
@@ -1229,6 +1310,7 @@ on setRunTask(wantRunning)
 		set currentState to my runTaskState(btn)
 		set taskName to my runTaskName(btn)
 		if currentState is wantedState then
+			if wantRunning and wantedTask is not "" and taskName is not wantedTask then error "Conductor started " & taskName & " instead of " & wantedTask
 			set ports to my openRunPorts(tg)
 			if not wantRunning or (count of ports) > 0 or attempt > 20 then exit repeat
 		end if

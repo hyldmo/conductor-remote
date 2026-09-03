@@ -1615,9 +1615,9 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, 200, { ok: true, strategy: result.strategy, workspace: archived })
 			}
 
-			// The selected Conductor Run task plus a tailnet-only HTTPS forward for
-			// its allocated port. Reads never touch Conductor's UI; start/stop use the
-			// same Accessibility lock and target assertion as every other UI write.
+			// Conductor's Run configs plus tailnet-only HTTPS forwards for the active
+			// one's ports. Reads never touch Conductor's UI; start/stop use the same
+			// Accessibility lock and target assertion as every other UI write.
 			const devServerOf = routeParam(routes.devServer, req.method, pathname)
 			if (devServerOf) {
 				const ws = reads.getWorkspace(devServerOf)
@@ -1629,7 +1629,11 @@ const server = http.createServer(async (req, res) => {
 			if (startDevServerIn) {
 				const ws = reads.getWorkspace(startDevServerIn)
 				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
-				const result = await devServers.start(ws)
+				const body = JSON.parse((await readBody(req)) || '{}') as { runConfigId?: unknown }
+				if (body.runConfigId !== undefined && (typeof body.runConfigId !== 'string' || !body.runConfigId.trim())) {
+					return json(req, res, 400, { error: 'runConfigId must be a non-empty string' })
+				}
+				const result = await devServers.start(ws, body.runConfigId as string | undefined)
 				return json(req, res, result.ok ? 200 : result.available ? 502 : 409, result)
 			}
 
