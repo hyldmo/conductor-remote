@@ -21,6 +21,7 @@ import {
 import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { unreadCount } from '../lib/read.ts'
 import type { CachedModelGroup, Workspace } from '../lib/types.ts'
+import { workspaceFilterSummary } from '../lib/workspace-filter.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs, WORKING_HINT_MS } from '../store.ts'
 import { ProviderMark } from './AgentIcons.tsx'
 import { ChangeStats } from './ChangeStats.tsx'
@@ -154,10 +155,18 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 		setSidebarOpen(false)
 	}
 
-	// The dot marks whether any workspace filter setting is active. The header no longer
-	// prints counts beside the growing action row; empty states still explain hidden rows.
+	// The dot marks the *setting*; the filter popover's subtitle only speaks up once a
+	// filter actually took something out, or "Hide merged" with nothing merged would
+	// read as "40 of 40". Keep repo scope out of this summary: the picker directly below
+	// already says which repos are selected.
 	const filtered = view.repos.length > 0 || view.hideMerged || view.hideDone
 	const repoLabel = repoFilterLabel(view.repos)
+	const filterSummary = workspaceFilterSummary({
+		total: workspaces.length,
+		shown: shown.length,
+		hidden,
+		repoFiltered: view.repos.length > 0
+	})
 
 	return (
 		<div className="flex h-full min-w-0 flex-col overflow-hidden">
@@ -225,7 +234,9 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 						</>
 					}
 				/>
-				{controlsOpen ? <ViewControls repos={repos} view={view} onClose={() => setControlsOpen(false)} /> : null}
+				{controlsOpen ? (
+					<ViewControls repos={repos} view={view} summary={filterSummary} onClose={() => setControlsOpen(false)} />
+				) : null}
 			</div>
 			<nav className="pb-safe min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
 				{isLoading && !data ? (
@@ -340,12 +351,37 @@ function GroupDot({ status }: { status?: string }) {
 }
 
 /** The desktop sidebar's Group by / Repo / Sort by popover. */
-function ViewControls({ repos, view, onClose }: { repos: RepoChoice[]; view: ViewPrefs; onClose: () => void }) {
+function ViewControls({
+	repos,
+	view,
+	summary,
+	onClose
+}: {
+	repos: RepoChoice[]
+	view: ViewPrefs
+	summary?: string
+	onClose: () => void
+}) {
 	const setView = useApp(s => s.setView)
 	return (
 		<>
 			<div className="fixed inset-0 z-20" onClick={onClose} aria-hidden />
-			<div className="fade-in absolute right-2 top-full z-30 mt-1 flex w-64 flex-col gap-2.5 rounded-2xl border border-border bg-surface p-3 shadow-xl">
+			<div
+				role="dialog"
+				aria-labelledby="workspace-filters-title"
+				aria-describedby={summary ? 'workspace-filters-summary' : undefined}
+				className="fade-in absolute right-2 top-full z-30 mt-1 flex w-64 flex-col gap-2.5 rounded-2xl border border-border bg-surface p-3 shadow-xl"
+			>
+				<div className="border-b border-border-soft pb-2">
+					<h2 id="workspace-filters-title" className="text-sm font-semibold text-text">
+						Workspace filters
+					</h2>
+					{summary ? (
+						<p id="workspace-filters-summary" className="mt-0.5 text-xs text-muted">
+							{summary}
+						</p>
+					) : null}
+				</div>
 				<ControlRow id="view-group" label="Group by">
 					<ViewSelect
 						id="view-group"
