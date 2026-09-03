@@ -10,7 +10,7 @@ import { shortModel, timestampMs, workspaceTitle } from '../lib/format.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
-import type { Session } from '../lib/types.ts'
+import type { DiffStats, Session } from '../lib/types.ts'
 import { useApp, WORKING_HINT_MS } from '../store.ts'
 import { ArchivedChat } from './ArchivedChat.tsx'
 import { Composer } from './Composer.tsx'
@@ -243,18 +243,7 @@ export function SessionView() {
 							<>
 								<DevServerControls workspaceId={ws.id} />
 								<WorkspaceMenu workspace={ws} agentsRunning={sessions.filter(s => s.status === 'working').length} />
-								<button
-									type="button"
-									onClick={() => setDiffOpen(o => !o)}
-									aria-label="Toggle diff panel"
-									aria-pressed={diffOpen}
-									className={cn(
-										'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
-										diffOpen && 'bg-surface-2 text-text'
-									)}
-								>
-									<FileDiff size={19} />
-								</button>
+								<DiffButton stats={ws.change_stats} open={diffOpen} onToggle={() => setDiffOpen(o => !o)} />
 							</>
 						}
 					/>
@@ -323,6 +312,36 @@ export function SessionView() {
 				{diffOpen ? <DiffPanel workspaceId={ws.id} sessionId={sessionId} onClose={() => setDiffOpen(false)} /> : null}
 			</div>
 		</MentionResolverProvider>
+	)
+}
+
+/** Header shortcut to the workspace diff, with a glanceable hint when changes exist. */
+export function DiffButton({
+	stats,
+	open,
+	onToggle
+}: {
+	stats?: DiffStats | null
+	open: boolean
+	onToggle: () => void
+}) {
+	const hasDiff = !!stats && (stats.added > 0 || stats.removed > 0)
+	return (
+		<button
+			type="button"
+			onClick={onToggle}
+			aria-label={hasDiff ? 'Toggle diff panel, changes available' : 'Toggle diff panel'}
+			aria-pressed={open}
+			className={cn(
+				'relative flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
+				open && 'bg-surface-2 text-text'
+			)}
+		>
+			<FileDiff size={19} />
+			{hasDiff ? (
+				<span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-accent" aria-hidden="true" />
+			) : null}
+		</button>
 	)
 }
 

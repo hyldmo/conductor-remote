@@ -9,7 +9,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { SessionTabs } = await import('../web/src/components/SessionView.tsx')
+const { DiffButton, SessionTabs } = await import('../web/src/components/SessionView.tsx')
 
 const session: Session = {
 	id: 'chat-1',
@@ -68,5 +68,19 @@ describe('phone chat tabs', () => {
 			/>
 		)
 		expect(html).toContain('aria-label="New chat, same files"')
+	})
+})
+
+describe('workspace diff shortcut', () => {
+	test('shows a dot only when the workspace has changes', () => {
+		const changed = renderToStaticMarkup(
+			<DiffButton stats={{ added: 12, removed: 0 }} open={false} onToggle={vi.fn()} />
+		)
+		const clean = renderToStaticMarkup(<DiffButton stats={{ added: 0, removed: 0 }} open={false} onToggle={vi.fn()} />)
+
+		expect(changed).toContain('Toggle diff panel, changes available')
+		expect(changed).toContain('bg-accent')
+		expect(clean).toContain('aria-label="Toggle diff panel"')
+		expect(clean).not.toContain('bg-accent')
 	})
 })
