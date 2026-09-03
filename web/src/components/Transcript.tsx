@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ChevronDown, GitFork, Hourglass, Loader2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, GitFork, Hourglass, Loader2, Waypoints } from 'lucide-react'
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
@@ -9,6 +9,7 @@ import { languageForTool, languageForToolOutput } from '../lib/highlight.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
 import { assistantTurnEnds, latestAssistantForActions, turnOrigin } from '../lib/transcript-actions.ts'
+import { type TranscriptNode, transcriptTree } from '../lib/transcript-tree.ts'
 import type { BackgroundTask, PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { Code } from './Code.tsx'
@@ -73,25 +74,30 @@ export function Transcript({
 	const scroller = useRef<HTMLDivElement>(null)
 	const atBottom = useRef(true)
 
+	// Conductor interleaves a delegated agent's frames with its parent's, but gives every
+	// child a durable pointer back to the spawning tool call. Rebuild that hierarchy first;
+	// only the root entries belong to this chat's Copy/Fork and turn-duration controls.
+	const nodes = useMemo(() => transcriptTree(entries), [entries])
+	const rootEntries = useMemo(() => nodes.map(node => node.e), [nodes])
 	// Grouping is pure of `entries`, and `entries` only changes when a row actually
 	// lands — so this holds the row list (and each group's slice) at the same identity
 	// across the polls above, which is what lets the memoised rows below bail out.
-	const rows = useMemo(() => groupSteps(entries), [entries])
+	const rows = useMemo(() => groupSteps(nodes), [nodes])
 	// The newest turn's Copy/Fork is drawn *after* every row rather than under its
 	// response: an agent that speaks and then keeps working buries the buttons
 	// mid-transcript, where they read as belonging to the step below them. Older turns
 	// have nothing growing under them, so theirs sit where the cut they offer is.
-	const actionTarget = useMemo(() => latestAssistantForActions(entries), [entries])
+	const actionTarget = useMemo(() => latestAssistantForActions(rootEntries), [rootEntries])
 	const inlineActions = useMemo(() => {
-		const ends = assistantTurnEnds(entries).filter(e => e !== actionTarget)
+		const ends = assistantTurnEnds(rootEntries).filter(e => e !== actionTarget)
 		return new Set(ends.map(rowKey))
-	}, [entries, actionTarget])
+	}, [rootEntries, actionTarget])
 	// Each turn's duration is measured from its own start, so the origins are resolved
 	// once per transcript change rather than per render — every row here redraws on a
 	// 1s poll, and a scan back through the chat per turn would ride along with it.
 	const turnStarts = useMemo(
-		() => new Map(assistantTurnEnds(entries).map(e => [e, turnOrigin(entries, e, turnStartedAt)])),
-		[entries, turnStartedAt]
+		() => new Map(assistantTurnEnds(rootEntries).map(e => [e, turnOrigin(rootEntries, e, turnStartedAt)])),
+		[rootEntries, turnStartedAt]
 	)
 
 	// The relay owns the entry, so dropping it is a request, not a local edit. A
@@ -177,17 +183,17 @@ export function Transcript({
 					<div className="flex min-w-0 flex-col gap-2.5">
 						{rows.map(row =>
 							row.kind === 'steps' ? (
-								<StepGroup key={row.key} entries={row.entries} />
+								<StepGroup key={row.key} nodes={row.nodes} />
 							) : (
 								<Fragment key={row.key}>
-									<Entry e={row.e} />
-									{inlineActions.has(row.key) ? (
+									<NodeEntry node={row.node} />
+									{inlineActions.has(rowKey(row.node.e)) ? (
 										<ChatActions
-											text={row.e.text}
-											at={row.e.ts}
-											startedAt={turnStarts.get(row.e)}
-											rowid={row.e.rowid}
-											through={row.e.rowid}
+											text={row.node.e.text}
+											at={row.node.e.ts}
+											startedAt={turnStarts.get(row.node.e)}
+											rowid={row.node.e.rowid}
+											through={row.node.e.rowid}
 											onFork={onFork}
 										/>
 									) : null}
@@ -257,14 +263,14 @@ export function Transcript({
 }
 
 type Row =
-	| { kind: 'entry'; key: string; e: TranscriptEntry }
-	| { kind: 'steps'; key: string; entries: TranscriptEntry[] }
+	| { kind: 'entry'; key: string; node: TranscriptNode }
+	| { kind: 'steps'; key: string; nodes: TranscriptNode[] }
 
 const rowKey = (e: TranscriptEntry) => `${e.rowid}-${e.id}`
 
 /** Element-wise identity, for the memoised rows below — a row list is rebuilt, its rows aren't. */
-const sameEntries = (a: { entries: TranscriptEntry[] }, b: { entries: TranscriptEntry[] }) =>
-	a.entries.length === b.entries.length && a.entries.every((e, i) => e === b.entries[i])
+const sameNodes = (a: { nodes: TranscriptNode[] }, b: { nodes: TranscriptNode[] }) =>
+	a.nodes.length === b.nodes.length && a.nodes.every((node, i) => node.e === b.nodes[i]?.e)
 
 /**
  * Fold each run of the agent's own work (thinking + tool calls) between two
@@ -272,21 +278,23 @@ const sameEntries = (a: { entries: TranscriptEntry[] }, b: { entries: Transcript
  * a phone that plumbing buries the prose. A run of one stays inline: wrapping a
  * single row in a disclosure hides it without saving anything.
  */
-function groupSteps(entries: TranscriptEntry[]): Row[] {
+function groupSteps(nodes: TranscriptNode[]): Row[] {
 	const rows: Row[] = []
-	let run: TranscriptEntry[] = []
+	let run: TranscriptNode[] = []
 	const flush = () => {
-		if (run.length > 1) rows.push({ kind: 'steps', key: `steps-${rowKey(run[0])}`, entries: run })
-		else for (const e of run) rows.push({ kind: 'entry', key: rowKey(e), e })
+		if (run.length > 1) rows.push({ kind: 'steps', key: `steps-${rowKey(run[0].e)}`, nodes: run })
+		else for (const node of run) rows.push({ kind: 'entry', key: rowKey(node.e), node })
 		run = []
 	}
-	for (const e of entries) {
-		if (e.role === 'tool' || e.role === 'thinking') {
-			run.push(e)
+	for (const node of nodes) {
+		// An Agent call is already a group of its own, with the child transcript under a
+		// rail. Folding that into an opaque "N steps" disclosure would hide the feature.
+		if (!node.e.subagentLabel && (node.e.role === 'tool' || node.e.role === 'thinking')) {
+			run.push(node)
 			continue
 		}
 		flush()
-		rows.push({ kind: 'entry', key: rowKey(e), e })
+		rows.push({ kind: 'entry', key: rowKey(node.e), node })
 	}
 	flush()
 	return rows
@@ -302,9 +310,9 @@ function groupSteps(entries: TranscriptEntry[]): Row[] {
  * group's slice, so the default shallow compare would re-render the whole backlog
  * each time the live group grows by one step.
  */
-const StepGroup = memo(function StepGroup({ entries }: { entries: TranscriptEntry[] }) {
-	const failed = entries.filter(e => e.error).length
-	const last = entries[entries.length - 1]
+const StepGroup = memo(function StepGroup({ nodes }: { nodes: TranscriptNode[] }) {
+	const failed = nodes.filter(node => node.e.error).length
+	const last = nodes[nodes.length - 1].e
 	const lastLabel = last.role === 'thinking' ? 'Thinking' : last.text
 	return (
 		<details className="group/steps min-w-0 overflow-hidden rounded-xl border border-border-soft bg-surface/40">
@@ -312,18 +320,67 @@ const StepGroup = memo(function StepGroup({ entries }: { entries: TranscriptEntr
 				<span className="shrink-0 font-mono text-[11px] text-faint transition-transform group-open/steps:rotate-90">
 					▸
 				</span>
-				<span className="shrink-0 text-[12.5px] text-muted">{entries.length} steps</span>
+				<span className="shrink-0 text-[12.5px] text-muted">{nodes.length} steps</span>
 				<span className="min-w-0 flex-1 truncate text-[11px] text-faint group-open/steps:invisible">{lastLabel}</span>
 				{failed ? <span className="shrink-0 text-[11px] text-del">{failed} failed</span> : null}
 			</summary>
 			<div className="flex min-w-0 flex-col gap-2.5 border-t border-border-soft px-2 py-2.5">
-				{entries.map(e => (
-					<Entry key={rowKey(e)} e={e} />
+				{nodes.map(node => (
+					<NodeEntry key={rowKey(node.e)} node={node} />
 				))}
 			</div>
 		</details>
 	)
-}, sameEntries)
+}, sameNodes)
+
+/** Render a node as either an ordinary transcript row or Conductor's nested Agent block. */
+function NodeEntry({ node }: { node: TranscriptNode }) {
+	return node.e.subagentLabel ? <SubagentEntry node={node} /> : <Entry e={node.e} />
+}
+
+/**
+ * A delegated agent in the shape Conductor uses on the desktop: one labelled Agent
+ * header, then that agent's own commentary and tools under a vertical rail.
+ *
+ * Child frames may have been interleaved with parent messages in SQLite. `transcriptTree`
+ * has already pulled only the frames carrying this call's parent id under the rail, so
+ * the parent can continue below the whole block without impersonating the subagent.
+ */
+export function SubagentEntry({ node }: { node: TranscriptNode }) {
+	const { e, children } = node
+	// Claude's synchronous Agent tool returns its final report as the parent tool result,
+	// rather than another child assistant frame. Codex collaboration returns transport
+	// bookkeeping there (`{"status":"completed",…}`), which is not part of the chat.
+	const final = e.output && (e.error || e.tool === 'Agent' || e.tool === 'Task') ? e.output : null
+	const hasBody = children.length > 0 || !!final
+
+	return (
+		<section className="min-w-0 px-0.5" data-subagent={e.subagentLabel}>
+			<div className="flex min-w-0 items-center gap-2 py-1 text-[12.5px]">
+				<Waypoints size={14} strokeWidth={1.7} className="shrink-0 text-faint" aria-hidden />
+				<span className="shrink-0 font-medium text-text">Agent</span>
+				<span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted">{e.subagentLabel}</span>
+				{e.error ? <span className="shrink-0 text-[11px] text-del">failed</span> : null}
+			</div>
+			{hasBody ? (
+				<div className="ml-[7px] min-w-0 border-l border-border pl-4 pb-1 pt-1">
+					<div className="flex min-w-0 flex-col gap-2.5">
+						{children.map(child => (
+							<NodeEntry key={rowKey(child.e)} node={child} />
+						))}
+						{final ? (
+							<div className="flex flex-col items-start" data-subagent-result>
+								<Bubble className={cn('max-w-[92%] px-0.5', e.error && 'text-del/80')}>
+									<Markdown>{final}</Markdown>
+								</Bubble>
+							</div>
+						) : null}
+					</div>
+				</div>
+			) : null}
+		</section>
+	)
+}
 
 /**
  * A prompt still with the relay: the workspace's first prompt waiting on setup, or
