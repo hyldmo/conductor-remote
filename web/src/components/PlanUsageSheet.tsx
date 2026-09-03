@@ -78,9 +78,12 @@ export function ProviderCard({
 }) {
 	const editableProvider = effortProvider(usage.provider)
 	const unknownEffort = defaultEffort && !EFFORT_ORDER.includes(defaultEffort) ? defaultEffort : null
+	const visibleBuckets = usage.buckets.filter(
+		bucket => bucket.label !== 'GPT-5.3-Codex-Spark' || bucket.windows.some(window => window.usedPercent !== 0)
+	)
 	return (
 		<section className="rounded-2xl border border-border bg-surface-2 p-3.5">
-			<div className={cn('flex items-center gap-2', (editableProvider || usage.buckets.length) && 'mb-3')}>
+			<div className={cn('flex items-center gap-2', (editableProvider || visibleBuckets.length) && 'mb-3')}>
 				<ProviderMark agentType={usage.provider} model={null} className="size-5" />
 				<h3 className="min-w-0 flex-1 truncate text-sm font-semibold">{usage.label}</h3>
 				{usage.plan ? <span className="pill shrink-0 text-[11px]">{planName(usage.plan)}</span> : null}
@@ -115,11 +118,11 @@ export function ProviderCard({
 					</span>
 				</label>
 			) : null}
-			{usage.buckets.length ? (
+			{visibleBuckets.length ? (
 				<div className="space-y-4">
-					{usage.buckets.map(bucket => (
+					{visibleBuckets.map(bucket => (
 						<div key={bucket.id} className="space-y-3">
-							{usage.buckets.length > 1 || bucket.label !== usage.label ? (
+							{visibleBuckets.length > 1 || bucket.label !== usage.label ? (
 								<div className="text-xs font-medium text-muted">{bucket.label}</div>
 							) : null}
 							{bucket.windows.map(window => (
