@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, Gauge, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useModelCatalog, useWorkspaces } from '../hooks.ts'
@@ -26,6 +26,7 @@ import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
 import { LogsSheet } from './LogsSheet.tsx'
 import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
+import { PlanUsageSheet } from './PlanUsageSheet.tsx'
 import { type RepoChoice, RepoOptions, repoFilterLabel } from './RepoFilter.tsx'
 import { SearchSheet } from './SearchSheet.tsx'
 import { Badge, Empty, RelayUnreachable, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
@@ -95,6 +96,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const [connectOpen, setConnectOpen] = useState(false)
 	const [newOpen, setNewOpen] = useState(false)
 	const [logsOpen, setLogsOpen] = useState(false)
+	const [usageOpen, setUsageOpen] = useState(false)
 	const [searchOpen, setSearchOpen] = useState(false)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
@@ -183,6 +185,15 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
 							>
 								<Search size={18} />
+							</button>
+							<button
+								type="button"
+								onClick={() => setUsageOpen(true)}
+								aria-label="Plan usage"
+								title="Plan usage"
+								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+							>
+								<Gauge size={18} />
 							</button>
 							<button
 								type="button"
@@ -305,6 +316,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 				/>
 			) : null}
 			{logsOpen ? <LogsSheet onClose={() => setLogsOpen(false)} /> : null}
+			{usageOpen ? <PlanUsageSheet onClose={() => setUsageOpen(false)} /> : null}
 		</div>
 	)
 }

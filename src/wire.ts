@@ -29,6 +29,13 @@ import type { CachedModelGroup } from './model-cache.ts'
 import type { NoSleepState } from './nosleep.ts'
 import type { DeviceInfo } from './notify.ts'
 import type { ParkedAgentPatch, ParkedPrompt } from './parked.ts'
+import type {
+	PlanUsageBucket,
+	PlanUsageProviderId,
+	PlanUsageSnapshot,
+	PlanUsageWindow,
+	ProviderPlanUsage
+} from './plan-usage.ts'
 import type { Prefs, SyncedDraft } from './prefs.ts'
 import type { RepoRow, SearchWorkspace, SessionRow, Workspace } from './reads.ts'
 import type { IndexStatus, SearchResult as SearchEvidence } from './search.ts'
@@ -56,7 +63,12 @@ export type {
 	NoSleepState,
 	/** What the phone can change about a chat's agent. */
 	ParkedAgentPatch as AgentPatch,
+	PlanUsageBucket,
+	PlanUsageProviderId,
+	PlanUsageSnapshot,
+	PlanUsageWindow,
 	Prefs,
+	ProviderPlanUsage,
 	RepoRow as Repo,
 	SearchWorkspace,
 	SessionRow as Session,
@@ -217,6 +229,9 @@ export interface ModelCatalogResponse {
 	/** The newest default observed in any live picker. */
 	defaultModel?: string
 }
+
+/** GET /api/usage — provider subscription windows read from local agent CLIs. */
+export type PlanUsageResponse = PlanUsageSnapshot
 
 /** POST /api/sessions/:id/default-model — the star is re-read before success. */
 export interface DefaultModelResult {

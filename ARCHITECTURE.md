@@ -36,7 +36,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   relay's matching regex, so the two cannot drift
   shared.ts       what both sides must compute identically (workspaceTitle, query tokens,
                   the locked-Mac phrase) — the one module web/ may import as a *value*
-  mcp-tools.ts    the 18 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
+  mcp-tools.ts    the 19 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
                   the relay through an injected `call`, so both transports share one path
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively
@@ -52,6 +52,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
   model-cache.ts  the picker labels and starred default Conductor has shown us, keyed by
                   harness, so a workspace with no chat yet can still show the effective model
+  plan-usage.ts   prompt-free Claude/Codex CLI allowance reads → normalized rolling windows;
+                  concurrent, single-flight and cached (Cursor/OpenCode report unavailable)
   sendonce.ts     the send memo: answers a repeated clientId with the first send's outcome
   firstprompt.ts  persisted queue that delivers a new workspace's first prompt, from setup on
   parked.ts       persisted queue for prompts that hit the lock screen — delivers on unlock, pushes the receipt
@@ -96,7 +98,7 @@ web/              React PWA (Vite root)
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
                   WorkspaceMenu (the status groups, plus Archive), MergeBanner, MessageNav,
                   DevServerControls, SearchSheet + SearchPane, ArchivedChat (a hit whose
-                  worktree is gone), NewWorkspaceSheet, LogsSheet, TokenGate, QRCode +
+                  worktree is gone), NewWorkspaceSheet, PlanUsageSheet, LogsSheet, TokenGate, QRCode +
                   QRScanner, ReloadPrompt, ui, and ConnectSheet
                   (the Notifications switch with "send a test", plus the Mac section: keep-awake
                   windows and the fallback-network picker). Patch.tsx renders a unified diff for

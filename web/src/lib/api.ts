@@ -19,6 +19,7 @@ import type {
 	ModelsResult,
 	NewChatResult,
 	NoSleepResult,
+	PlanUsageResponse,
 	Prefs,
 	PrefsResponse,
 	PushConfig,
@@ -298,6 +299,9 @@ export const client = {
 	repos: () => api<ReposResponse>(routes.repos.path()),
 	/** Model-picker labels the relay has already read from Conductor. This never opens the desktop UI. */
 	modelCatalog: () => api<ModelCatalogResponse>(routes.modelCatalog.path()),
+	/** Rolling subscription limits. The relay caches ordinary reads; refresh is an explicit user action. */
+	planUsage: (refresh = false) =>
+		api<PlanUsageResponse>(`${routes.planUsage.path()}${refresh ? '?refresh=1' : ''}`, {}, 15_000),
 	/**
 	 * Find a workspace by name or by what was said in its chats, archived included.
 	 * The relay answers from a local index, so this is a poll-budget call even though
