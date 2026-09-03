@@ -1281,10 +1281,20 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   The watchdog refuses its heal on the same evidence, because `funnel --bg 8787`
   mounts on :443 whatever is there.
 - **Workspace dev-server forwards are always tailnet-only, regardless of `EXPOSE`.**
-  `src/dev-server.ts` presses Conductor's selected Run/Stop task through the same
+  `src/dev-server.ts` resolves Conductor's named `[scripts.run.<id>]` settings with
+  their user → shared repo → repo-local → managed, per-ID merge semantics. One
+  visible local config keeps the Play button's direct behavior; more than one
+  makes the phone ask for an exact config on every start, regardless of a declared
+  default. Legacy `scripts.run` keeps the old implicit path. The API refuses an
+  unchosen or unknown multi-config start instead of inheriting whatever the Mac
+  last selected. `writes.ts` then presses the exact Run/Stop task through the same
   fail-closed Accessibility path as other writes; Conductor still owns the process
-  and its cleanup. **Preview intent comes from Conductor's own documented
-  `preview_urls` setting**, resolved with its user → shared repo → repo-local →
+  and its cleanup. The desktop's `Select task` pop-up advertises `AXPress` but only
+  opens after focus + Space, and pressing its exact `AXMenuItem` starts the task
+  immediately—there is no second Play press. An unnamed legacy start inspects that
+  live menu and proceeds only when it independently contains one task.
+  **Preview intent comes from Conductor's own documented `preview_urls` setting**,
+  resolved with its user → shared repo → repo-local →
   managed precedence. Each named loopback HTTP URL gets its own persisted
   `tailscale serve` HTTPS port and appears in the phone's Open dropdown; two paths
   on one local port reuse one bridge. The relay still discovers the local

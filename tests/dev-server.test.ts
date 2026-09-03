@@ -3,15 +3,17 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { createDevProxy, DevServerController, parseWorkspacePort, serveProxyAt } from '../src/dev-server.ts'
 import { type PreviewTarget, parsePreviewUrlsToml, resolvePreviewTargets } from '../src/preview-urls.ts'
 import type { Workspace } from '../src/reads.ts'
+import * as runConfigModule from '../src/run-configs.ts'
 import type { ServeStatus } from '../src/tailscale.ts'
 
 const closeAfter: Array<() => Promise<void>> = []
 
 afterEach(async () => {
+	vi.restoreAllMocks()
 	await Promise.all(closeAfter.splice(0).map(close => close()))
 })
 
@@ -188,6 +190,37 @@ url = 'http://127.0.0.1:6006/'
 		} finally {
 			await harness.release('workspace-multi')
 		}
+	})
+})
+
+describe('Run config selection', () => {
+	test('refuses an unchosen multi-config start before touching Conductor or Tailscale', async () => {
+		vi.spyOn(runConfigModule, 'runConfigsFor').mockReturnValue([
+			{ id: 'web', name: 'Web' },
+			{ id: 'worker', name: 'Worker' }
+		])
+		const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'conductor-remote-run-choice-'))
+		closeAfter.push(async () => fs.rmSync(temp, { recursive: true, force: true }))
+		const controller = new DevServerController(path.join(temp, 'forwards.json'))
+		type Harness = {
+			refreshTailscale: () => void
+			portFor: () => Promise<number | null>
+			targetsFor: () => PreviewTarget[]
+		}
+		const harness = controller as unknown as Harness
+		harness.refreshTailscale = () => undefined
+		harness.portFor = async () => null
+		harness.targetsFor = () => []
+
+		const result = await controller.start({ id: 'workspace-choice' } as Workspace)
+		expect(result).toMatchObject({
+			ok: false,
+			error: 'Choose which Run config to start',
+			runConfigs: [
+				{ id: 'web', name: 'Web' },
+				{ id: 'worker', name: 'Worker' }
+			]
+		})
 	})
 })
 

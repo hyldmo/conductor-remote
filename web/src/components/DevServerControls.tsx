@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink, Globe2, Loader2, Play, Square } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useDevServer } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { useApp } from '../store.ts'
@@ -21,27 +21,56 @@ function openForward(url: string) {
 const controlClass =
 	'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2 disabled:opacity-40'
 
-/** Start, expose, open and stop the workspace's selected Conductor Run task. */
+/** Choose, start, expose, open and stop the workspace's Conductor Run tasks. */
 export function DevServerControls({ workspaceId }: { workspaceId: string }) {
 	const query = useDevServer(workspaceId)
 	const queryClient = useQueryClient()
 	const online = useApp(s => s.online)
 	const [busy, setBusy] = useState<'start' | 'stop' | null>(null)
 	const [error, setError] = useState<string | null>(null)
-	const [open, setOpen] = useState(false)
+	const [previewMenuOpen, setPreviewMenuOpen] = useState(false)
+	const [runMenuOpen, setRunMenuOpen] = useState(false)
+	const previewControls = useRef<HTMLDivElement>(null)
+	const runControls = useRef<HTMLDivElement>(null)
 	const state = query.data
+	const multipleRunConfigs = (state?.runConfigs?.length ?? 0) > 1
 	const forwards =
 		state?.forwards?.filter(forward => forward.forwarded && forward.url) ??
 		(state?.forwarded && state.url
 			? [{ name: state.port ? `Port ${state.port}` : 'Dev server', port: state.port ?? 0, url: state.url }]
 			: [])
 
-	const apply = async (running: boolean) => {
+	useEffect(() => {
+		if (!previewMenuOpen && !runMenuOpen) return
+		const controls = runMenuOpen ? runControls : previewControls
+		const dismissOutside = (event: PointerEvent) => {
+			if (event.target instanceof Node && controls.current?.contains(event.target)) return
+			setPreviewMenuOpen(false)
+			setRunMenuOpen(false)
+		}
+		const dismissWithEscape = (event: KeyboardEvent) => {
+			if (event.key !== 'Escape') return
+			event.preventDefault()
+			setPreviewMenuOpen(false)
+			setRunMenuOpen(false)
+			controls.current?.querySelector<HTMLButtonElement>('button')?.focus()
+		}
+		document.addEventListener('pointerdown', dismissOutside)
+		document.addEventListener('keydown', dismissWithEscape)
+		return () => {
+			document.removeEventListener('pointerdown', dismissOutside)
+			document.removeEventListener('keydown', dismissWithEscape)
+		}
+	}, [previewMenuOpen, runMenuOpen])
+
+	const apply = async (running: boolean, runConfigId?: string) => {
 		if (busy) return
 		setBusy(running ? 'start' : 'stop')
 		setError(null)
 		try {
-			const result = running ? await client.startDevServer(workspaceId) : await client.stopDevServer(workspaceId)
+			const result = running
+				? await client.startDevServer(workspaceId, runConfigId)
+				: await client.stopDevServer(workspaceId)
 			queryClient.setQueryData(['dev-server', workspaceId], result)
 			if (!result.ok) setError(result.error ?? `Could not ${running ? 'start' : 'stop'} the dev server`)
 			else if (running && result.url) openForward(result.url)
@@ -53,13 +82,17 @@ export function DevServerControls({ workspaceId }: { workspaceId: string }) {
 		}
 	}
 
-	const startLabel = state?.running ? 'Forward dev server to tailnet' : 'Start and forward dev server'
+	const startLabel = multipleRunConfigs
+		? 'Choose Run config'
+		: state?.running
+			? 'Forward dev server to tailnet'
+			: 'Start and forward dev server'
 	const unavailable = state && !state.available
 
 	return (
 		<>
 			{forwards.length && forwards[0]?.url ? (
-				<div className="relative flex shrink-0 items-center">
+				<div ref={previewControls} className="relative flex shrink-0 items-center">
 					<a
 						href={forwards[0].url}
 						target="_blank"
@@ -74,64 +107,86 @@ export function DevServerControls({ workspaceId }: { workspaceId: string }) {
 						<>
 							<button
 								type="button"
-								onClick={() => setOpen(value => !value)}
+								onClick={() => setPreviewMenuOpen(value => !value)}
 								aria-label="Choose forwarded dev server"
 								aria-haspopup="menu"
-								aria-expanded={open}
+								aria-expanded={previewMenuOpen}
 								className="flex h-9 w-6 items-center justify-center rounded-full text-muted active:bg-surface-2"
 							>
-								<ChevronDown size={14} className={open ? 'rotate-180' : undefined} />
+								<ChevronDown size={14} className={previewMenuOpen ? 'rotate-180' : undefined} />
 							</button>
-							{open ? (
-								<>
-									<button
-										type="button"
-										aria-label="Close forwarded dev servers"
-										className="fixed inset-0 z-20 cursor-default"
-										onClick={() => setOpen(false)}
-									/>
-									<div
-										role="menu"
-										aria-label="Forwarded dev servers"
-										className="fade-in absolute right-0 top-full z-30 mt-1 min-w-52 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
-									>
-										{forwards.map(forward => (
-											<a
-												key={`${forward.port}:${forward.url}`}
-												href={forward.url ?? undefined}
-												target="_blank"
-												rel="noreferrer"
-												onClick={() => setOpen(false)}
-												role="menuitem"
-												className="flex items-center gap-3 px-3 py-2.5 text-left text-sm active:bg-surface-2"
-											>
-												<span className="min-w-0 flex-1 truncate">{forward.name}</span>
-												<span className="font-mono text-xs text-faint">:{forward.port}</span>
-											</a>
-										))}
-									</div>
-								</>
+							{previewMenuOpen ? (
+								<div
+									role="menu"
+									aria-label="Forwarded dev servers"
+									className="fade-in absolute right-0 top-full z-30 mt-1 max-h-[calc(100dvh-4rem)] min-w-52 overflow-y-auto rounded-xl border border-border bg-surface py-1 shadow-xl"
+								>
+									{forwards.map(forward => (
+										<a
+											key={`${forward.port}:${forward.url}`}
+											href={forward.url ?? undefined}
+											target="_blank"
+											rel="noreferrer"
+											onClick={() => setPreviewMenuOpen(false)}
+											role="menuitem"
+											className="flex items-center gap-3 px-3 py-2.5 text-left text-sm active:bg-surface-2"
+										>
+											<span className="min-w-0 flex-1 truncate">{forward.name}</span>
+											<span className="font-mono text-xs text-faint">:{forward.port}</span>
+										</a>
+									))}
+								</div>
 							) : null}
 						</>
 					) : null}
 				</div>
 			) : (
-				<button
-					type="button"
-					onClick={() => void apply(true)}
-					disabled={!online || !!busy || !!unavailable || query.isLoading}
-					aria-label={startLabel}
-					title={unavailable ? state.error : startLabel}
-					className={controlClass}
-				>
-					{busy === 'start' || query.isLoading ? (
-						<Loader2 size={18} className="animate-spin" />
-					) : state?.running ? (
-						<Globe2 size={18} />
-					) : (
-						<Play size={18} fill="currentColor" />
-					)}
-				</button>
+				<div ref={runControls} className="relative shrink-0">
+					<button
+						type="button"
+						onClick={() => {
+							if (multipleRunConfigs) setRunMenuOpen(value => !value)
+							else void apply(true)
+						}}
+						disabled={!online || !!busy || !!unavailable || query.isLoading}
+						aria-label={startLabel}
+						aria-haspopup={multipleRunConfigs ? 'menu' : undefined}
+						aria-expanded={multipleRunConfigs ? runMenuOpen : undefined}
+						title={unavailable ? state.error : startLabel}
+						className={controlClass}
+					>
+						{busy === 'start' || query.isLoading ? (
+							<Loader2 size={18} className="animate-spin" />
+						) : state?.running ? (
+							<Globe2 size={18} />
+						) : (
+							<Play size={18} fill="currentColor" />
+						)}
+					</button>
+					{runMenuOpen && multipleRunConfigs ? (
+						<div
+							role="menu"
+							aria-label="Run configs"
+							className="fade-in absolute right-0 top-full z-30 mt-1 max-h-[calc(100dvh-4rem)] min-w-44 overflow-y-auto rounded-xl border border-border bg-surface py-1 shadow-xl"
+						>
+							{state?.runConfigs.map(config => (
+								<button
+									key={config.id}
+									type="button"
+									role="menuitem"
+									onClick={() => {
+										setRunMenuOpen(false)
+										void apply(true, config.id)
+									}}
+									className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm active:bg-surface-2"
+								>
+									<Play size={14} className="shrink-0 text-muted" />
+									<span className="min-w-0 flex-1 truncate">{config.name}</span>
+								</button>
+							))}
+						</div>
+					) : null}
+				</div>
 			)}
 			{state?.running || state?.forwarded ? (
 				<button

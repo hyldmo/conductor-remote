@@ -528,7 +528,7 @@ export function useWorkspaceFiles(workspaceId: string | undefined, enabled: bool
 	})
 }
 
-/** The selected Conductor Run task and its configured tailnet-only preview URLs. */
+/** The Conductor Run choices and their configured tailnet-only preview URLs. */
 export function useDevServer(workspaceId: string | undefined) {
 	return useQuery({
 		queryKey: ['dev-server', workspaceId],

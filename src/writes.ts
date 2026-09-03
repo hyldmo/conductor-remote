@@ -1174,21 +1174,28 @@ end tell`.trim()
 }
 
 /**
- * Start or stop the selected workspace Run task through Conductor's own toolbar.
+ * Start one exact workspace Run task, or stop the running one, through Conductor's toolbar.
  *
  * The task stays owned by Conductor — it appears in the Run panel, inherits the
  * repository's run mode and environment, and Conductor performs its normal
- * process-group shutdown. The relay only presses the same Run/Stop button a
- * person would, after focusing and asserting the target workspace.
+ * process-group shutdown. A named start selects that item from Conductor's own
+ * Run menu; an unnamed legacy start proceeds only when the live menu contains one
+ * task. Every path focuses and asserts the target workspace before touching it.
  */
-export async function setRunTask(workspace: Workspace, running: boolean): Promise<RunTaskResult> {
+export async function setRunTask(workspace: Workspace, running: boolean, runTaskName?: string): Promise<RunTaskResult> {
 	if (!focusQuery(workspace)) return { ok: false, error: 'workspace has no branch to focus' }
 	const script = `
 ${CONDUCTOR_HANDLERS}
 
 set wantRunning to (system attribute "RELAY_RUN_WANTED") is "1"
-return my setRunTask(wantRunning)`.trim()
+set wantedTask to do shell script "cat " & quoted form of (system attribute "RELAY_RUN_TASK_FILE")
+return my setRunTask(wantRunning, wantedTask)`.trim()
+	const os = await import('node:os')
+	const fs = await import('node:fs/promises')
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-run-task-'))
+	const taskFile = path.join(directory, 'name')
 	try {
+		await fs.writeFile(taskFile, runTaskName ?? '', 'utf8')
 		const { stdout } = await withTargetEnvironment(
 			{ workspace, sessionId: workspace.active_session_id },
 			targetEnvironment =>
@@ -1197,7 +1204,8 @@ return my setRunTask(wantRunning)`.trim()
 						env: {
 							...process.env,
 							...targetEnvironment,
-							RELAY_RUN_WANTED: running ? '1' : '0'
+							RELAY_RUN_WANTED: running ? '1' : '0',
+							RELAY_RUN_TASK_FILE: taskFile
 						},
 						timeout: SEND_ATTEMPT_MS
 					})
@@ -1212,6 +1220,8 @@ return my setRunTask(wantRunning)`.trim()
 		return { ok: true, state, task, changed: changed === 'true', ports }
 	} catch (err) {
 		return { ok: false, error: osaError(err, 'Conductor took too long to change the Run task') }
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined)
 	}
 }
 
