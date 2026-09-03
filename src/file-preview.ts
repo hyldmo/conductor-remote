@@ -1,6 +1,6 @@
 import os from 'node:os'
 import path from 'node:path'
-import { isPreviewableSource } from './shared.ts'
+import { isPreviewableImage, isPreviewableSource } from './shared.ts'
 
 /** A source location as coding agents write it in Markdown: an absolute path, with an optional line or column. */
 export interface FileReference {
@@ -58,4 +58,11 @@ export function parseFileReference(reference: string): FileReference | null {
 	if (!filePath.startsWith('/')) return null
 	if (!isPreviewableSource(filePath)) return null
 	return { path: filePath, line }
+}
+
+/** Parse an absolute image path supplied to the authenticated local-image route. */
+export function parseImageReference(reference: string): string | null {
+	const filePath = reference.startsWith('~/') ? path.join(os.homedir(), reference.slice(2)) : reference
+	if (!path.isAbsolute(filePath) || !isPreviewableImage(filePath)) return null
+	return filePath
 }

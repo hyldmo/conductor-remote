@@ -8,7 +8,7 @@ import remarkGfm from 'remark-gfm'
 import { attachmentTokens, isPreviewableSource } from '../../../src/shared.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
-import { useFileMention } from '../lib/fileMentions.ts'
+import { useFileMention, useImageReference } from '../lib/fileMentions.ts'
 import { highlightLines, languageForFence, languageForPath } from '../lib/highlight.ts'
 import type { FilePreviewResponse } from '../lib/types.ts'
 import { Code, Tokens } from './Code.tsx'
@@ -17,7 +17,6 @@ import { ViewerHeader } from './ViewerHeader.tsx'
 
 /** Hoisted so the plugin list is one stable prop rather than a new array on every render. */
 const PLUGINS = [remarkGfm, remarkBreaks]
-const TEMP_IMAGE_PREFIX = '/tmp/'
 const ATTACHMENT_HOST = 'conductor-attachment.invalid'
 
 /** Turn a Conductor token into a Markdown link that `ChatLink` renders as a file chip. */
@@ -44,23 +43,45 @@ function attachmentPath(href: string | undefined): string | null {
 	}
 }
 
-/** Fetch temporary agent output through the relay, where the browser can attach its auth header. */
-function ChatImage({ src, alt, ...props }: React.ComponentProps<'img'>) {
-	const temporaryPath = typeof src === 'string' && src.startsWith(TEMP_IMAGE_PREFIX) ? src : null
+function useLocalImage(reference: string | null): { objectUrl: string | null; error: string | null } {
 	const [objectUrl, setObjectUrl] = useState<string | null>(null)
+	const [error, setError] = useState<string | null>(null)
 
 	useEffect(() => {
-		if (!temporaryPath) return
+		setObjectUrl(null)
+		setError(null)
+		if (!reference) return
 		let disposed = false
-		void client.localImage(temporaryPath).then(url => {
-			if (!disposed) setObjectUrl(url)
-		})
+		void client.localImage(reference).then(
+			url => {
+				if (!disposed) setObjectUrl(url)
+			},
+			err => {
+				if (!disposed) setError(err instanceof Error ? err.message : 'Image unavailable')
+			}
+		)
 		return () => {
 			disposed = true
 		}
-	}, [temporaryPath])
+	}, [reference])
 
-	if (temporaryPath) return objectUrl ? <img src={objectUrl} alt={alt ?? ''} {...props} /> : null
+	return { objectUrl, error }
+}
+
+/** Fetch a local Markdown image through the relay, where the browser can attach its auth header. */
+function ChatImage({ src, alt, ...props }: React.ComponentProps<'img'>) {
+	const reference = useImageReference(typeof src === 'string' ? src : null)
+	const { objectUrl, error } = useLocalImage(reference)
+
+	if (reference) {
+		if (error)
+			return (
+				<span className="my-2 block rounded-lg border border-del/30 px-3 py-2 text-xs text-del">
+					{alt || 'Image'} unavailable: {error}
+				</span>
+			)
+		return objectUrl ? <img src={objectUrl} alt={alt ?? ''} {...props} /> : null
+	}
 	return <img src={src} alt={alt ?? ''} {...props} />
 }
 
@@ -78,11 +99,13 @@ export function sourceReference(href: string | undefined): string | null {
  */
 export function ChatLink({ href, children, onClick, ...props }: React.ComponentProps<'a'>) {
 	const attachment = attachmentPath(href)
+	const imageReference = useImageReference(href ?? null)
 	// A link whose href is a path relative to the worktree — `[the helper](src/git.ts)` —
 	// resolves the same way an inline mention does, and for the same reason: followed as a
 	// URL it lands on the PWA's own router and shows the home screen.
 	const mention = useFileMention(href ?? null)
-	const reference = sourceReference(href) ?? mention
+	const source = sourceReference(href) ?? mention
+	const reference = imageReference ?? source
 	const [previewing, setPreviewing] = useState(false)
 	// react-markdown's sanitiser blanks the href of every scheme outside http(s), irc(s),
 	// mailto and xmpp, and an empty href follows to the page you are already on — a tap
@@ -106,6 +129,7 @@ export function ChatLink({ href, children, onClick, ...props }: React.ComponentP
 			<a
 				href={href}
 				{...props}
+				title={imageReference ? `Open image ${imageReference}` : props.title}
 				onClick={event => {
 					onClick?.(event)
 					if (
@@ -124,8 +148,46 @@ export function ChatLink({ href, children, onClick, ...props }: React.ComponentP
 			>
 				{children}
 			</a>
-			{reference && previewing ? <FilePreviewSheet reference={reference} onClose={() => setPreviewing(false)} /> : null}
+			{imageReference && previewing ? (
+				<ImagePreviewSheet reference={imageReference} onClose={() => setPreviewing(false)} />
+			) : source && previewing ? (
+				<FilePreviewSheet reference={source} onClose={() => setPreviewing(false)} />
+			) : null}
 		</>
+	)
+}
+
+function ImagePreviewSheet({ reference, onClose }: { reference: string; onClose: () => void }) {
+	const { objectUrl, error } = useLocalImage(reference)
+
+	useEffect(() => {
+		const closeOnEscape = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') onClose()
+		}
+		window.addEventListener('keydown', closeOnEscape)
+		return () => window.removeEventListener('keydown', closeOnEscape)
+	}, [onClose])
+
+	return createPortal(
+		<>
+			<div className="fixed inset-0 z-[60] bg-black/60" onClick={onClose} aria-hidden />
+			<div
+				role="dialog"
+				aria-modal="true"
+				aria-label="Image preview"
+				className="fade-in pt-safe pb-safe fixed inset-0 z-[60] mx-auto flex flex-col bg-bg md:inset-6 md:rounded-3xl md:border md:border-border-soft"
+			>
+				<ViewerHeader title="Image" subtitle={reference} onClose={onClose} closeLabel="Close image preview" />
+				<div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-black/15 p-3">
+					{!objectUrl && !error ? <Spinner label="Loading image…" /> : null}
+					{error ? <p className="max-w-xs text-center text-sm text-muted">Image unavailable: {error}</p> : null}
+					{objectUrl ? (
+						<img src={objectUrl} alt="" className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" />
+					) : null}
+				</div>
+			</div>
+		</>,
+		document.body
 	)
 }
 

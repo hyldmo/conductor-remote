@@ -78,7 +78,10 @@ export function SessionView() {
 	const { data: workspaceFiles } = useWorkspaceFiles(workspaceId, !!liveWorkspace?.worktree)
 	const worktree = liveWorkspace?.worktree ?? null
 	const files = workspaceFiles?.files
-	const resolveMention = useMemo(() => buildResolver(worktree, files), [worktree, files])
+	const fileReferences = useMemo(
+		() => ({ resolveMention: buildResolver(worktree, files), worktree }),
+		[worktree, files]
+	)
 
 	const sessions = sessionsData?.sessions ?? []
 	const visibleActiveSession =
@@ -265,7 +268,7 @@ export function SessionView() {
 	const diffReview: DiffReviewState = { workspace: ws, query: diffQuery }
 
 	return (
-		<MentionResolverProvider value={resolveMention}>
+		<MentionResolverProvider value={fileReferences}>
 			<div className="flex h-full min-w-0 overflow-hidden">
 				<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
 					<Header

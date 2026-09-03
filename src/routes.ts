@@ -75,7 +75,7 @@ export const routes = {
 	/** Rolling subscription limits, read without a model request from each provider CLI. */
 	planUsage: flat('GET', '/api/usage'),
 	repoIcon: param('GET', '/api/repos/:repo/icon'),
-	/** A temporary image emitted in a chat message, fetched with the phone's auth header. */
+	/** A local image linked in chat Markdown, fetched with the phone's auth header. */
 	localImage: param('GET', '/api/local-images/:path'),
 	/** A source-file preview linked from agent Markdown. */
 	filePreview: param('GET', '/api/files/:reference'),

@@ -1,7 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { isAllowedPreviewPath, parseFileReference } from '../src/file-preview.ts'
+import { isAllowedPreviewPath, parseFileReference, parseImageReference } from '../src/file-preview.ts'
 
 describe('file references', () => {
 	test('parses absolute macOS paths and locations', () => {
@@ -41,6 +41,24 @@ describe('file references', () => {
 		'/Users/hyldmo/file.ts:9007199254740992'
 	])('rejects unsafe or non-file reference %s', reference => {
 		expect(parseFileReference(reference)).toBeNull()
+	})
+})
+
+describe('image references', () => {
+	test('accepts absolute raster paths and expands the current home', () => {
+		expect(parseImageReference('/Users/hyldmo/conductor/workspaces/project/qa/wide.PNG')).toBe(
+			'/Users/hyldmo/conductor/workspaces/project/qa/wide.PNG'
+		)
+		expect(parseImageReference('~/.context/qa/result.webp')).toBe(path.join(os.homedir(), '.context/qa/result.webp'))
+	})
+
+	test.each([
+		'qa/result.png',
+		'/Users/hyldmo/project/qa/result.svg',
+		'/Users/hyldmo/project/qa/result.pdf',
+		'/Users/hyldmo/project/qa/result.png:12'
+	])('rejects non-raster or non-absolute reference %s', reference => {
+		expect(parseImageReference(reference)).toBeNull()
 	})
 })
 

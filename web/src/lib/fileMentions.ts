@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import { isPreviewableSource } from '../../../src/shared.ts'
+import { isPreviewableImage, isPreviewableSource } from '../../../src/shared.ts'
 
 /**
  * Turn a file an agent named in prose into a source link.
@@ -28,6 +28,36 @@ export type ResolveMention = (text: string) => string | null
 
 /** Longer than any path worth linking, and a cheap ceiling on what the regex below sees. */
 const MAX_MENTION_CHARS = 200
+/** Explicit Markdown destinations may be longer than an inline-code mention. */
+const MAX_IMAGE_REFERENCE_CHARS = 1000
+
+/**
+ * Resolve an explicit Markdown image destination against the chat's worktree.
+ *
+ * This intentionally does not consult the git-owned file list: QA images commonly live
+ * in ignored `.context` directories, and the author already made an explicit link or
+ * image rather than merely typing something path-shaped in prose. The relay still
+ * realpaths and authorizes the result before reading a byte.
+ */
+export function resolveImageReference(href: string | null, worktree: string | null): string | null {
+	if (!href || href.length > MAX_IMAGE_REFERENCE_CHARS) return null
+	let decoded: string
+	try {
+		decoded = decodeURIComponent(href)
+	} catch {
+		return null
+	}
+	if (!isPreviewableImage(decoded) || decoded.includes('\0')) return null
+	if (/^[a-z][a-z\d+.-]*:/i.test(decoded) || decoded.startsWith('//')) return null
+	if (decoded.split('/').includes('..')) return null
+	if (decoded.startsWith('/') || decoded.startsWith('~/')) return decoded
+	const relative = decoded.replace(/^(?:\.\/)+/, '')
+	if (!relative) return null
+	// An archived workspace has no worktree to resolve against. Keep classifying the
+	// destination as local so the renderer can show "Image unavailable" instead of
+	// following it into the PWA router and silently landing on Home.
+	return worktree ? `${worktree}/${relative}` : relative
+}
 
 /**
  * The reference `/api/files/:reference` takes, or null.
@@ -101,9 +131,14 @@ function uniqueFile(byName: Map<string, string[]>, mention: string): string | nu
  * has to update past `Markdown`'s `memo`: the file list lands a moment after the first
  * paint, and a context read is the one thing that re-renders a bailed-out subtree.
  */
-const MentionResolver = createContext<ResolveMention | null>(null)
+interface FileReferenceContext {
+	resolveMention: ResolveMention
+	worktree: string | null
+}
 
-export const MentionResolverProvider = MentionResolver.Provider
+const FileReferences = createContext<FileReferenceContext | null>(null)
+
+export const MentionResolverProvider = FileReferences.Provider
 
 /**
  * What a chat outside a live workspace still resolves: absolute paths, which need no file
@@ -115,6 +150,11 @@ const ABSOLUTE_ONLY = buildResolver(null, undefined)
 
 /** The reference an inline code span points at, or null when it is ordinary code. */
 export function useFileMention(text: string | null): string | null {
-	const resolve = useContext(MentionResolver) ?? ABSOLUTE_ONLY
+	const resolve = useContext(FileReferences)?.resolveMention ?? ABSOLUTE_ONLY
 	return text === null ? null : resolve(text)
+}
+
+/** Resolve a Markdown image or image link in the workspace currently on screen. */
+export function useImageReference(href: string | null): string | null {
+	return resolveImageReference(href, useContext(FileReferences)?.worktree ?? null)
 }

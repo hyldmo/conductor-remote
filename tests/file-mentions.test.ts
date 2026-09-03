@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildResolver } from '../web/src/lib/fileMentions.ts'
+import { buildResolver, resolveImageReference } from '../web/src/lib/fileMentions.ts'
 
 /**
  * Which words in a chat become source links (`web/src/lib/fileMentions.ts`).
@@ -77,5 +77,22 @@ describe('a mention the file list cannot answer', () => {
 		const archived = buildResolver(null, undefined)
 		expect(archived('src/git.ts')).toBeNull()
 		expect(archived('/Users/someone/other/app.ts')).toBe('/Users/someone/other/app.ts')
+	})
+})
+
+describe('an explicit Markdown image reference', () => {
+	it('resolves project-relative and absolute raster images', () => {
+		expect(resolveImageReference('./.context/qa/result.png', WORKTREE)).toBe(`${WORKTREE}/.context/qa/result.png`)
+		expect(resolveImageReference('public/painted%20road.webp', WORKTREE)).toBe(`${WORKTREE}/public/painted road.webp`)
+		expect(resolveImageReference('/Users/someone/conductor/workspaces/other/result.JPG', WORKTREE)).toBe(
+			'/Users/someone/conductor/workspaces/other/result.JPG'
+		)
+	})
+
+	it('rejects remote, escaping and executable paths, but still identifies an archived relative image', () => {
+		expect(resolveImageReference('https://example.com/result.png', WORKTREE)).toBeNull()
+		expect(resolveImageReference('../other/result.png', WORKTREE)).toBeNull()
+		expect(resolveImageReference('./result.svg', WORKTREE)).toBeNull()
+		expect(resolveImageReference('./result.png', null)).toBe('result.png')
 	})
 })
