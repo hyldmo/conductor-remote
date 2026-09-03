@@ -8,7 +8,7 @@ import remarkGfm from 'remark-gfm'
 import { attachmentTokens, isPreviewableSource } from '../../../src/shared.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
-import { useFileMention, useImageReference } from '../lib/fileMentions.ts'
+import { useAttachmentReference, useFileMention, useImageReference } from '../lib/fileMentions.ts'
 import { highlightLines, languageForFence, languageForPath } from '../lib/highlight.ts'
 import type { FilePreviewResponse } from '../lib/types.ts'
 import { Code, Tokens } from './Code.tsx'
@@ -99,14 +99,22 @@ export function sourceReference(href: string | undefined): string | null {
  */
 export function ChatLink({ href, children, onClick, ...props }: React.ComponentProps<'a'>) {
 	const attachment = attachmentPath(href)
-	const imageReference = useImageReference(href ?? null)
+	const attachmentPreview = useAttachmentReference(attachment)
+	const linkedImageReference = useImageReference(href ?? null)
+	const imageReference = attachmentPreview?.kind === 'image' ? attachmentPreview.reference : linkedImageReference
 	// A link whose href is a path relative to the worktree — `[the helper](src/git.ts)` —
 	// resolves the same way an inline mention does, and for the same reason: followed as a
 	// URL it lands on the PWA's own router and shows the home screen.
 	const mention = useFileMention(href ?? null)
-	const source = sourceReference(href) ?? mention
+	const source = attachmentPreview?.kind === 'source' ? attachmentPreview.reference : (sourceReference(href) ?? mention)
 	const reference = imageReference ?? source
 	const [previewing, setPreviewing] = useState(false)
+	const preview =
+		imageReference && previewing ? (
+			<ImagePreviewSheet reference={imageReference} onClose={() => setPreviewing(false)} />
+		) : source && previewing ? (
+			<FilePreviewSheet reference={source} onClose={() => setPreviewing(false)} />
+		) : null
 	// react-markdown's sanitiser blanks the href of every scheme outside http(s), irc(s),
 	// mailto and xmpp, and an empty href follows to the page you are already on — a tap
 	// that silently reloads the PWA. It is reachable without anyone writing a bad link:
@@ -115,13 +123,19 @@ export function ChatLink({ href, children, onClick, ...props }: React.ComponentP
 	if (!href) return <span title={props.title}>{children}</span>
 	if (attachment) {
 		return (
-			<span
-				title={attachment}
-				className="inline-flex max-w-full items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 align-baseline text-[0.9em] font-medium text-muted"
-			>
-				<Paperclip size={12} className="shrink-0" />
-				<span className="truncate">{children}</span>
-			</span>
+			<>
+				<button
+					type="button"
+					title={imageReference ? `Open image ${imageReference}` : source ? `Open ${source}` : attachment}
+					disabled={!reference}
+					onClick={() => setPreviewing(true)}
+					className="inline-flex max-w-full items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 align-baseline text-[0.9em] font-medium text-muted transition hover:text-text focus-visible:outline-2 focus-visible:outline-accent active:bg-surface disabled:cursor-default"
+				>
+					<Paperclip size={12} className="shrink-0" />
+					<span className="truncate">{children}</span>
+				</button>
+				{preview}
+			</>
 		)
 	}
 	return (
@@ -148,11 +162,7 @@ export function ChatLink({ href, children, onClick, ...props }: React.ComponentP
 			>
 				{children}
 			</a>
-			{imageReference && previewing ? (
-				<ImagePreviewSheet reference={imageReference} onClose={() => setPreviewing(false)} />
-			) : source && previewing ? (
-				<FilePreviewSheet reference={source} onClose={() => setPreviewing(false)} />
-			) : null}
+			{preview}
 		</>
 	)
 }

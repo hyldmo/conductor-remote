@@ -118,8 +118,8 @@ web/              React PWA (Vite root)
                   identity intact), transcript-actions (where a Fork control may sit), highlight
                   (eleven languages, registered one at a time), fileMentions (turns `src/git.ts`
                   in a message into a source link, worktree file list as the existence check;
-                  explicit raster links also resolve ignored project-relative files, while
-                  absolute and ~ paths pass through for the relay to allow), clipboard (copyText,
+                  explicit raster links and attachment pills also resolve ignored project-relative
+                  files, while absolute and ~ paths pass through for the relay to allow), clipboard (copyText,
                   behind the Copy on a response and on every fenced block)
   src/components/ Header, WorkspaceList, SessionView, Transcript, Markdown + Code, DiffView,
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),

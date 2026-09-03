@@ -28,8 +28,8 @@ export type ResolveMention = (text: string) => string | null
 
 /** Longer than any path worth linking, and a cheap ceiling on what the regex below sees. */
 const MAX_MENTION_CHARS = 200
-/** Explicit Markdown destinations may be longer than an inline-code mention. */
-const MAX_IMAGE_REFERENCE_CHARS = 1000
+/** Explicit Markdown and attachment destinations may be longer than an inline-code mention. */
+const MAX_EXPLICIT_REFERENCE_CHARS = 1000
 
 /**
  * Resolve an explicit Markdown image destination against the chat's worktree.
@@ -40,7 +40,7 @@ const MAX_IMAGE_REFERENCE_CHARS = 1000
  * realpaths and authorizes the result before reading a byte.
  */
 export function resolveImageReference(href: string | null, worktree: string | null): string | null {
-	if (!href || href.length > MAX_IMAGE_REFERENCE_CHARS) return null
+	if (!href || href.length > MAX_EXPLICIT_REFERENCE_CHARS) return null
 	let decoded: string
 	try {
 		decoded = decodeURIComponent(href)
@@ -57,6 +57,30 @@ export function resolveImageReference(href: string | null, worktree: string | nu
 	// destination as local so the renderer can show "Image unavailable" instead of
 	// following it into the PWA router and silently landing on Home.
 	return worktree ? `${worktree}/${relative}` : relative
+}
+
+export interface AttachmentPreviewReference {
+	reference: string
+	kind: 'image' | 'source'
+}
+
+/**
+ * Resolve a Conductor attachment token against the workspace that owns its chat.
+ *
+ * Attachments live in ignored `.context` directories, so they cannot use the git-owned
+ * file list that ordinary prose mentions do. Their token is already an explicit file
+ * reference; validate its exact on-disk shape here, then send it through the same image
+ * or source viewer used by explicit Markdown links.
+ */
+export function resolveAttachmentReference(
+	filePath: string | null,
+	worktree: string | null
+): AttachmentPreviewReference | null {
+	if (!filePath || filePath.length > MAX_EXPLICIT_REFERENCE_CHARS || filePath.includes('\0')) return null
+	if (!/^\.context\/attachments\/[A-Za-z0-9]{6}\/[^/]+$/.test(filePath)) return null
+	const kind = isPreviewableImage(filePath) ? 'image' : isPreviewableSource(filePath) ? 'source' : null
+	if (!kind) return null
+	return { reference: worktree ? `${worktree}/${filePath}` : filePath, kind }
 }
 
 /**
@@ -157,4 +181,9 @@ export function useFileMention(text: string | null): string | null {
 /** Resolve a Markdown image or image link in the workspace currently on screen. */
 export function useImageReference(href: string | null): string | null {
 	return resolveImageReference(href, useContext(FileReferences)?.worktree ?? null)
+}
+
+/** Resolve a parsed attachment token in the workspace currently on screen. */
+export function useAttachmentReference(filePath: string | null): AttachmentPreviewReference | null {
+	return resolveAttachmentReference(filePath, useContext(FileReferences)?.worktree ?? null)
 }
