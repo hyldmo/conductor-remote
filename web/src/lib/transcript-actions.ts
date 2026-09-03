@@ -43,13 +43,12 @@ export function assistantTurnEnds(entries: readonly TranscriptEntry[]): Transcri
  * When the turn holding `target` was dispatched — the origin for how long that answer
  * took.
  *
- * `sessions.turn_started_at` is the better source and is what `dispatched` carries: it
- * reads `queue_order`, so a message typed *into* a running turn (steering) does not
- * restart the clock. Conductor stopped writing that column on 2026-08-31 and every row
- * since is NULL, so on a live chat it arrives null and the user row in front of the
- * response is what is left — which does time from the steer rather than the question.
- * A dispatch at or after the response belongs to a *later* turn, which is every turn
- * but the newest, so it measures nothing about this one.
+ * `sessions.turn_started_at` is the better source and is what `dispatched` carries: the
+ * relay groups current rows by `turn_id`, so a message typed *into* a running turn
+ * (steering) does not restart the clock, with `queue_order` retained for legacy rows.
+ * A row carrying neither still needs the transcript fallback below. A dispatch at or
+ * after the response belongs to a *later* turn, which is every turn but the newest, so
+ * it measures nothing about this one.
  */
 export function turnOrigin(
 	entries: readonly TranscriptEntry[],

@@ -113,7 +113,7 @@ export interface SessionRow {
 	 * before a Claude prompt is large enough to cache).
 	 */
 	prompt_cache_ttl_ms: number | null
-	/** When the turn now in flight was dispatched — see `listSessions`. Null before Conductor's first queued turn. */
+	/** When the latest user-started turn was dispatched — see `listSessions`. Null before the first dispatched prompt. */
 	turn_started_at: string | null
 	/**
 	 * Background tasks this chat is still waiting on — the desktop's "Waiting for task"
@@ -151,15 +151,15 @@ export interface SessionState {
 	/**
 	 * When this chat's most recent *user-started* turn was dispatched (see `listSessions`).
 	 * Unchanged across a turn an agent started for itself, which is how the notifier tells
-	 * "your agent finished" from a loop's eleventh lap. Null on a chat dormant since before
-	 * `queue_order` existed (May 2026).
+	 * "your agent finished" from a loop's eleventh lap. Null only when the chat has no
+	 * dispatched user message that carries either a current `turn_id` or legacy `queue_order`.
 	 */
 	turnStartedAt: string | null
 	/**
 	 * The last thing a person said in this chat, heading a turn or steering one already
-	 * running. `turnStartedAt` misses the second (steering carries no `queue_order`), so
-	 * the notifier watches both — otherwise answering a question mid-turn would read as a
-	 * lap nobody asked for and go unannounced.
+	 * running. `turnStartedAt` deliberately stays at that turn's first message, so the
+	 * notifier watches both — otherwise answering a question mid-turn would read as a lap
+	 * nobody asked for and go unannounced.
 	 */
 	lastUserMessageAt: string | null
 	/** The sidebar title of the owning workspace. */
@@ -190,6 +190,44 @@ export interface Workspace extends WorkspaceRow {
 }
 
 const worktreeCache = new Map<string, string | null>()
+
+/**
+ * The dispatch time of the latest turn a person started.
+ *
+ * Current Conductor writes the same `turn_id` on a turn's first prompt and every
+ * steering message added while it runs, but stopped populating `queue_order` on
+ * 2026-08-31. Start with the latest user row that was actually dispatched (so a prompt
+ * queued behind the current answer cannot take over), then take the first dispatch in
+ * that turn (so steering cannot restart the clock). A self-scheduled `/loop` lap writes
+ * no user row, leaving this value unchanged for the notification deduper.
+ *
+ * The second arm preserves workspaces written by older Conductor builds, where
+ * `queue_order` identified turn heads and `turn_id` may be absent.
+ * `MIN(CASE …)` is deliberate: a plain `MIN(sent_at)` makes SQLite favour the
+ * sent-time index and walk every older turn, while the expression lets the existing
+ * `(session_id, role, turn_id, …)` index jump straight to this turn's few user rows.
+ */
+const TURN_STARTED_AT_SQL = `COALESCE(
+	(SELECT MIN(CASE WHEN head.sent_at IS NOT NULL THEN head.sent_at END)
+	   FROM session_messages head
+	  WHERE head.session_id = s.id
+	    AND head.role = 'user'
+	    AND head.turn_id = (
+	      SELECT latest.turn_id
+	        FROM session_messages latest
+	       WHERE latest.session_id = s.id
+	         AND latest.role = 'user'
+	         AND latest.turn_id IS NOT NULL
+	         AND latest.sent_at IS NOT NULL
+	       ORDER BY latest.sent_at DESC, latest.rowid DESC
+	       LIMIT 1
+	    )),
+	(SELECT MAX(legacy.sent_at)
+	   FROM session_messages legacy
+	  WHERE legacy.session_id = s.id
+	    AND legacy.queue_order IS NOT NULL
+	    AND legacy.sent_at IS NOT NULL)
+)`
 
 /**
  * Neutralize LIKE's own wildcards in a user's search word. `queryTokens` already
@@ -533,18 +571,12 @@ export class Reads {
 	listSessions(workspaceId: string): SessionRow[] {
 		// created_at ASC keeps tab order stable (matches the desktop app) instead of jumping on activity.
 		//
-		// `turn_started_at` is when the current answer began, which is NOT
+		// `turn_started_at` is when the latest user-started turn began, which is NOT
 		// `last_user_message_at`: a message typed while the agent is already working is
 		// *steering* — it joins the running turn rather than starting one, and the phone's
-		// elapsed timer must not restart on it. Conductor separates the two itself.
-		// `session_messages.queue_order` is set exactly on the messages that head a turn
-		// (verified over the whole DB from May 2026, when the column appeared — older rows
-		// are all NULL, so a long-dormant chat reports null here and simply shows no timer),
-		// and `sent_at` is when that head was dispatched, so a prompt that sat in the queue
-		// times from when it actually ran, not from when it was typed. Still-queued heads
-		// have `sent_at` NULL and are skipped, which is why a queued message can't blip the
-		// timer while the previous answer is still going. Served straight off
-		// idx_session_messages_sent_at(session_id, sent_at) — measured free at this poll rate.
+		// elapsed timer must not restart on it. TURN_STARTED_AT_SQL groups those messages
+		// by Conductor's `turn_id`, while retaining `queue_order` for older database rows.
+		// `sent_at` is the dispatch time, so queued messages are excluded until they run.
 		const rows = this.db.query<SessionDbRow>(
 			`SELECT s.id, s.status, s.title, s.model, s.permission_mode,
 			        s.claude_effort_level, s.codex_thinking_level, s.fast_mode, s.agent_type,
@@ -561,8 +593,7 @@ export class Reads {
 			            AND (m.content GLOB '*"ephemeral_5m_input_tokens":[1-9]*'
 			                 OR m.content GLOB '*"ephemeral_1h_input_tokens":[1-9]*')
 			          ORDER BY m.rowid DESC LIMIT 1) AS prompt_cache_ttl_ms,
-			        (SELECT MAX(m.sent_at) FROM session_messages m
-			          WHERE m.session_id = s.id AND m.queue_order IS NOT NULL AND m.sent_at IS NOT NULL) AS turn_started_at
+			        ${TURN_STARTED_AT_SQL} AS turn_started_at
 			 FROM sessions s
 			 WHERE s.workspace_id = ? AND COALESCE(s.is_hidden, 0) = 0
 			 ORDER BY s.created_at ASC`,
@@ -617,14 +648,13 @@ export class Reads {
 			// anything to do with the turn that just ended. An agent that schedules its own
 			// next turn (a `/loop`) writes no message at all, so both stay put while
 			// `status` cycles working → idle on every lap. Both are needed: `turn_started_at`
-			// only moves for a message that *heads* a turn, so steering into a running one
-			// would look like a lap nobody asked for. See src/notify.ts.
+			// stays at the first message when a person steers the running turn, while
+			// `last_user_message_at` moves. See src/notify.ts.
 			`SELECT s.id, s.status, s.title, s.workspace_id, s.last_user_message_at,
 			        w.workspace_name, w.pr_title, w.branch, w.directory_name,
 			        r.name AS repo_name,
 			        (SELECT COUNT(*) FROM sessions t WHERE t.workspace_id = w.id AND COALESCE(t.is_hidden, 0) = 0) AS tab_count,
-			        (SELECT MAX(m.sent_at) FROM session_messages m
-			          WHERE m.session_id = s.id AND m.queue_order IS NOT NULL AND m.sent_at IS NOT NULL) AS turn_started_at
+			        ${TURN_STARTED_AT_SQL} AS turn_started_at
 			 FROM sessions s
 			 JOIN workspaces w ON w.id = s.workspace_id
 			 LEFT JOIN repos r ON r.id = w.repository_id

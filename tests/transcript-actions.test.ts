@@ -80,10 +80,10 @@ describe('per-turn action targets', () => {
 })
 
 /**
- * What the finished turn's duration is measured from. Conductor stopped writing the
- * `queue_order` behind `turn_started_at` on 2026-08-31, so the fallback is not a rare
- * path — it is the only one a live chat takes today, and a duration measured from the
- * wrong end is a plausible-looking number rather than a visible failure.
+ * What the finished turn's duration is measured from. Current rows use `turn_id` and
+ * older rows use `queue_order` behind `turn_started_at`; the transcript remains the
+ * fallback for rows carrying neither. A duration measured from the wrong end is a
+ * plausible-looking number rather than a visible failure.
  */
 describe('turn origin', () => {
 	const asked = entry('user', 'question', 1, '2026-09-01T12:00:00.000Z')
