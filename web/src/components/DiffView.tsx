@@ -1,24 +1,25 @@
-import { useId } from 'react'
+import { useId, useRef } from 'react'
 import { useDiff, useWorkspaces } from '../hooks.ts'
 import { MergeBanner } from './MergeBanner.tsx'
 import { Patch, scrollToPatchFile } from './Patch.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
 export function DiffView({ workspaceId, sessionId }: { workspaceId: string; sessionId?: string | null }) {
+	const scroller = useRef<HTMLDivElement>(null)
 	const { data: state } = useWorkspaces()
 	const ws = state?.workspaces.find(w => w.id === workspaceId)
 	// Shares react-query's cache with DiffBody's useDiff (same key) — one fetch, no double request.
 	const { data: diff } = useDiff(workspaceId, true)
 	const local = diff ? { dirty: diff.dirty, unpushed: diff.unpushed } : undefined
 	return (
-		<div className="pb-safe flex flex-1 flex-col overflow-y-auto">
+		<div ref={scroller} className="pb-safe min-h-0 flex flex-1 flex-col overflow-y-auto overscroll-contain">
 			{ws ? <MergeBanner ws={ws} local={local} sessionId={sessionId} /> : null}
-			<DiffBody workspaceId={workspaceId} />
+			<DiffBody workspaceId={workspaceId} scrollToFile={anchorId => scrollToPatchFile(anchorId, scroller.current)} />
 		</div>
 	)
 }
 
-function DiffBody({ workspaceId }: { workspaceId: string }) {
+function DiffBody({ workspaceId, scrollToFile }: { workspaceId: string; scrollToFile: (anchorId: string) => void }) {
 	const { data, isLoading, isError, error } = useDiff(workspaceId, true)
 	const anchorPrefix = useId()
 
@@ -47,7 +48,7 @@ function DiffBody({ workspaceId }: { workspaceId: string }) {
 					<li key={f.path} className="col-span-3 grid grid-cols-subgrid items-center">
 						<button
 							type="button"
-							onClick={() => scrollToPatchFile(fileAnchorIds[index])}
+							onClick={() => scrollToFile(fileAnchorIds[index])}
 							aria-controls={fileAnchorIds[index]}
 							className="col-span-3 grid min-w-0 grid-cols-subgrid items-center rounded-sm py-0.5 text-left transition hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent active:bg-surface-2"
 						>
