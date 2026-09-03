@@ -162,7 +162,7 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 							<Cta
 								onClick={runMerge}
 								busy={busy}
-								className={action === 'merge' ? 'bg-add text-black' : 'bg-working text-black'}
+								className={action === 'merge' ? 'bg-add text-on-solid' : 'bg-working text-on-solid'}
 							>
 								Confirm
 							</Cta>
@@ -170,14 +170,14 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 					) : (
 						<Cta
 							onClick={() => setConfirming(true)}
-							className={action === 'merge' ? 'bg-add text-black' : 'border border-border bg-surface-2 text-text'}
+							className={action === 'merge' ? 'bg-add text-on-solid' : 'border border-border bg-surface-2 text-text'}
 						>
 							<GitMerge size={13} />
 							Merge
 						</Cta>
 					)
 				) : action === 'push' ? (
-					<Cta onClick={() => sendMessage('push')} busy={busy} className="bg-working text-black">
+					<Cta onClick={() => sendMessage('push')} busy={busy} className="bg-working text-on-solid">
 						Commit &amp; push
 					</Cta>
 				) : action === 'resolve' ? (

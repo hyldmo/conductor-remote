@@ -130,7 +130,7 @@ export function WorkspaceMenu({ workspace, agentsRunning }: { workspace: Workspa
 									<button
 										type="button"
 										onClick={archive}
-										className="rounded-lg bg-del px-2.5 py-1 text-xs font-semibold text-black active:scale-95"
+										className="rounded-lg bg-del px-2.5 py-1 text-xs font-semibold text-on-solid active:scale-95"
 									>
 										{agentsRunning > 0 ? 'Stop agents and archive' : 'Archive'}
 									</button>

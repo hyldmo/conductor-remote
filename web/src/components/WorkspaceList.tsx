@@ -495,7 +495,7 @@ function ViewSelect({
 			id={id}
 			value={value}
 			onChange={e => onChange(e.target.value)}
-			className="max-w-36 truncate rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-sm text-text [color-scheme:dark]"
+			className="max-w-36 truncate rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
 		>
 			{options.map(([v, label]) => (
 				<option key={v} value={v}>

@@ -1,10 +1,11 @@
-import { Bell, Check, Copy, LogOut, RotateCcw, Sun, Wifi, X } from 'lucide-react'
+import { Bell, Check, Copy, LogOut, RotateCcw, Sun, SunMoon, Wifi, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { usePush } from '../hooks.ts'
 import { ApiError, client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { isLockedError } from '../lib/lock.ts'
+import { readThemePreference, type ThemePreference, writeThemePreference } from '../lib/theme.ts'
 import type { SettingsResponse } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { QRCode } from './QRCode.tsx'
@@ -119,7 +120,7 @@ export function ConnectSheet({
 							<button
 								type="button"
 								onClick={() => setToken(null)}
-								className="flex-1 rounded-lg bg-del px-3 py-2 text-sm font-semibold text-black active:opacity-80"
+								className="flex-1 rounded-lg bg-del px-3 py-2 text-sm font-semibold text-on-solid active:opacity-80"
 							>
 								Disconnect
 							</button>
@@ -141,6 +142,7 @@ export function ConnectSheet({
 						{copied ? <Check size={16} /> : <Copy size={16} />}
 						{copied ? 'Copied' : 'Copy link'}
 					</button>
+					<ThemeRow />
 					<NotificationsRow />
 					<MacRow />
 					<div className="flex w-full items-center justify-between text-xs text-faint">
@@ -158,6 +160,50 @@ export function ConnectSheet({
 			</div>
 		</>,
 		document.body
+	)
+}
+
+const THEMES: [ThemePreference, string][] = [
+	['system', 'System'],
+	['light', 'Light'],
+	['dark', 'Dark']
+]
+
+/** This device's appearance; it stays local rather than following another connected phone. */
+function ThemeRow() {
+	const [theme, setTheme] = useState(readThemePreference)
+	const choose = (next: ThemePreference) => {
+		setTheme(next)
+		writeThemePreference(next)
+	}
+
+	return (
+		<div className="w-full shrink-0 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
+			<fieldset className="flex w-full items-center justify-between gap-3 border-0 p-0">
+				<legend className="sr-only">Theme</legend>
+				<div className="flex min-w-0 items-center gap-2 text-sm">
+					<SunMoon size={16} className="shrink-0 text-muted" />
+					<span>Theme</span>
+				</div>
+				<div className="flex shrink-0 rounded-lg border border-border bg-surface p-0.5">
+					{THEMES.map(([value, label]) => (
+						<button
+							key={value}
+							type="button"
+							aria-pressed={theme === value}
+							onClick={() => choose(value)}
+							className={cn(
+								'rounded-md px-2 py-1 text-xs transition focus-visible:outline-2 focus-visible:outline-accent',
+								theme === value ? 'bg-accent-soft text-accent' : 'text-muted active:bg-surface-2'
+							)}
+						>
+							{label}
+						</button>
+					))}
+				</div>
+			</fieldset>
+			<p className="mt-1 text-xs text-muted">System follows this device’s appearance.</p>
+		</div>
 	)
 }
 
@@ -495,7 +541,7 @@ function MacRow() {
 								type="button"
 								disabled={busy}
 								onClick={() => void doRestart(restart === 'agents')}
-								className="flex-1 rounded-lg bg-del px-3 py-2 text-sm font-semibold text-black active:opacity-80 disabled:opacity-50"
+								className="flex-1 rounded-lg bg-del px-3 py-2 text-sm font-semibold text-on-solid active:opacity-80 disabled:opacity-50"
 							>
 								{busy ? 'Restarting…' : restart === 'agents' ? 'Stop agents and restart' : 'Restart'}
 							</button>

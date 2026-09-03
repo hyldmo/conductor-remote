@@ -16,13 +16,12 @@ const PROVIDER_MARKS = {
 /**
  * Claude's is the package's own `claude-color.svg` rather than a colour picked by eye.
  * The other three ship no `-color.svg` at all — every path in them is
- * `fill="currentColor"` — so OpenAI's white is a choice, not a brand value, and it holds
- * only because this app has no light theme. `cursor` and `opencode` stay whatever the
- * surface around them is.
+ * `fill="currentColor"`. OpenAI uses the theme's contrasting ink; `cursor` and
+ * `opencode` stay whatever the surface around them is.
  */
 const PROVIDER_COLORS: Partial<Record<AgentProvider, string>> = {
 	claude: '#D97757',
-	openai: '#FFF'
+	openai: 'var(--color-provider-openai)'
 }
 
 /** The active agent's recognizable brand mark; unknown harnesses retain a neutral fallback. */
