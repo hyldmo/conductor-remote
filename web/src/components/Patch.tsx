@@ -41,9 +41,13 @@ export function Patch({
 	)
 }
 
-/** Keep hash/history untouched: file rows navigate only inside the open diff panel. */
-export function scrollToPatchFile(anchorId: string): void {
-	document.getElementById(anchorId)?.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' })
+/** Keep hash/history and every ancestor scroller untouched: move only the open diff panel. */
+export function scrollToPatchFile(anchorId: string, scroller: HTMLElement | null): void {
+	const anchor = document.getElementById(anchorId)
+	if (!anchor || !scroller?.contains(anchor)) return
+
+	const top = scroller.scrollTop + anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+	scroller.scrollTo({ behavior: 'smooth', top })
 }
 
 function lineClass(line: string): string {

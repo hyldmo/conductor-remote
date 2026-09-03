@@ -21,14 +21,27 @@ describe('diff file navigation', () => {
 		expect(html.indexOf('id="diff-file-0"')).toBeLessThan(html.indexOf('id="diff-file-1"'))
 	})
 
-	it('smoothly brings the selected file to the top of the panel', () => {
+	it('smoothly scrolls only the diff panel to the selected file', () => {
 		const scrollIntoView = vi.fn()
-		const getElementById = vi.fn(() => ({ scrollIntoView }))
+		const anchor = {
+			getBoundingClientRect: () => ({ top: 640 }),
+			scrollIntoView
+		}
+		const scrollTo = vi.fn()
+		const panel = {
+			contains: vi.fn(() => true),
+			getBoundingClientRect: () => ({ top: 140 }),
+			scrollTo,
+			scrollTop: 120
+		}
+		const getElementById = vi.fn(() => anchor)
 		vi.stubGlobal('document', { getElementById })
 
-		scrollToPatchFile('diff-file-1')
+		scrollToPatchFile('diff-file-1', panel as unknown as HTMLElement)
 
 		expect(getElementById).toHaveBeenCalledWith('diff-file-1')
-		expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start', inline: 'nearest' })
+		expect(panel.contains).toHaveBeenCalledWith(anchor)
+		expect(scrollTo).toHaveBeenCalledWith({ behavior: 'smooth', top: 620 })
+		expect(scrollIntoView).not.toHaveBeenCalled()
 	})
 })
