@@ -172,7 +172,10 @@ export interface SessionsResponse {
 
 /** GET /api/sessions/:id/messages?after= — `cursor` feeds the next poll. */
 export interface MessagesResponse {
+	/** Newly persisted transcript rows after the requested rowid cursor. */
 	entries: TranscriptEntry[]
+	/** Full current snapshot of Conductor's queue-mode message outbox. */
+	queued?: TranscriptEntry[]
 	cursor: number
 }
 

@@ -48,7 +48,7 @@ import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './p
 import { PlanUsageService } from './plan-usage.ts'
 import { attachPrStatus } from './pr.ts'
 import { readPrefs, writePrefs } from './prefs.ts'
-import { Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
+import { type DeliveryCursor, Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
 import { isRoute, routeParam, routes } from './routes.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
 import { SendOnce } from './sendonce.ts'
@@ -156,22 +156,21 @@ setRestartGuard(() => !reads.listWorkspaces().some(w => w.session_status === 'wo
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
- * Has the prompt shown up as a user row yet? The receipt everything below is built
- * on. The AppleScript actuator reports `ok` on `osascript` exit 0 — which only
+ * Has Conductor taken ownership of the prompt yet? The receipt everything below is
+ * built on. The AppleScript actuator reports `ok` on `osascript` exit 0 — which only
  * means the script *ran*, not that Conductor accepted the keystrokes — so without
- * this a dropped send (asleep/unfocused Mac) looks delivered. A queued prompt still
- * writes a user row, so it counts as delivered.
+ * this a dropped send (asleep/unfocused Mac) looks delivered. A prompt accepted into
+ * Conductor's durable outbox also counts, before it becomes a transcript row.
  */
-function deliveredSince(sessionId: string, text: string, sinceRowid: number): boolean {
-	const target = text.trim()
-	const { entries } = reads.getMessages(sessionId, sinceRowid)
-	return entries.some(e => e.role === 'user' && e.text.trim() === target)
+function deliveredSince(sessionId: string, text: string, since: DeliveryCursor): boolean {
+	return reads.promptDeliveredSince(sessionId, text, since)
 }
 
 /**
  * Watch for that row, ending on a check rather than a sleep, and never past
- * `budgetDeadline`. Conductor writes the row right after the send presses Enter, so
- * a real send is confirmed in a tick and only the failure path waits the window out.
+ * `budgetDeadline`. Conductor records the row or outbox item right after the send
+ * presses Enter, so a real send is confirmed in a tick and only the failure path
+ * waits the window out.
  *
  * The window is *also* what makes a retry safe — it is deliberately longer than the
  * row takes to appear, because everything past it is allowed to type into the
@@ -183,12 +182,12 @@ function deliveredSince(sessionId: string, text: string, sinceRowid: number): bo
 async function confirmDelivery(
 	sessionId: string,
 	text: string,
-	sinceRowid: number,
+	since: DeliveryCursor,
 	budgetDeadline: number
 ): Promise<boolean> {
 	const stopAt = Math.min(Date.now() + CONFIRM_WINDOW_MS, budgetDeadline)
 	for (;;) {
-		if (deliveredSince(sessionId, text, sinceRowid)) return true
+		if (deliveredSince(sessionId, text, since)) return true
 		if (Date.now() >= stopAt) return false
 		await sleep(300)
 	}
@@ -322,9 +321,10 @@ async function deliverPrompt(
 ): Promise<SendResult & { attempts: number }> {
 	const located = locateChat(ws, sessionId)
 	if ('error' in located) return { ok: false, strategy: actuator.name, attempts: 0, error: located.error }
-	// Snapshot the cursor once: every check below asks "did *this* prompt arrive since
-	// we started", so a retry can't be fooled by an older identical prompt.
-	const beforeRowid = reads.getMessages(sessionId).cursor
+	// Snapshot the transcript cursor and outbox ids once: every check below asks "did
+	// *this* prompt arrive since we started", so a retry can't be fooled by an older
+	// identical prompt moving from the outbox into a new transcript row.
+	const before = reads.deliveryCursor(sessionId)
 	const label = ws.branch ?? ws.id
 	const deadline = Date.now() + budgetMs
 	let attempts = 0
@@ -344,8 +344,8 @@ async function deliverPrompt(
 		// an *earlier* attempt's row can be arriving, and typing again over that is the
 		// duplicate this whole path exists to avoid.
 		const landed = sendNeverStarted(last.error)
-			? deliveredSince(sessionId, text, beforeRowid)
-			: await confirmDelivery(sessionId, text, beforeRowid, deadline)
+			? deliveredSince(sessionId, text, before)
+			: await confirmDelivery(sessionId, text, before, deadline)
 		if (landed) {
 			if (attempts > 1) console.info(`[relay] send to ${label} landed on attempt ${attempts}`)
 			return { ok: true, strategy: last.strategy, attempts }

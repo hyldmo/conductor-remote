@@ -416,7 +416,12 @@ const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
 		// one — an optimistic send and the relay's queued prompt are your messages too, and
 		// they're exactly the ones you scroll back to check on.
 		return (
-			<div className="flex flex-col items-end gap-0.5" data-user-msg={messagePreview(e.text)} data-msg-ts={e.ts}>
+			<div
+				className="flex flex-col items-end gap-0.5"
+				data-user-msg={messagePreview(e.text)}
+				data-msg-ts={e.ts}
+				data-msg-state={e.queued ? 'queued' : undefined}
+			>
 				<Bubble className={cn('max-w-[85%] bg-accent-soft text-text', e.queued && 'opacity-60')}>
 					{e.queued ? <Label>queued</Label> : null}
 					<Markdown>{e.text}</Markdown>

@@ -145,6 +145,8 @@ auth:"local"}`.
 
 Key read facts: `workspaces.state='ready'` = live; `sessions.status` ∈
 {working, idle, error}; `session_messages.content` is Claude Code SDK stream JSON
-for assistant/system rows and plain text for user prompts; `queue_order` set +
-`sent_at` null = queued-unsent; worktrees at
+for assistant/system rows and plain text for dispatched user prompts; current
+queued prompts live in `session_messages_outbox` (`mode='queue'`, text inside
+`delivery_payload.message`) and move into `session_messages` only when dispatched;
+the old `queue_order` set + `sent_at` null shape is legacy compatibility; worktrees at
 `<workspacesRoot>/<repo.name>/<directory_name>`.

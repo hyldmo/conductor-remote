@@ -47,3 +47,19 @@ export function mergeEntries(
 	}
 	return next
 }
+
+/**
+ * Append the current outbox snapshot to durable transcript rows.
+ *
+ * The snapshot is replaced on every poll rather than merged: an outbox row vanishes
+ * when it is dispatched or cancelled. A dispatch can straddle the two SQLite reads,
+ * so prefer the durable row when both snapshots briefly carry the same message id.
+ */
+export function withQueuedEntries(
+	entries: readonly TranscriptEntry[],
+	queued: readonly TranscriptEntry[]
+): TranscriptEntry[] {
+	if (!queued.length) return [...entries]
+	const durableIds = new Set(entries.map(entry => entry.id))
+	return [...entries, ...queued.filter(entry => !durableIds.has(entry.id))]
+}

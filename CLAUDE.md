@@ -39,6 +39,20 @@ Two asymmetric halves — keep them separate:
     ever writing Conductor's database. The session view marks *only*
     the chat on screen (a sibling tab's badge isn't ours to clear) and only while
     the page is visible.
+  - **A queued prompt no longer has a `session_messages` row.** Conductor migration
+    123 (installed here 2026-08-31) moved accepted-but-undispatched prompts into
+    `session_messages_outbox`: `mode='queue'`, ordering in `queue_order`, and the
+    text in `delivery_payload.message`. On dispatch the outbox row is deleted and a
+    `session_messages` row with the same message id appears, already carrying
+    `sent_at`; the old in-row `queue_order != NULL AND sent_at IS NULL` shape is now
+    only a compatibility path for older Conductor builds. `reads.getMessages`
+    therefore returns two asymmetric pieces: cursor-appended durable entries and a
+    full queued snapshot. The PWA replaces that snapshot on every poll (merging it
+    would leave cancelled/dispatched bubbles behind) and prefers the durable row if
+    a dispatch straddles the two reads. The same source is a send receipt: before a
+    UI send, `deliveryCursor` atomically snapshots both the transcript rowid and the
+    existing outbox ids, so a newly accepted prompt ends the relay's retry loop while
+    an older identical queued prompt cannot impersonate it as it moves tables.
   - **"How long has this answer been running" is not `last_user_message_at`.**
     That column moves on **every** user message, including one typed *into* a
     running turn — steering — so the chat's elapsed timer would restart mid-answer
