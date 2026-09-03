@@ -1,9 +1,20 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowUpRight, Check, GitMerge, Loader2, UploadCloud, XCircle } from 'lucide-react'
+import {
+	AlertTriangle,
+	ArrowUpRight,
+	Check,
+	GitBranchPlus,
+	GitMerge,
+	Loader2,
+	UploadCloud,
+	XCircle
+} from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { isLockedError } from '../lib/lock.ts'
 import type { Workspace } from '../lib/types.ts'
+import { UnlockLink } from './ui.tsx'
 
 /** Local publish state from the diff endpoint — decides "Commit & push". */
 interface LocalState {
@@ -25,11 +36,12 @@ interface LocalState {
  *    draft doesn't, and it is here at all because the bar used to vanish on this
  *    state and take the #NN link with it.
  *  - draft   → PR isn't ready; shown, no action
- *  - merged  → the PR landed; shown purple, no action, purely to keep the #NN
- *    link reachable. The bar used to vanish on merge, which took the only route
- *    to the PR on the phone with it — and merged is exactly when you want to go
- *    read it.
- * `push`/`resolve` just send a chat message (like Conductor); `merge` acts.
+ *  - merged  → the PR landed; shown purple, with Continue to move the same
+ *    workspace and chats onto a fresh branch. It also keeps the #NN link
+ *    reachable — the bar used to vanish on merge, which took the only route to
+ *    the PR on the phone with it.
+ * `push`/`resolve` send a chat message (like Conductor); `merge` acts on GitHub;
+ * `merged` delegates the branch transition to Conductor's native Continue.
  */
 type Action = 'push' | 'resolve' | 'merge' | 'checks' | 'failed' | 'draft' | 'merged'
 
@@ -75,16 +87,24 @@ const PROMPT: Record<'push' | 'resolve', string> = {
  * Conductor's merge/resolve/commit bar, on the phone. Renders above the diff and
  * swaps its action by state. Nothing to do (no PR, clean, nothing to push) → no bar.
  */
-export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }) {
+export function MergeBanner({
+	ws,
+	local,
+	sessionId
+}: {
+	ws: Workspace
+	local?: LocalState
+	sessionId?: string | null
+}) {
 	const queryClient = useQueryClient()
 	const [confirming, setConfirming] = useState(false)
 	const [busy, setBusy] = useState(false)
-	const [done, setDone] = useState<{ ok: boolean; msg: string } | null>(null)
+	const [done, setDone] = useState<{ ok: boolean; msg: string; continued?: boolean } | null>(null)
 
-	// The local "Merged" receipt only has to cover the gap until `pr_status` catches
-	// up (the PR cache is up to 60s stale); after that the purple bar says the same
-	// thing and carries the link, so let it take over.
-	if (done?.ok && ws.pr_status !== 'merged')
+	// A local success receipt covers the state-poll gap. After a merge, the purple
+	// bar says the same thing and takes over; after Continue changes the branch, the
+	// green receipt remains because that branch no longer owns the merged PR.
+	if (done?.ok && (done.continued || ws.pr_status !== 'merged'))
 		return (
 			<Bar>
 				<Check size={15} className="shrink-0 text-add" />
@@ -96,7 +116,7 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 	if (!action) return null
 	const { label, tone, icon } = STATUS[action]
 
-	// merge acts on GitHub; push/resolve just message the agent.
+	// Merge acts on GitHub; Continue acts in Conductor; push/resolve message the agent.
 	const runMerge = async () => {
 		setBusy(true)
 		setDone(null)
@@ -113,6 +133,29 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 		} catch (err) {
 			setDone({ ok: false, msg: err instanceof Error ? err.message : String(err) })
 			setConfirming(false)
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	const runContinue = async () => {
+		setBusy(true)
+		setDone(null)
+		try {
+			const r = await client.continueWorkspace(ws.id, sessionId)
+			if (r.ok) {
+				setDone({
+					ok: true,
+					msg: r.workspace?.branch ? `Continued on ${r.workspace.branch}` : 'Continued on a new branch',
+					continued: true
+				})
+				queryClient.invalidateQueries({ queryKey: ['state'] })
+				queryClient.invalidateQueries({ queryKey: ['diff', ws.id] })
+			} else {
+				setDone({ ok: false, msg: r.error || 'Could not continue this workspace' })
+			}
+		} catch (err) {
+			setDone({ ok: false, msg: err instanceof Error ? err.message : String(err) })
 		} finally {
 			setBusy(false)
 		}
@@ -154,7 +197,12 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 			</span>
 
 			<div className="ml-auto flex shrink-0 items-center gap-2">
-				{done && !done.ok ? <span className="max-w-36 truncate text-[11px] text-del">{done.msg}</span> : null}
+				{done && !done.ok ? (
+					<>
+						<span className="max-w-36 truncate text-[11px] text-del">{done.msg}</span>
+						{isLockedError(done.msg) ? <UnlockLink className="shrink-0 text-[11px]" /> : null}
+					</>
+				) : null}
 				{action === 'merge' || action === 'checks' ? (
 					confirming ? (
 						<>
@@ -188,6 +236,16 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 					>
 						Resolve
 					</Cta>
+				) : action === 'merged' ? (
+					<Cta
+						onClick={runContinue}
+						busy={busy}
+						title="Continue on a new branch with the same chats"
+						className="border border-pr-merged/30 bg-surface-2 text-pr-merged"
+					>
+						<GitBranchPlus size={13} />
+						Continue
+					</Cta>
 				) : null}
 			</div>
 		</Bar>
@@ -197,11 +255,13 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 function Cta({
 	onClick,
 	busy,
+	title,
 	className,
 	children
 }: {
 	onClick: () => void
 	busy?: boolean
+	title?: string
 	className?: string
 	children: ReactNode
 }) {
@@ -210,6 +270,7 @@ function Cta({
 			type="button"
 			onClick={onClick}
 			disabled={busy}
+			title={title}
 			className={cn(
 				'flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition active:scale-95 disabled:opacity-60',
 				className

@@ -895,6 +895,47 @@ return "ok"`.trim()
 }
 
 /**
+ * Continue a merged workspace on a new branch through Conductor's own Continue
+ * button. This deliberately does not perform `git checkout` itself: the native
+ * action also updates Conductor's workspace identity, preserves the existing
+ * sessions, clears the merged PR metadata, and stages its Branch continued.md
+ * context in the selected chat. Reproducing only the git half would leave the DB
+ * and UI describing the branch we just moved away from; writing the DB is forbidden.
+ *
+ * The exact chat matters even though every chat survives. Conductor attaches the
+ * continuation note to the selected one, so the target carries the phone's current
+ * session and `selectChatTab` asserts it before the button is found. The button is
+ * available only in Conductor's merged action bar; an absent or ambiguous control
+ * fails closed. server.ts confirms success from the resulting branch change.
+ */
+export async function continueWorkspace(target: SendTarget): Promise<SendResult> {
+	if (!target.workspace.branch) {
+		return { ok: false, strategy: 'applescript', error: 'workspace has no branch to focus' }
+	}
+	const script = `
+${CONDUCTOR_HANDLERS}
+
+my activateConductor()
+my focusWorkspace()
+my selectChatTab()
+my continueWorkspaceOnNewBranch()
+return "ok"`.trim()
+	try {
+		await withTargetEnvironment(target, targetEnvironment =>
+			uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: { ...process.env, ...targetEnvironment },
+					timeout: SEND_ATTEMPT_MS
+				})
+			)
+		)
+		return { ok: true, strategy: 'applescript' }
+	} catch (err) {
+		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	}
+}
+
+/**
  * Quit Conductor and start it again because the phone asked — the one write here
  * whose subject is the app rather than anything inside it.
  *

@@ -306,7 +306,7 @@ export function SessionView() {
 					/>
 				</div>
 
-				{diffOpen ? <DiffPanel workspaceId={ws.id} onClose={() => setDiffOpen(false)} /> : null}
+				{diffOpen ? <DiffPanel workspaceId={ws.id} sessionId={sessionId} onClose={() => setDiffOpen(false)} /> : null}
 			</div>
 		</MentionResolverProvider>
 	)
@@ -459,7 +459,15 @@ function ContextPercent({ used }: { used: number | null }) {
 }
 
 /** Diff as a side panel: static right column on lg+, full-screen overlay below that. */
-function DiffPanel({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }) {
+function DiffPanel({
+	workspaceId,
+	sessionId,
+	onClose
+}: {
+	workspaceId: string
+	sessionId: string | null
+	onClose: () => void
+}) {
 	return (
 		<aside className="fixed inset-0 z-40 flex flex-col bg-bg lg:static lg:z-auto lg:w-[380px] lg:shrink-0 lg:border-l lg:border-border-soft xl:w-[460px]">
 			<header className="pt-safe flex items-center gap-2 border-b border-border-soft px-3 pb-2.5">
@@ -473,7 +481,7 @@ function DiffPanel({ workspaceId, onClose }: { workspaceId: string; onClose: () 
 					<X size={20} />
 				</button>
 			</header>
-			<DiffView workspaceId={workspaceId} />
+			<DiffView workspaceId={workspaceId} sessionId={sessionId} />
 		</aside>
 	)
 }

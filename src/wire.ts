@@ -339,6 +339,16 @@ export interface NewChatResult {
 	error?: string
 }
 
+/** POST /api/workspaces/:id/continue — the same workspace and chats, now on a fresh branch. */
+export interface ContinueWorkspaceResult {
+	ok: boolean
+	/** The branch Conductor moved away from. */
+	previousBranch?: string
+	/** Re-read only after Conductor recorded the new branch. */
+	workspace?: Workspace
+	error?: string
+}
+
 /** POST /api/workspaces/:id/status — the workspace re-read *after* Conductor recorded it. */
 export interface StatusResult {
 	ok: boolean

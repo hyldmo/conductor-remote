@@ -36,6 +36,7 @@ describe('the merge bar', () => {
 		const html = render('mergeable')
 		expect(html).toContain('Ready to merge')
 		expect(html).toContain('>Merge<')
+		expect(html).not.toContain('>Continue<')
 	})
 
 	it('says CI is running, and still lets the merge through', () => {
@@ -51,6 +52,14 @@ describe('the merge bar', () => {
 		expect(html).toContain('https://github.com/o/r/pull/12')
 		// No merge, and no Resolve either: a failed check is not a conflict.
 		expect(html).not.toContain('<button')
+	})
+
+	it('offers the same-workspace continuation after merge', () => {
+		const html = render('merged')
+		expect(html).toContain('Merged')
+		expect(html).toContain('>Continue<')
+		expect(html).toContain('Continue on a new branch with the same chats')
+		expect(html).toContain('https://github.com/o/r/pull/12')
 	})
 
 	it('draws nothing when there is no PR and nothing to push', () => {

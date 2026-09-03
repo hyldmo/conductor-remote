@@ -8,6 +8,7 @@ import type {
 	AgentResult,
 	ArchiveResult,
 	CloseChatResult,
+	ContinueWorkspaceResult,
 	CreateWorkspaceResult,
 	DefaultModelResult,
 	DevServerResult,
@@ -106,6 +107,9 @@ export class ApiError extends Error {
 // "Sending…" bubble rather than blocking the UI.
 const POLL_TIMEOUT_MS = 6000
 const ACTION_TIMEOUT_MS = 45000
+// Continue can fetch the merged PR's base before it checks out a fresh branch.
+// Its UI press returns immediately, so the relay waits on the DB for the real receipt.
+const CONTINUE_TIMEOUT_MS = 75000
 const SEND_TIMEOUT_MS = 75000
 // A cold Run action can spend 28s in Accessibility, 15s waiting for the
 // workspace port, then configure Tailscale Serve. Keep the phone alive through
@@ -426,6 +430,13 @@ export const client = {
 	/** Merge the workspace's open PR — `gh pr merge`, like Conductor's Merge button. */
 	merge: (workspaceId: string) =>
 		api<MergeResult>(routes.merge.path(workspaceId), { method: routes.merge.method }, ACTION_TIMEOUT_MS),
+	/** Continue a merged workspace on a fresh branch while preserving its chats. */
+	continueWorkspace: (workspaceId: string, sessionId?: string | null) =>
+		api<ContinueWorkspaceResult>(
+			routes.continueWorkspace.path(workspaceId),
+			{ method: routes.continueWorkspace.method, body: JSON.stringify({ sessionId }) },
+			CONTINUE_TIMEOUT_MS
+		),
 
 	/** Move the workspace between the sidebar's status groups (Conductor's "Set status"). */
 	setStatus: (workspaceId: string, status: string) =>

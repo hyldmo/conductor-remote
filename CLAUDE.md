@@ -641,6 +641,27 @@ Two asymmetric halves — keep them separate:
     stop lands in ~3s, the neighbouring chat in the same workspace keeps working,
     and the composer's draft survives the chord untouched.
 
+    **Continuing after merge** (`continueWorkspace`,
+    `POST /api/workspaces/:id/continue`) must be Conductor's own action, not a git
+    checkout wearing the same label. Its merged action bar's exact **Continue**
+    button ("Continue on a new branch with the same chats") keeps the workspace id,
+    worktree and every session id, creates a unique branch at the merged PR's base,
+    clears the old PR metadata, and stages **Branch continued.md** in the selected
+    chat. The bundled frontend ultimately records the identity change with
+    `UPDATE workspaces SET branch = ?, placeholder_branch_name = ?, pr_title = NULL,
+    pr_description = NULL WHERE id = ?`; the relay must never perform that write
+    itself, and changing only git would leave Conductor's cached and durable state
+    describing the old branch. So the phone passes the chat it is showing, the AX
+    path focuses and asserts that tab, and then finds an exact-name Continue button
+    at the shallowest bounded level of the web area. Shallowest is load-bearing: the
+    transcript hangs off the same root and can contain controls of its own; zero or
+    several hits refuses rather than guesses. AXPress is only acceptance — the
+    native checkout/fetch continues asynchronously — so `server.ts` waits for the
+    read-only `workspaces.branch` value to differ before answering. The action is
+    rendered only by the live diff view when GitHub says the current PR is merged;
+    `ArchivedChat` has no diff or writes at all, and the route explicitly refuses an
+    archived id as a second guard.
+
     **Archiving a workspace** (`archiveWorkspace`, `POST /api/workspaces/:id/archive`)
     is the second keystroke here and the only write that destroys something: the
     worktree goes, and an agent still mid-turn goes with it. Conductor's chord is

@@ -1336,6 +1336,78 @@ on buttonsUnder(root, maxDepth)
 	return acc
 end buttonsUnder
 
+on shallowButtonsNamed(root, maxDepth, wanted)
+	-- Exact-name buttons at the first depth that contains one. Continue lives in
+	-- Conductor's workspace action bar, while a chat transcript hangs much deeper
+	-- off the same web area. Stopping at the shallowest hit both avoids walking a
+	-- long transcript and keeps a similarly named control inside a message from
+	-- impersonating the workspace action.
+	set level to {root}
+	set depth to 0
+	tell application "System Events" to tell process "Conductor"
+		repeat while (count of level) > 0 and depth < maxDepth
+			set found to {}
+			set nextLevel to {}
+			repeat with entry in level
+				set node to contents of entry
+				try
+					repeat with candidate in (get UI elements of node whose role is "AXButton")
+						set controlEl to contents of candidate
+						if (my axName(controlEl)) is wanted then set end of found to controlEl
+					end repeat
+					set nextLevel to nextLevel & (get UI elements of node)
+				end try
+			end repeat
+			if (count of found) > 0 then return found
+			set level to nextLevel
+			set depth to depth + 1
+		end repeat
+	end tell
+	return {}
+end shallowButtonsNamed
+
+on hasSiblingButtonNamed(controlEl, wanted)
+	-- The live merged action is the pair Continue + Archive. Requiring that pair
+	-- prevents a generic Continue in a modal from impersonating it while the
+	-- asserted workspace pane remains visible behind the modal.
+	try
+		tell application "System Events" to tell process "Conductor"
+			set actionRow to value of attribute "AXParent" of controlEl
+			repeat with peer in (get UI elements of actionRow whose role is "AXButton")
+				if (my axName(contents of peer)) is wanted then return true
+			end repeat
+		end tell
+	end try
+	return false
+end hasSiblingButtonNamed
+
+on continueWorkspaceOnNewBranch()
+	-- Press Conductor's own merged-workspace action. Its handler owns all of the
+	-- state that cannot be reproduced safely from the relay: it checks out a fresh
+	-- branch at the PR's target, updates the workspace row, keeps every chat, and
+	-- stages Branch continued.md in the selected chat. The relay never writes the
+	-- database; server.ts watches `workspaces.branch` for the receipt.
+	set strips to my tabGroups()
+	if (count of strips) is 0 then error "couldn't find the chat pane to continue from"
+	my assertWorkspace(item 1 of strips)
+	set found to my shallowButtonsNamed(my webArea(), 10, "Continue")
+	if (count of found) is 0 then error "Conductor isn't offering Continue for this workspace - it appears after its pull request is merged and refreshed"
+	if (count of found) > 1 then error "more than one Continue button is visible - close any dialog and try again"
+	set continueEl to item 1 of found
+	if not (my hasSiblingButtonNamed(continueEl, "Archive")) then error "couldn't verify Conductor's merged-workspace Continue action - close any dialog and try again"
+	set canPress to true
+	try
+		tell application "System Events" to tell process "Conductor"
+			set canPress to (value of attribute "AXEnabled" of continueEl) as boolean
+		end tell
+	end try
+	if not canPress then error "Conductor's Continue button is still busy - try again shortly"
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXPress" of continueEl
+	end tell
+	delay 0.4
+end continueWorkspaceOnNewBranch
+
 on dialogButtons()
 	-- Both places Conductor could be drawing a confirmation, each at the depth that
 	-- shape actually sits at. A real sheet hangs off the window a level or two down;

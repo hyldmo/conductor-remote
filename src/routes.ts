@@ -119,6 +119,8 @@ export const routes = {
 	/** The worktree's own file list, which is what makes a chat's `src/foo.ts` a link. */
 	workspaceFiles: param('GET', '/api/workspaces/:workspaceId/files'),
 	merge: param('POST', '/api/workspaces/:workspaceId/merge'),
+	/** Keep this live workspace and its chats, but move its merged worktree onto a fresh branch. */
+	continueWorkspace: param('POST', '/api/workspaces/:workspaceId/continue'),
 	workspaceStatus: param('POST', '/api/workspaces/:workspaceId/status'),
 	/** Put the workspace away (Conductor's ⌘⇧A) — the one write that deletes a worktree. */
 	archiveWorkspace: param('POST', '/api/workspaces/:workspaceId/archive'),
