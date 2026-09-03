@@ -455,7 +455,12 @@ Two asymmetric halves — keep them separate:
     the memo's 10-minute TTL, since a landed prompt's bubble is gone before Retry can be
     tapped. A failure the app *watched* happen is never reconciled that way — its red
     state is a fact about the send, and an identical prompt earlier in the chat must not
-    retire it.
+    retire it. **That same row owns the workspace and chat-tab status ring**: local
+    `sending` and relay-owned `waiting` spin it as soon as either queue takes the prompt;
+    `error` / `failed` leave a red X in the ring until Retry or Dismiss. Retry immediately
+    masks the same prompt's stale relay failure from the `/api/state` cache, so X becomes
+    spinner without waiting for the next 2.5s poll, while any unrelated undismissed
+    failure still wins.
 
     The same verified path drives the chat's **agent settings** (`setAgentOptions`,
     `POST /api/sessions/:id/agent`). Their *values* are plain reads — `sessions`

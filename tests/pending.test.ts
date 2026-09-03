@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, test } from 'vitest'
-import { isUnconfirmed, loadPending, type PendingMessage, writePending } from '../web/src/lib/pending.ts'
+import {
+	isUnconfirmed,
+	loadPending,
+	type PendingMessage,
+	promptIndicator,
+	writePending
+} from '../web/src/lib/pending.ts'
 
 /**
  * The optimistic-prompt store (web/src/lib/pending.ts), which since the composer
@@ -93,5 +99,40 @@ describe('pending prompts across a reload', () => {
 		store.set(KEY, JSON.stringify([{ id: 'half-a-row' }, message()]))
 		expect(loadPending().map(p => p.id)).toEqual(['a1'])
 		expect(loadPending()[0].text).toBe('ship the thing')
+	})
+})
+
+describe('pending prompt indicator', () => {
+	test('starts spinning as soon as either send queue owns the prompt', () => {
+		expect(promptIndicator([message({ status: 'sending' })])).toBe('sending')
+		expect(promptIndicator([], [{ text: 'ship the thing', status: 'waiting' }])).toBe('sending')
+		expect(promptIndicator([], [], true)).toBe('sending')
+	})
+
+	test('keeps a failed prompt visible over other send activity', () => {
+		expect(promptIndicator([message({ status: 'sending' }), message({ id: 'a2' })])).toBe('failed')
+		expect(
+			promptIndicator(
+				[],
+				[
+					{ text: 'one', status: 'waiting' },
+					{ text: 'two', status: 'failed' }
+				]
+			)
+		).toBe('failed')
+	})
+
+	test('a Retry owns its stale relay failure and starts spinning immediately', () => {
+		expect(promptIndicator([message({ status: 'sending' })], [{ text: 'ship the thing', status: 'failed' }])).toBe(
+			'sending'
+		)
+		// A different failed prompt remains actionable.
+		expect(promptIndicator([message({ status: 'sending' })], [{ text: 'another prompt', status: 'failed' }])).toBe(
+			'failed'
+		)
+	})
+
+	test('has no override when there is no pending prompt', () => {
+		expect(promptIndicator([])).toBeNull()
 	})
 })

@@ -1,4 +1,4 @@
-import { Check, CloudOff, Copy, RefreshCw, WifiOff } from 'lucide-react'
+import { Check, CloudOff, Copy, RefreshCw, WifiOff, X } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { useRepoIcon } from '../hooks.ts'
@@ -8,16 +8,55 @@ import { cn } from '../lib/cn.ts'
 import { statusDot } from '../lib/format.ts'
 import { unlockUrl } from '../lib/lock.ts'
 import { LUCIDE_ICONS } from '../lib/lucideIcons.ts'
+import type { PromptIndicatorState } from '../lib/pending.ts'
 import type { RepoIcon, Workspace } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 
+/** The same small footprint for a queued send and its sticky, actionable failure. */
+export function PromptStatusDot({
+	state,
+	color = 'var(--color-working)',
+	className
+}: {
+	state: Exclude<PromptIndicatorState, null>
+	color?: string
+	className?: string
+}) {
+	if (state === 'failed') {
+		return (
+			<span className={cn('dot-error', className)} role="img" aria-label="Send failed" data-prompt-state="failed">
+				<X size={8} strokeWidth={3} aria-hidden />
+			</span>
+		)
+	}
+	return (
+		<span
+			className={cn('dot-spinner', className)}
+			style={{ '--spin-color': color } as CSSProperties}
+			role="img"
+			aria-label="Prompt pending"
+			data-prompt-state="sending"
+		/>
+	)
+}
+
 /**
- * Workspace dot: coloured by PR state (src/pr.ts). While the agent works it becomes a
- * spinner in that same colour rather than a filled dot — so `background` must go to one
- * or the other, never both, or the spinner's ring fills in and the motion disappears.
+ * Workspace dot: coloured by PR state (src/pr.ts). While a prompt is queued or the
+ * agent works it becomes a spinner in that same colour; a send failure leaves the
+ * ring behind with an X. `background` must go to the ring or dot, never both, or the
+ * spinner fills in and its motion disappears.
  */
-export function StatusDot({ w, className }: { w: Workspace; className?: string }) {
+export function StatusDot({
+	w,
+	promptState,
+	className
+}: {
+	w: Workspace
+	promptState?: PromptIndicatorState
+	className?: string
+}) {
 	const { color, working } = statusDot(w)
+	if (promptState) return <PromptStatusDot state={promptState} color={color} className={className} />
 	if (working)
 		return <span className={cn('dot-spinner', className)} style={{ '--spin-color': color } as CSSProperties} />
 	return <span className={cn('dot', className)} style={{ background: color }} />

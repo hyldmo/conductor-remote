@@ -15,6 +15,7 @@ import type { AgentPatch, UpdateStatus } from './lib/types.ts'
 
 let offlineTimer: ReturnType<typeof setTimeout> | null = null
 const initialPrefs = loadLocalPrefs()
+export const WORKING_HINT_MS = 15_000
 
 /**
  * Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by
@@ -154,7 +155,7 @@ interface AppState {
 	 * Stop button that has already done its job.
 	 */
 	clearWorking: (sessionId: string) => void
-	/** Add (or reset, by id — used by Retry) an optimistic prompt in the `sending` state. */
+	/** Add (or reset, by id — used by Retry) the bubble and status-ring `sending` state. */
 	addPending: (m: { id: string; sessionId: string; workspaceId: string; text: string; queue?: boolean }) => void
 	failPending: (id: string, error: string) => void
 	removePending: (id: string) => void

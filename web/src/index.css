@@ -173,6 +173,12 @@
 		border-top-color: var(--spin-color);
 		border-right-color: var(--spin-color);
 	}
+	/* A send failure occupies the ring that was spinning while the relay owned the
+	   prompt. Keeping its footprint still makes the state transition read as one
+	   operation, while the X matches the red Retry / Dismiss bubble in the chat. */
+	.dot-error {
+		@apply flex size-3.5 shrink-0 items-center justify-center rounded-full border-2 border-del text-del;
+	}
 	.dot-idle {
 		background: var(--color-idle);
 	}

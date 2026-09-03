@@ -55,6 +55,40 @@ export interface PendingMessage {
 }
 
 /**
+ * The tiny status ring shared by the workspace row and chat tab. Local optimistic
+ * sends use `sending` / `error`; prompts the relay owns use `waiting` / `failed`.
+ * Collapse both vocabularies here so every surface changes at the same boundary.
+ */
+export type PromptIndicatorState = 'sending' | 'failed' | null
+interface RelayPendingPrompt {
+	text: string
+	status: 'waiting' | 'failed'
+}
+
+export function promptIndicator(
+	local: readonly Pick<PendingMessage, 'text' | 'status'>[],
+	relay: readonly RelayPendingPrompt[] = [],
+	workingHint = false
+): PromptIndicatorState {
+	let sending = workingHint
+	const localTexts = new Set<string>()
+	for (const prompt of local) {
+		localTexts.add(prompt.text.trim())
+		// An undismissed failure stays actionable even if another prompt is also moving.
+		if (prompt.status === 'error') return 'failed'
+		if (prompt.status === 'sending') sending = true
+	}
+	for (const prompt of relay) {
+		// Retry moves ownership into the optimistic bubble immediately. The state poll
+		// may still hold the old relay failure for one tick; don't let that stale X win.
+		if (localTexts.has(prompt.text.trim())) continue
+		if (prompt.status === 'failed') return 'failed'
+		if (prompt.status === 'waiting') sending = true
+	}
+	return sending ? 'sending' : null
+}
+
+/**
  * Whether the chat is still the authority on this prompt: nothing has told us it
  * failed for a reason of its own, so the text arriving as a real user row is the
  * answer. A bubble that failed while the app was watching is *not* this — its red
