@@ -236,6 +236,20 @@ Two asymmetric halves — keep them separate:
   to the log instead, which `/api/logs` serves to the same phone on request. The
   refusals themselves say "try again" rather than "send again", because three of the
   four callers aren't sends.
+- **Closing a chat is a reversible hide, but the shortcut is context-sensitive.**
+  Conductor's own tab menu names **Close tab ⌘W** and Reopen is ⌘⇧T; the durable
+  result is `sessions.is_hidden = 1`, so `DELETE /api/sessions/:id` waits for that
+  chat to disappear from `reads.listSessions` rather than trusting the keystroke.
+  A terminal with focus binds the same ⌘W to closing a terminal tab, so
+  `writes.ts` ▸ `closeChat` takes the usual workspace/tab assertions and
+  `conductor.applescript` ▸ `closeChatTab` presses ⌘L first, exactly like New chat
+  and Stop do before their context-sensitive shortcuts. A working chat draws
+  **Cancel / Close anyway** (verified against the live AX tree), so the route
+  refuses it before touching the UI unless `closeRunning` was explicit, and the
+  script checks the dialog again for a turn that started between the DB read and
+  ⌘W. The phone mirrors that confirmation; MCP exposes it as `close_running`.
+  Closing the last tab is legal, so the phone keeps its trailing New chat button
+  visible for a ready workspace even when the tab list is empty.
 - **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
   here drives Conductor's single shared window, so two overlapping runs interleave
   and land a prompt in whatever the other one focused — the exact failure every

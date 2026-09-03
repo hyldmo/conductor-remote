@@ -68,6 +68,7 @@ import {
 	type AgentOptions,
 	archiveWorkspace,
 	type ChatTab,
+	closeChat,
 	createWorkspace,
 	describeActuator,
 	EFFORT_LABELS,
@@ -1669,6 +1670,86 @@ const server = http.createServer(async (req, res) => {
 					ok: true,
 					strategy: result.strategy,
 					session: reads.listSessions(ws.id).find(s => s.id === sessionId)
+				})
+			}
+
+			// DELETE /api/sessions/:id { workspaceId?, closeRunning? } — Conductor's
+			// reversible Close tab action (Command-W). A running chat gets the same
+			// explicit "Close anyway" gate as the desktop app.
+			const closeChatId = routeParam(routes.closeChat, req.method, pathname)
+			if (closeChatId) {
+				const sessionId = closeChatId
+				const body = JSON.parse((await readBody(req)) || '{}') as {
+					workspaceId?: string
+					closeRunning?: boolean
+				}
+				const ownerId = reads.sessionWorkspaceId(sessionId)
+				if (!ownerId) return json(req, res, 404, { error: 'chat not found' })
+				if (body.workspaceId && body.workspaceId !== ownerId) {
+					return json(req, res, 409, { error: 'chat is not in that workspace' })
+				}
+				const ws = reads.getWorkspace(ownerId)
+				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+
+				const before = reads.listSessions(ws.id)
+				const session = before.find(s => s.id === sessionId)
+				const visibleActiveSession = (): string | null => {
+					const visible = reads.listSessions(ws.id)
+					const activeId = reads.getWorkspace(ws.id)?.active_session_id
+					return visible.some(s => s.id === activeId) ? (activeId ?? null) : (visible[0]?.id ?? null)
+				}
+				// Closing is a soft delete. A repeat whose first response was lost is already
+				// in the requested state, so it is success rather than a stale-link error.
+				if (!session) {
+					return json(req, res, 200, {
+						ok: true,
+						alreadyClosed: true,
+						activeSessionId: visibleActiveSession()
+					})
+				}
+				if ((session.status === 'working' || session.background_tasks.length > 0) && body.closeRunning !== true) {
+					return json(req, res, 409, {
+						ok: false,
+						agentRunning: true,
+						error: 'The agent is still working in this chat. Confirm closing it anyway.'
+					})
+				}
+				const located = locateChat(ws, sessionId)
+				if ('error' in located) return json(req, res, 409, { error: located.error })
+				const result = await closeChat({ workspace: ws, sessionId, tab: located.tab }, body.closeRunning === true)
+				if (!result.ok) {
+					// A turn can start after the status read above. The script dismisses
+					// Conductor's surprise dialog instead of accepting it, and this sends the
+					// caller back through the same explicit confirmation path.
+					if (body.closeRunning !== true && result.error?.includes('needs confirmation')) {
+						return json(req, res, 409, {
+							ok: false,
+							agentRunning: true,
+							error: 'The agent is still working in this chat. Confirm closing it anyway.'
+						})
+					}
+					return json(req, res, 502, result)
+				}
+
+				// Command-W is fire-and-forget. The durable receipt is the same flag all tab
+				// reads filter on: this id disappearing from listSessions means Conductor set
+				// sessions.is_hidden, not merely that a keystroke happened.
+				let visible = true
+				for (let i = 0; i < 20 && visible; i++) {
+					await sleep(300)
+					visible = reads.listSessions(ws.id).some(s => s.id === sessionId)
+				}
+				if (visible) {
+					return json(req, res, 502, {
+						ok: false,
+						strategy: result.strategy,
+						error: 'Conductor took the close but the chat tab is still open. Try again, or close it on your Mac.'
+					})
+				}
+				return json(req, res, 200, {
+					ok: true,
+					strategy: result.strategy,
+					activeSessionId: visibleActiveSession()
 				})
 			}
 

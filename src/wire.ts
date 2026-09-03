@@ -319,6 +319,18 @@ export interface StopResult {
 	error?: string
 }
 
+/** DELETE /api/sessions/:id — Conductor's reversible "Close tab" action. */
+export interface CloseChatResult {
+	ok: boolean
+	/** A retry named a session Conductor had already hidden. */
+	alreadyClosed?: boolean
+	/** The tab Conductor selected after closing, or null when none remain. */
+	activeSessionId?: string | null
+	/** The close was refused because this chat still has an agent running. */
+	agentRunning?: boolean
+	error?: string
+}
+
 /** POST /api/workspaces/:id/sessions — "New chat, same files". */
 export interface NewChatResult {
 	ok: boolean
