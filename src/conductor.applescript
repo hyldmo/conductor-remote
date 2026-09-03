@@ -1258,16 +1258,38 @@ on runTaskName(btn)
 	return label
 end runTaskName
 
-on openRunPorts(tg)
-	set found to {}
+on linkDestination(controlEl)
 	tell application "System Events" to tell process "Conductor"
-		repeat with entry in (get UI elements of tg whose role is "AXButton")
-			set label to my axName(contents of entry)
-			if label starts with "Open :" then set end of found to text 7 thru -1 of label
-		end repeat
+		try
+			return value of attribute "AXURL" of controlEl as text
+		on error
+			return ""
+		end try
 	end tell
-	return found
-end openRunPorts
+end linkDestination
+
+on openRunTargets(tg)
+	set foundPorts to {}
+	set foundLinks to {}
+	tell application "System Events" to tell process "Conductor"
+		set controls to UI elements of tg
+	end tell
+	repeat with entry in controls
+		set node to contents of entry
+		tell application "System Events" to tell process "Conductor"
+			set nodeRole to role of node
+		end tell
+		if nodeRole is "AXButton" or nodeRole is "AXLink" then
+			set label to my axName(node)
+			if label starts with "Open" then
+				set destination to my linkDestination(node)
+				if destination starts with "http://" or destination starts with "https://" then set end of foundLinks to destination
+				if label starts with "Open :" then set end of foundPorts to text 7 thru -1 of label
+			end if
+		end if
+	end repeat
+	return {foundPorts, foundLinks}
+end openRunTargets
 
 on setRunTask(wantRunning, wantedTask)
 	my activateConductor()
@@ -1300,10 +1322,12 @@ on setRunTask(wantRunning, wantedTask)
 	-- The panel re-renders after the press, invalidating every old AX handle.
 	-- Re-find it on each poll and require the opposite label before reporting the
 	-- action as complete. A started web server gets a short second window in which
-	-- Conductor can surface its "Open :<port>" button; non-server tasks simply
-	-- return with an empty port list.
+	-- Conductor can surface its Open control. New controls may expose their exact
+	-- AXURL; current builds expose only "Open :<port>". Non-server tasks return
+	-- with both lists empty.
 	set currentState to beforeState
 	set ports to {}
+	set previewURLs to {}
 	repeat with attempt from 1 to 44
 		set tg to my runStrip()
 		set btn to my runTaskButton(tg)
@@ -1311,13 +1335,15 @@ on setRunTask(wantRunning, wantedTask)
 		set taskName to my runTaskName(btn)
 		if currentState is wantedState then
 			if wantRunning and wantedTask is not "" and taskName is not wantedTask then error "Conductor started " & taskName & " instead of " & wantedTask
-			set ports to my openRunPorts(tg)
-			if not wantRunning or (count of ports) > 0 or attempt > 20 then exit repeat
+			set runTargets to my openRunTargets(tg)
+			set ports to item 1 of runTargets
+			set previewURLs to item 2 of runTargets
+			if not wantRunning or (count of ports) > 0 or (count of previewURLs) > 0 or attempt > 20 then exit repeat
 		end if
 		delay 0.25
 	end repeat
 	if currentState is not wantedState then error "Conductor's Run task did not switch to " & wantedState
-	return currentState & tab & taskName & tab & changed & tab & my joinList(ports, ",")
+	return currentState & tab & taskName & tab & changed & tab & my joinList(ports, ",") & tab & my joinList(previewURLs, ASCII character 30)
 end setRunTask
 
 on cancelAgent()
