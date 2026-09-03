@@ -202,10 +202,11 @@ export interface SplitAttachment {
 	kept: number
 	/**
 	 * Entries dropped, so a caller can report the cut instead of implying none. `thinking`
-	 * and `tools` are the format's doing; `later` is the caller's, and counts what a
-	 * `throughRowid` left behind — zero when the whole chat was copied.
+	 * and `tools` are the format's doing. `earlier`/`later` are the caller's: a
+	 * `throughRowid` can leave later entries behind, while `onlyRowid` leaves both sides
+	 * of its selected source message out. Both are zero when the whole chat was copied.
 	 */
-	elided: { thinking: number; tools: number; later: number }
+	elided: { thinking: number; tools: number; earlier: number; later: number }
 }
 
 /** POST /api/sessions/:id/agent — the chat is re-read from the DB before this answers. */

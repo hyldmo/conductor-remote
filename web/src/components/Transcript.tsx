@@ -17,12 +17,14 @@ import { MessageNav } from './MessageNav.tsx'
 import { Patch } from './Patch.tsx'
 import { CopyButton, Empty, Spinner, UnlockLink } from './ui.tsx'
 
-/** The three useful transcript cuts that `split_chat` exposes through MCP. */
+/** The transcript cuts the fork control exposes. */
 export interface SplitFormat {
 	thinking: boolean
 	tools: boolean
 	/** Source row to stop the copy at — a fork from an earlier turn. Undefined takes the whole chat. */
 	through?: number
+	/** Keep only this source message, with no earlier or later history. */
+	only?: number
 }
 
 export function Transcript({
@@ -182,6 +184,7 @@ export function Transcript({
 											text={row.e.text}
 											at={row.e.ts}
 											startedAt={turnStarts.get(row.e)}
+											rowid={row.e.rowid}
 											through={row.e.rowid}
 											onFork={onFork}
 										/>
@@ -194,6 +197,7 @@ export function Transcript({
 								text={actionTarget.text}
 								at={actionTarget.ts}
 								startedAt={turnStarts.get(actionTarget)}
+								rowid={actionTarget.rowid}
 								working={working}
 								onFork={onFork}
 							/>
@@ -464,6 +468,7 @@ function ChatActions({
 	at,
 	startedAt,
 	working,
+	rowid,
 	through,
 	onFork
 }: {
@@ -474,6 +479,8 @@ function ChatActions({
 	startedAt?: string | null
 	/** A turn still running has its clock in `WorkingIndicator`, so the meta stays off. */
 	working?: boolean
+	/** The exact source message this action belongs to. */
+	rowid: number
 	through?: number
 	onFork?: (format: SplitFormat) => Promise<void>
 }) {
@@ -493,13 +500,18 @@ function ChatActions({
 	const took = startedAt ? timestampMs(at) - timestampMs(startedAt) : Number.NaN
 	const meta = [took > 0 ? elapsed(took) : null, timeAgo(at, now)].filter(Boolean).join(' · ')
 
-	const fork = async (cut: { thinking: boolean; tools: boolean }) => {
+	const fork = async (cut: { thinking: boolean; tools: boolean; only?: boolean }) => {
 		if (!onFork || forking) return
 		setForking(true)
 		setForkError(null)
 		setMenuOpen(false)
 		try {
-			await onFork({ ...cut, through })
+			await onFork({
+				thinking: cut.thinking,
+				tools: cut.tools,
+				through: cut.only ? undefined : through,
+				only: cut.only ? rowid : undefined
+			})
 		} catch (err) {
 			setForkError(err instanceof Error ? err.message : 'Could not fork this chat')
 		} finally {
@@ -549,6 +561,11 @@ function ChatActions({
 									aria-label="Fork transcript type"
 									className="absolute bottom-full left-0 z-30 mb-1 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
 								>
+									<ForkOption
+										label="Last message only"
+										detail="This response, without history"
+										onClick={() => void fork({ thinking: false, tools: false, only: true })}
+									/>
 									<ForkOption
 										label="Concise"
 										detail="Messages only"

@@ -583,6 +583,7 @@ export function createTools(call: RelayCall): Tool[] {
 				const cut = [
 					file.elided.tools ? plural(file.elided.tools, 'tool call') : '',
 					file.elided.thinking ? plural(file.elided.thinking, 'thinking block') : '',
+					file.elided.earlier ? plural(file.elided.earlier, 'entry before the cut', 'entries before the cut') : '',
 					file.elided.later ? plural(file.elided.later, 'entry after the cut', 'entries after the cut') : ''
 				].filter(Boolean)
 				const lines = [
