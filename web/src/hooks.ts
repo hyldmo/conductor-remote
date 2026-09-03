@@ -455,11 +455,11 @@ export function useDebounced<T>(value: T, ms: number): T {
  * Two characters is the floor. One letter matches thousands of chunks, so it costs
  * a real query to return a list nobody wants.
  */
-export function useSearch(query: string, repos: string[] = []) {
+export function useSearch(query: string, repos: string[] = [], includeArchived = true) {
 	const trimmed = query.trim()
 	return useQuery({
-		queryKey: ['search', trimmed, repos],
-		queryFn: () => client.search(trimmed, repos),
+		queryKey: ['search', trimmed, repos, includeArchived],
+		queryFn: () => client.search(trimmed, repos, includeArchived),
 		enabled: trimmed.length >= 2,
 		staleTime: 30_000,
 		placeholderData: keepPreviousData
@@ -528,7 +528,7 @@ export function useWorkspaceFiles(workspaceId: string | undefined, enabled: bool
 	})
 }
 
-/** The selected Conductor Run task and its tailnet-only forwarded URL. */
+/** The selected Conductor Run task and its configured tailnet-only preview URLs. */
 export function useDevServer(workspaceId: string | undefined) {
 	return useQuery({
 		queryKey: ['dev-server', workspaceId],

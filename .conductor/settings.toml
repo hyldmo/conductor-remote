@@ -16,3 +16,7 @@ run_mode = "concurrent"
 command = "yarn dev"
 default = true
 icon = "play"
+
+[[preview_urls]]
+name = "Conductor Remote"
+url = "http://localhost:$CONDUCTOR_PORT"

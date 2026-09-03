@@ -27,18 +27,20 @@ import { Chip, Empty, RepoAvatar, Spinner } from './ui.tsx'
 export function SearchPane({
 	query,
 	repos,
+	includeArchived,
 	live,
 	selectedId,
 	onOpen
 }: {
 	query: string
 	repos: string[]
+	includeArchived: boolean
 	live: Workspace[]
 	selectedId?: string
 	onOpen: (workspaceId: string, sessionId: string | null) => void
 }) {
 	const settled = useDebounced(query.trim(), 250)
-	const { data, isError, error, isFetching } = useSearch(settled, repos)
+	const { data, isError, error, isFetching } = useSearch(settled, repos, includeArchived)
 	const tokens = useMemo(() => queryTokens(query), [query])
 
 	const rows = useMemo(() => {
@@ -57,6 +59,9 @@ export function SearchPane({
 					byId.set(w.id, { workspace: w, archived: false, sessionId: null, snippets: [], hits: 0 })
 			}
 		for (const r of data?.results ?? []) {
+			// `keepPreviousData` deliberately keeps the old response while the newly scoped
+			// request runs. Hide its archived rows immediately when this toggle changes.
+			if (!includeArchived && r.workspace.archived) continue
 			const already = byId.get(r.workspace.id)
 			if (already) {
 				already.sessionId = r.sessionId
@@ -73,7 +78,7 @@ export function SearchPane({
 			})
 		}
 		return [...byId.values()]
-	}, [live, data, tokens, repos])
+	}, [live, data, tokens, repos, includeArchived])
 
 	const index = data?.index
 	return (

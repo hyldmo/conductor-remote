@@ -1,4 +1,4 @@
-import { ChevronDown, Filter, Search, X } from 'lucide-react'
+import { Archive, ArchiveX, ChevronDown, Filter, Search, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useRepos } from '../hooks.ts'
@@ -41,6 +41,7 @@ export function SearchSheet({
 }) {
 	const [query, setQuery] = useState('')
 	const [repos, setRepos] = useState<string[]>([])
+	const [includeArchived, setIncludeArchived] = useState(true)
 	const [pickerOpen, setPickerOpen] = useState(false)
 	const inputRef = useRef<HTMLInputElement>(null)
 	const known = useRepos().data?.repos ?? []
@@ -114,6 +115,19 @@ export function SearchSheet({
 							</button>
 						) : null}
 					</div>
+					<button
+						type="button"
+						onClick={() => setIncludeArchived(include => !include)}
+						aria-label="Include archived workspaces"
+						aria-pressed={includeArchived}
+						title={includeArchived ? 'Search archived workspaces' : 'Archived workspaces excluded'}
+						className={cn(
+							'flex size-9 shrink-0 items-center justify-center rounded-full active:bg-surface-2',
+							includeArchived ? 'border border-accent/50 bg-accent/10 text-text' : 'text-muted'
+						)}
+					>
+						{includeArchived ? <Archive size={18} /> : <ArchiveX size={18} />}
+					</button>
 					{/* Icon-only until a repo is picked: the label only earns its width once it says
 					    something, and on a phone that width comes straight out of the search box. */}
 					<button
@@ -161,11 +175,19 @@ export function SearchSheet({
 				</div>
 				<div className="pb-safe min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
 					{query.trim() ? (
-						<SearchPane query={query} repos={repos} live={live} selectedId={selectedId} onOpen={onOpen} />
+						<SearchPane
+							query={query}
+							repos={repos}
+							includeArchived={includeArchived}
+							live={live}
+							selectedId={selectedId}
+							onOpen={onOpen}
+						/>
 					) : (
 						<Empty>
-							{filtered ? `Workspaces and chats in ${repoFilterLabel(repos)}` : 'Every workspace on this Mac'}, archived
-							included — by name, or by something said in the chat. Quote a “phrase” to require it word for word.
+							{filtered ? `Workspaces and chats in ${repoFilterLabel(repos)}` : 'Every workspace on this Mac'}
+							{includeArchived ? ', archived included' : ', excluding archived'} — by name, or by something said in the
+							chat. Quote a “phrase” to require it word for word.
 						</Empty>
 					)}
 				</div>

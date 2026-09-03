@@ -1,7 +1,13 @@
+import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
+import os from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
-import { createDevProxy, parseWorkspacePort, serveProxyAt } from '../src/dev-server.ts'
+import { createDevProxy, DevServerController, parseWorkspacePort, serveProxyAt } from '../src/dev-server.ts'
+import { type PreviewTarget, parsePreviewUrlsToml, resolvePreviewTargets } from '../src/preview-urls.ts'
+import type { Workspace } from '../src/reads.ts'
+import type { ServeStatus } from '../src/tailscale.ts'
 
 const closeAfter: Array<() => Promise<void>> = []
 
@@ -44,6 +50,144 @@ describe('workspace port discovery', () => {
 			)
 		).toBeNull()
 		expect(parseWorkspacePort('one CONDUCTOR_WORKSPACE_ID=workspace-1 CONDUCTOR_PORT=99999', 'workspace-1')).toBeNull()
+	})
+})
+
+describe('configured preview URLs', () => {
+	test('reads Conductor array tables and their optional names', () => {
+		const config = `
+[scripts]
+run = "yarn dev"
+
+[[preview_urls]]
+name = "Web"
+url = "http://localhost:$CONDUCTOR_PORT/app#today"
+
+[[preview_urls]] # a fixed companion service
+name = 'Storybook'
+url = 'http://127.0.0.1:6006/'
+`
+		expect(parsePreviewUrlsToml(config)).toEqual([
+			{ name: 'Web', url: 'http://localhost:$CONDUCTOR_PORT/app#today' },
+			{ name: 'Storybook', url: 'http://127.0.0.1:6006/' }
+		])
+	})
+
+	test('accepts the inline-array form and distinguishes absent from empty', () => {
+		expect(
+			parsePreviewUrlsToml(`preview_urls = [
+				{ name = "Web", url = "http://localhost:$CONDUCTOR_PORT" },
+				{ url = 'http://localhost:6006' }
+			]`)
+		).toEqual([
+			{ name: 'Web', url: 'http://localhost:$CONDUCTOR_PORT' },
+			{ name: undefined, url: 'http://localhost:6006' }
+		])
+		expect(parsePreviewUrlsToml('preview_urls = []')).toEqual([])
+		expect(parsePreviewUrlsToml('[scripts]\nrun = "yarn dev"')).toBeNull()
+	})
+
+	test('expands the allocated port and keeps only valid loopback HTTP previews', () => {
+		expect(
+			resolvePreviewTargets(
+				[
+					{ name: 'Web', url: `http://localhost:\${CONDUCTOR_PORT}/app?q=1#top` },
+					{ name: 'Other path', url: `http://localhost:\${CONDUCTOR_PORT}/other` },
+					{ url: 'http://127.0.0.1:6006/' },
+					{ name: 'Duplicate', url: 'http://127.0.0.1:6006/' },
+					{ name: 'Remote', url: 'https://example.com:3000/' },
+					{ name: 'TLS', url: 'https://localhost:3443/' },
+					{ name: 'Unknown', url: 'http://localhost:$OTHER_PORT/' }
+				],
+				55300
+			)
+		).toEqual([
+			{ name: 'Web', port: 55300, path: '/app?q=1#top' },
+			{ name: 'Other path', port: 55300, path: '/other' },
+			{ name: 'Port 6006', port: 6006, path: '/' }
+		])
+	})
+
+	test('forwards every named port and reuses one bridge for two paths', async () => {
+		const first = http.createServer((_req, res) => res.end('first'))
+		const second = http.createServer((_req, res) => res.end('second'))
+		const firstPort = await listen(first)
+		const secondPort = await listen(second)
+		closeAfter.push(
+			() => closeServer(first),
+			() => closeServer(second)
+		)
+
+		const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'conductor-remote-previews-'))
+		closeAfter.push(async () => fs.rmSync(temp, { recursive: true, force: true }))
+		const store = path.join(temp, 'forwards.json')
+		const controller = new DevServerController(store)
+		const targets: PreviewTarget[] = [
+			{ name: 'App', port: firstPort, path: '/app' },
+			{ name: 'Admin', port: firstPort, path: '/admin' },
+			{ name: 'Storybook', port: secondPort, path: '/' }
+		]
+		const status: ServeStatus = { TCP: {}, Web: {} }
+		type Harness = {
+			bin: string | null
+			host: string | null
+			portFor: () => Promise<number | null>
+			targetsFor: () => PreviewTarget[]
+			serveStatus: () => Promise<ServeStatus>
+			setServe: (servePort: number, bridgePort: number) => Promise<void>
+			unsetServe: (record: { servePort: number }) => Promise<void>
+			release: (workspaceId: string) => Promise<void>
+		}
+		const harness = controller as unknown as Harness
+		harness.bin = 'test-tailscale'
+		harness.host = 'test.ts.net'
+		harness.portFor = async () => null
+		harness.targetsFor = () => targets.map(target => ({ ...target }))
+		harness.serveStatus = async () => status
+		harness.setServe = async (servePort, bridgePort) => {
+			status.TCP ??= {}
+			status.Web ??= {}
+			status.TCP[String(servePort)] = { HTTPS: true }
+			status.Web[`test.ts.net:${servePort}`] = {
+				Handlers: { '/': { Proxy: `http://127.0.0.1:${bridgePort}` } }
+			}
+		}
+		harness.unsetServe = async record => {
+			delete status.TCP?.[String(record.servePort)]
+			delete status.Web?.[`test.ts.net:${record.servePort}`]
+		}
+
+		try {
+			const result = await controller.start({ id: 'workspace-multi' } as Workspace)
+			expect(result.ok).toBe(true)
+			expect(result.forwards).toEqual([
+				{
+					name: 'App',
+					port: firstPort,
+					running: true,
+					forwarded: true,
+					url: `https://test.ts.net:${firstPort}/app`
+				},
+				{
+					name: 'Admin',
+					port: firstPort,
+					running: true,
+					forwarded: true,
+					url: `https://test.ts.net:${firstPort}/admin`
+				},
+				{
+					name: 'Storybook',
+					port: secondPort,
+					running: true,
+					forwarded: true,
+					url: `https://test.ts.net:${secondPort}/`
+				}
+			])
+			const receipt = JSON.parse(fs.readFileSync(store, 'utf8')) as { forwards: unknown[] }
+			expect(receipt.forwards).toHaveLength(2)
+		} finally {
+			await harness.release('workspace-multi')
+		}
 	})
 })
 

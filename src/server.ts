@@ -907,12 +907,14 @@ const server = http.createServer(async (req, res) => {
 			// Both reach archived workspaces. That is the point: 1,846 of the 1,886 here are
 			// archived, so a search limited to the live sidebar would miss almost everything.
 			//
-			// `repo=` (repeatable) scopes both halves to those repos. It is resolved to chat
-			// ids and pushed *into* the FTS query rather than applied to its top 300 chunks,
-			// or a common word would fill every slot from the busiest repo (search.ts ▸ search).
+			// `repo=` (repeatable) and `archived=0` scope both halves. They are resolved to
+			// chat ids and pushed *into* the FTS query rather than applied to its top 300
+			// chunks, or excluded work would fill every slot (search.ts ▸ search).
 			if (isRoute(routes.search, req.method, pathname)) {
 				const q = url.searchParams.get('q') ?? ''
 				const repos = [...new Set(url.searchParams.getAll('repo').filter(Boolean))]
+				// Archived search predates the toggle and stays the default for cached PWAs and MCP.
+				const includeArchived = url.searchParams.get('archived') !== '0'
 				// 12, not 50: an OR query over common words ("add", "remove") has a long weak tail,
 				// and past the first screenful nobody scrolls — they retype instead.
 				const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit') ?? 12) || 12))
@@ -920,14 +922,25 @@ const server = http.createServer(async (req, res) => {
 				const tokens = queryTokens(q)
 				if (!tokens.length) return json(req, res, 200, { query: q, repos, results: [], index })
 
-				const scope = repos.length ? { sessionIds: reads.sessionIdsInRepos(repos) } : {}
+				const scoped = repos.length > 0 || !includeArchived
+				const scope = scoped
+					? { sessionIds: reads.searchSessionIds(repos.length ? repos : undefined, includeArchived) }
+					: {}
 				const hits = search.search(q, scope)
 				const targets = reads.searchTargets([...new Set(hits.map(h => h.sessionId))])
-				const fromChats = foldHits<SearchWorkspace>(hits, sid => targets.get(sid)?.workspace ?? null)
+				const fromChats = foldHits<SearchWorkspace>(hits, sid => {
+					const workspace = targets.get(sid)?.workspace ?? null
+					return !includeArchived && workspace?.archived ? null : workspace
+				})
 
 				const remaining = new Map(fromChats.map(r => [r.workspace.id, r]))
 				const merged: SearchResult<SearchWorkspace>[] = []
-				for (const workspace of reads.findWorkspacesByName(tokens, limit, repos.length ? repos : undefined)) {
+				for (const workspace of reads.findWorkspacesByName(
+					tokens,
+					limit,
+					repos.length ? repos : undefined,
+					includeArchived
+				)) {
 					const evidence = remaining.get(workspace.id)
 					remaining.delete(workspace.id)
 					// Keep the chat evidence when there is any: the snippet is what tells you this

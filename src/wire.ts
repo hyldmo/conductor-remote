@@ -22,7 +22,7 @@
  */
 
 import type { UpdateStatus } from './autoupdate.ts'
-import type { DevServerResult, DevServerState } from './dev-server.ts'
+import type { DevServerForward, DevServerResult, DevServerState } from './dev-server.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import type { LogEntry, LogFileInfo } from './logbuf.ts'
 import type { CachedModelGroup } from './model-cache.ts'
@@ -48,6 +48,7 @@ export type {
 	ActuatorInfo,
 	CachedModelGroup,
 	DeviceInfo as PushDevice,
+	DevServerForward,
 	DevServerResult,
 	DevServerState,
 	IndexStatus as SearchIndexStatus,
@@ -95,7 +96,7 @@ export interface SearchResult extends SearchEvidence<SearchWorkspace> {
 	sessionTitle: string | null
 }
 
-/** GET /api/search?q=&repo= — name matches and transcript matches, merged and ranked. */
+/** GET /api/search?q=&repo=&archived=0 — name and transcript matches, merged and ranked. */
 export interface SearchResponse {
 	query: string
 	/** Repo names the search was scoped to; empty means every repo. */

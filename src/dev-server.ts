@@ -5,8 +5,10 @@
  * The relay never spawns a repository command itself. Starting and stopping go
  * through Conductor's real Run button (`writes.ts`), which preserves its task
  * selection, environment, run-mode rules and process-group cleanup. This module
- * discovers that workspace's allocated `CONDUCTOR_PORT`, waits for it, and gives
- * it a root-mounted HTTPS origin on the Mac's MagicDNS name.
+ * discovers that workspace's allocated `CONDUCTOR_PORT`, expands Conductor's
+ * configured `preview_urls`, and gives each local preview a tailnet HTTPS origin
+ * on the Mac's MagicDNS name. Conductor's detected Open-button ports remain the
+ * fallback for repositories that do not declare previews.
  *
  * Tailscale's reverse proxy preserves the public Host header. Dev servers such
  * as Vite reject that by default, so a tiny loopback bridge rewrites Host/Origin
@@ -23,12 +25,15 @@ import net from 'node:net'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { stateDir } from './config.ts'
+import { type PreviewTarget, previewUrlSettings, resolvePreviewTargets } from './preview-urls.ts'
 import type { Workspace } from './reads.ts'
 import type { ServeStatus } from './tailscale.ts'
 import { magicDnsName, tailscaleBin } from './tailscale.ts'
 import { setRunTask } from './writes.ts'
 
 const exec = promisify(execFile)
+// Keep the receipt additive and version-1-readable: an installed relay and a
+// source `yarn dev` relay can briefly share this file during an update.
 const STORE_VERSION = 1
 const PORT_WAIT_MS = 15_000
 const PORT_SNAPSHOT_TTL_MS = 5000
@@ -44,10 +49,25 @@ export interface DevServerState {
 	port: number | null
 	/** Tailnet-only HTTPS URL, present only while forwarded. */
 	url: string | null
+	/** Configured or detected previews, in Conductor's Open-menu order. */
+	forwards: DevServerForward[]
 	/** The selected Conductor Run task, known after a start/stop action. */
 	task?: string
 	/** Why this workspace cannot currently be controlled or forwarded. */
 	error?: string
+}
+
+export interface DevServerForward {
+	/** Configured preview name; detected/fallback ports use "Port N". */
+	name: string
+	/** Local loopback port behind this forward. */
+	port: number
+	/** Something currently accepts TCP connections on `port`. */
+	running: boolean
+	/** This relay owns and can verify the Tailscale mapping. */
+	forwarded: boolean
+	/** Tailnet-only URL, including the configured path, when forwarded. */
+	url: string | null
 }
 
 export interface DevServerResult extends DevServerState {
@@ -58,10 +78,14 @@ export interface DevServerResult extends DevServerState {
 
 interface StoredForward {
 	workspaceId: string
+	/** Allocated base used to resolve preview templates; absent only on old receipts. */
+	basePort?: number | null
 	targetPort: number
 	servePort: number
 	bridgePort: number
 	host: string
+	name?: string
+	path?: string
 	/** Relay process holding the loopback bridge; absent on version-1 receipts. */
 	ownerPid?: number
 	/** Private loopback challenge proving that process still owns this bridge. */
@@ -77,6 +101,10 @@ interface DevProxy {
 	port: number
 	token: string
 	close: () => Promise<void>
+}
+
+function recordKey(workspaceId: string, targetPort: number): string {
+	return `${workspaceId}:${targetPort}`
 }
 
 function validPort(value: number): boolean {
@@ -350,20 +378,20 @@ function servePorts(status: ServeStatus): Set<number> {
 	)
 }
 
-function chooseServePort(status: ServeStatus, targetPort: number): number | null {
+function chooseServePort(status: ServeStatus, targetPort: number, reserved = new Set<number>()): number | null {
 	const used = servePorts(status)
 	for (let offset = 0; offset < 10; offset++) {
 		const candidate = targetPort + offset
-		if (validPort(candidate) && !used.has(candidate)) return candidate
+		if (validPort(candidate) && !used.has(candidate) && !reserved.has(candidate)) return candidate
 	}
 	for (let candidate = 49152; candidate <= 65535; candidate++) {
-		if (!used.has(candidate)) return candidate
+		if (!used.has(candidate) && !reserved.has(candidate)) return candidate
 	}
 	return null
 }
 
-function forwardUrl(record: StoredForward): string {
-	return `https://${record.host}${record.servePort === 443 ? '' : `:${record.servePort}`}/`
+function forwardUrl(record: StoredForward, previewPath = record.path || '/'): string {
+	return `https://${record.host}${record.servePort === 443 ? '' : `:${record.servePort}`}${previewPath}`
 }
 
 export class DevServerController {
@@ -394,13 +422,15 @@ export class DevServerController {
 			for (const record of parsed.forwards) {
 				if (
 					record.workspaceId &&
+					(record.basePort === undefined || record.basePort === null || validPort(record.basePort)) &&
 					validPort(record.targetPort) &&
 					validPort(record.servePort) &&
 					validPort(record.bridgePort) &&
 					typeof record.host === 'string' &&
 					record.host.length > 0
 				) {
-					this.records.set(record.workspaceId, record)
+					if (record.basePort === undefined) record.basePort = record.targetPort
+					this.records.set(recordKey(record.workspaceId, record.targetPort), record)
 				}
 			}
 		} catch {
@@ -424,7 +454,27 @@ export class DevServerController {
 		if (cached) return cached
 		const discovered = await workspacePort(workspaceId, PORT_SNAPSHOT_TTL_MS)
 		if (discovered) this.ports.set(workspaceId, discovered)
-		return discovered
+		if (discovered) return discovered
+		for (const record of this.records.values()) {
+			if (record.workspaceId === workspaceId && record.basePort) return record.basePort
+		}
+		return null
+	}
+
+	private targetsFor(workspace: Workspace, basePort: number | null, detectedPorts: number[] = []): PreviewTarget[] {
+		const configured = resolvePreviewTargets(previewUrlSettings(workspace), basePort)
+		if (configured.length) return configured
+		const ports = [...new Set(detectedPorts.filter(validPort))]
+		if (!ports.length && basePort) ports.push(basePort)
+		if (!ports.length) {
+			for (const record of this.records.values()) {
+				if (record.workspaceId === workspace.id) ports.push(record.targetPort)
+			}
+		}
+		return ports.slice(0, 10).map(port => {
+			const record = this.records.get(recordKey(workspace.id, port))
+			return { name: record?.name || `Port ${port}`, port, path: record?.path || '/' }
+		})
 	}
 
 	private async serveStatus(): Promise<ServeStatus> {
@@ -462,9 +512,9 @@ export class DevServerController {
 		}
 	}
 
-	private async release(workspaceId: string): Promise<void> {
-		const record = this.records.get(workspaceId)
-		const proxy = this.proxies.get(workspaceId)
+	private async releaseRecord(key: string): Promise<void> {
+		const record = this.records.get(key)
+		const proxy = this.proxies.get(key)
 		let cleanupError: unknown
 		if (record) {
 			try {
@@ -476,26 +526,51 @@ export class DevServerController {
 		// Even when the Serve CLI is temporarily unavailable, close the bridge so
 		// its stale HTTPS mapping cannot reach a later process that reuses the port.
 		if (proxy) await proxy.close()
-		this.proxies.delete(workspaceId)
-		if (!cleanupError) this.records.delete(workspaceId)
+		this.proxies.delete(key)
+		if (!cleanupError) this.records.delete(key)
 		this.save()
 		if (cleanupError) throw cleanupError
 	}
 
-	private async forward(workspaceId: string, targetPort: number): Promise<StoredForward> {
-		const existing = this.records.get(workspaceId)
-		if (existing?.targetPort === targetPort) {
+	private async release(workspaceId: string): Promise<void> {
+		let firstError: unknown
+		for (const [key, record] of [...this.records]) {
+			if (record.workspaceId !== workspaceId) continue
+			try {
+				await this.releaseRecord(key)
+			} catch (err) {
+				firstError ??= err
+			}
+		}
+		if (firstError) throw firstError
+	}
+
+	private async forward(
+		workspaceId: string,
+		basePort: number | null,
+		target: PreviewTarget,
+		reservedPorts: Set<number>
+	): Promise<StoredForward> {
+		const key = recordKey(workspaceId, target.port)
+		const existing = this.records.get(key)
+		if (existing) {
 			const status = await this.serveStatus()
 			const expected = `http://127.0.0.1:${existing.bridgePort}`
-			if (serveProxyAt(status, existing.servePort) === expected && (await bridgeMatches(existing))) return existing
+			if (serveProxyAt(status, existing.servePort) === expected && (await bridgeMatches(existing))) {
+				existing.basePort = basePort ?? existing.basePort
+				existing.name = target.name
+				existing.path = target.path
+				this.save()
+				return existing
+			}
 		}
-		if (existing) await this.release(workspaceId)
+		if (existing) await this.releaseRecord(key)
 		if (!this.bin || !this.host) throw new Error('Tailscale is not connected on this Mac')
 
 		const status = await this.serveStatus()
-		const servePort = chooseServePort(status, targetPort)
+		const servePort = chooseServePort(status, target.port, reservedPorts)
 		if (!servePort) throw new Error('no free Tailscale Serve port is available')
-		const proxy = await createDevProxy(targetPort)
+		const proxy = await createDevProxy(target.port)
 		try {
 			await this.setServe(servePort, proxy.port)
 		} catch (err) {
@@ -518,17 +593,34 @@ export class DevServerController {
 		}
 		const record: StoredForward = {
 			workspaceId,
-			targetPort,
+			basePort,
+			targetPort: target.port,
 			servePort,
 			bridgePort: proxy.port,
 			host: this.host,
+			name: target.name,
+			path: target.path,
 			ownerPid: process.pid,
 			bridgeToken: proxy.token
 		}
-		this.proxies.set(workspaceId, proxy)
-		this.records.set(workspaceId, record)
+		this.proxies.set(key, proxy)
+		this.records.set(key, record)
 		this.save()
 		return record
+	}
+
+	private async forwardAll(workspaceId: string, basePort: number | null, targets: PreviewTarget[]): Promise<void> {
+		const byPort = new Map<number, PreviewTarget>()
+		for (const target of targets) if (!byPort.has(target.port)) byPort.set(target.port, target)
+		const wanted = new Set([...byPort].map(([port]) => recordKey(workspaceId, port)))
+		for (const [key, record] of [...this.records]) {
+			if (record.workspaceId === workspaceId && !wanted.has(key)) await this.releaseRecord(key)
+		}
+		const naturalPorts = new Set(byPort.keys())
+		for (const target of byPort.values()) {
+			const reserved = new Set([...naturalPorts].filter(port => port !== target.port))
+			await this.forward(workspaceId, basePort, target, reserved)
+		}
 	}
 
 	/** Rebuild loopback bridges after launchd or the self-updater restarts the relay. */
@@ -537,9 +629,9 @@ export class DevServerController {
 		// Tailscale can come up after a login LaunchAgent. Retain the receipts in
 		// that case; a later tap can safely replace or remove their exact mappings.
 		if (!this.bin || !this.host) return
-		for (const record of [...this.records.values()]) {
+		for (const [key, record] of [...this.records]) {
 			try {
-				this.ports.set(record.workspaceId, record.targetPort)
+				if (record.basePort) this.ports.set(record.workspaceId, record.basePort)
 				// `yarn dev` runs another relay beside the installed LaunchAgent. A
 				// node --watch restart must not steal the installed relay's live bridge
 				// merely because both instances share the same state directory.
@@ -547,11 +639,11 @@ export class DevServerController {
 				const status = await this.serveStatus()
 				const owned = serveProxyAt(status, record.servePort) === `http://127.0.0.1:${record.bridgePort}`
 				if (!owned) {
-					this.records.delete(record.workspaceId)
+					this.records.delete(key)
 					continue
 				}
 				if (!(await tcpOpen(record.targetPort))) {
-					await this.release(record.workspaceId)
+					await this.releaseRecord(key)
 					continue
 				}
 				const proxy = await createDevProxy(record.targetPort)
@@ -559,8 +651,8 @@ export class DevServerController {
 				record.bridgePort = proxy.port
 				record.ownerPid = process.pid
 				record.bridgeToken = proxy.token
-				this.proxies.set(record.workspaceId, proxy)
-				this.records.set(record.workspaceId, record)
+				this.proxies.set(key, proxy)
+				this.records.set(key, record)
 			} catch (err) {
 				console.warn(
 					`⚠ could not restore dev-server forward for ${record.workspaceId} (${err instanceof Error ? err.message : err})`
@@ -572,29 +664,70 @@ export class DevServerController {
 
 	async state(workspace: Workspace): Promise<DevServerState> {
 		this.refreshTailscale()
-		const record = this.records.get(workspace.id)
-		const port = (await this.portFor(workspace.id)) ?? record?.targetPort ?? null
-		if (port) this.ports.set(workspace.id, port)
-		const running = port ? await tcpOpen(port) : false
-		let forwarded = false
-		if (running && record) {
-			try {
-				const status = await this.serveStatus()
-				forwarded =
-					serveProxyAt(status, record.servePort) === `http://127.0.0.1:${record.bridgePort}` &&
-					(await bridgeMatches(record))
-			} catch {
-				// A disconnected CLI makes the URL unverified, never optimistically live.
-			}
+		const basePort = await this.portFor(workspace.id)
+		if (basePort) this.ports.set(workspace.id, basePort)
+		const targets = this.targetsFor(workspace, basePort)
+		const targetPorts = new Set(targets.map(target => target.port))
+		// Keep a configured URL list authoritative, but don't hide a still-owned
+		// forward after the file changes; it must remain visible until Start
+		// reconciles it or Stop removes it.
+		for (const record of this.records.values()) {
+			if (record.workspaceId !== workspace.id || targetPorts.has(record.targetPort)) continue
+			targets.push({
+				name: record.name || `Port ${record.targetPort}`,
+				port: record.targetPort,
+				path: record.path || '/'
+			})
+			targetPorts.add(record.targetPort)
 		}
+
+		let status: ServeStatus | null = null
+		try {
+			if (targets.some(target => this.records.has(recordKey(workspace.id, target.port))))
+				status = await this.serveStatus()
+		} catch {
+			// A disconnected CLI makes every URL unverified, never optimistically live.
+		}
+		const openByPort = new Map<number, Promise<boolean>>()
+		const ownedByPort = new Map<number, Promise<boolean>>()
+		const forwards = await Promise.all(
+			targets.map(async target => {
+				let open = openByPort.get(target.port)
+				if (!open) {
+					open = tcpOpen(target.port)
+					openByPort.set(target.port, open)
+				}
+				const record = this.records.get(recordKey(workspace.id, target.port))
+				let owned = ownedByPort.get(target.port)
+				if (!owned) {
+					owned = Promise.resolve(
+						Boolean(
+							status && record && serveProxyAt(status, record.servePort) === `http://127.0.0.1:${record.bridgePort}`
+						)
+					).then(matches => (matches && record ? bridgeMatches(record) : false))
+					ownedByPort.set(target.port, owned)
+				}
+				const [targetRunning, targetForwarded] = await Promise.all([open, owned])
+				return {
+					name: target.name,
+					port: target.port,
+					running: targetRunning,
+					forwarded: targetForwarded,
+					url: targetForwarded && record ? forwardUrl(record, target.path) : null
+				}
+			})
+		)
+		const primary = forwards[0]
+		const firstForwarded = forwards.find(forward => forward.forwarded && forward.url)
 		let error: string | undefined
 		if (!this.bin || !this.host) error = 'Tailscale is not connected on this Mac'
 		return {
 			available: !!this.bin && !!this.host,
-			running,
-			forwarded,
-			port,
-			url: forwarded && record ? forwardUrl(record) : null,
+			running: primary?.running ?? false,
+			forwarded: Boolean(firstForwarded),
+			port: primary?.port ?? basePort,
+			url: firstForwarded?.url ?? null,
+			forwards,
 			error
 		}
 	}
@@ -629,15 +762,17 @@ export class DevServerController {
 					error: 'Tailscale Serve is not available on this Mac'
 				}
 			}
-			let port = await this.portFor(workspace.id)
+			let basePort = await this.portFor(workspace.id)
+			let targets = this.targetsFor(workspace, basePort)
+			let primaryPort = targets[0]?.port ?? null
 			// A task already listening needs no button. Forwarding it touches only
 			// Tailscale and this relay, so it costs about a second, steals no focus
 			// from the Mac, and stays inside the tap activation a phone can open a
 			// tab with. Pressing Run here would also assert a pane for a press it
 			// then decides not to make.
-			if (port && (await tcpOpen(port))) {
+			if (primaryPort && (await tcpOpen(primaryPort))) {
 				try {
-					await this.forward(workspace.id, port)
+					await this.forwardAll(workspace.id, basePort, targets)
 					return { ok: true, ...(await this.state(workspace)), changed: false }
 				} catch (err) {
 					return {
@@ -650,10 +785,13 @@ export class DevServerController {
 			}
 			const run = await setRunTask(workspace, true)
 			if (!run.ok) return { ok: false, ...(await this.state(workspace)), error: run.error }
-			port ??= run.ports?.[0] ?? null
-			if (!port) port = await workspacePort(workspace.id)
-			if (port) this.ports.set(workspace.id, port)
-			if (!port) {
+			basePort ??= await workspacePort(workspace.id)
+			if (basePort) this.ports.set(workspace.id, basePort)
+			// Configured previews win. Conductor's expanded Open buttons are the
+			// compatibility path for repositories that have not declared them yet.
+			targets = this.targetsFor(workspace, basePort, run.ports)
+			primaryPort = targets[0]?.port ?? null
+			if (!primaryPort) {
 				const rollback = run.changed ? await setRunTask(workspace, false) : null
 				const suffix = rollback
 					? rollback.ok
@@ -665,10 +803,10 @@ export class DevServerController {
 					...(await this.state(workspace)),
 					task: run.task,
 					changed: run.changed,
-					error: `Conductor started the task, but its CONDUCTOR_PORT wasn’t visible${suffix}`
+					error: `Conductor started the task, but no configured or detected preview port was visible${suffix}`
 				}
 			}
-			if (!(await waitForPort(port, true, PORT_WAIT_MS))) {
+			if (!(await waitForPort(primaryPort, true, PORT_WAIT_MS))) {
 				const rollback = run.changed ? await setRunTask(workspace, false) : null
 				const suffix = rollback
 					? rollback.ok
@@ -680,13 +818,19 @@ export class DevServerController {
 					...(await this.state(workspace)),
 					task: run.task,
 					changed: run.changed,
-					error: `${run.task ?? 'Run task'} started, but nothing listened on :${port}${suffix}`
+					error: `${run.task ?? 'Run task'} started, but nothing listened on :${primaryPort}${suffix}`
 				}
 			}
 			try {
-				await this.forward(workspace.id, port)
+				await this.forwardAll(workspace.id, basePort, targets)
 				return { ok: true, ...(await this.state(workspace)), task: run.task, changed: run.changed }
 			} catch (err) {
+				try {
+					await this.release(workspace.id)
+				} catch {
+					// The original forwarding failure remains the actionable error. Any
+					// receipt cleanup failure stays persisted for the next relay start.
+				}
 				const rollback = run.changed ? await setRunTask(workspace, false) : null
 				const suffix = rollback
 					? rollback.ok

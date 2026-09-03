@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ExternalLink, Globe2, Loader2, Play, Square } from 'lucide-react'
+import { ChevronDown, ExternalLink, Globe2, Loader2, Play, Square } from 'lucide-react'
 import { useState } from 'react'
 import { useDevServer } from '../hooks.ts'
 import { client } from '../lib/api.ts'
@@ -28,7 +28,13 @@ export function DevServerControls({ workspaceId }: { workspaceId: string }) {
 	const online = useApp(s => s.online)
 	const [busy, setBusy] = useState<'start' | 'stop' | null>(null)
 	const [error, setError] = useState<string | null>(null)
+	const [open, setOpen] = useState(false)
 	const state = query.data
+	const forwards =
+		state?.forwards?.filter(forward => forward.forwarded && forward.url) ??
+		(state?.forwarded && state.url
+			? [{ name: state.port ? `Port ${state.port}` : 'Dev server', port: state.port ?? 0, url: state.url }]
+			: [])
 
 	const apply = async (running: boolean) => {
 		if (busy) return
@@ -52,17 +58,63 @@ export function DevServerControls({ workspaceId }: { workspaceId: string }) {
 
 	return (
 		<>
-			{state?.forwarded && state.url ? (
-				<a
-					href={state.url}
-					target="_blank"
-					rel="noreferrer"
-					aria-label={`Open dev server${state.port ? ` on port ${state.port}` : ''}`}
-					title={state.url}
-					className={controlClass}
-				>
-					<ExternalLink size={18} />
-				</a>
+			{forwards.length && forwards[0]?.url ? (
+				<div className="relative flex shrink-0 items-center">
+					<a
+						href={forwards[0].url}
+						target="_blank"
+						rel="noreferrer"
+						aria-label={`Open ${forwards[0].name} on port ${forwards[0].port}`}
+						title={forwards[0].url}
+						className={controlClass}
+					>
+						<ExternalLink size={18} />
+					</a>
+					{forwards.length > 1 ? (
+						<>
+							<button
+								type="button"
+								onClick={() => setOpen(value => !value)}
+								aria-label="Choose forwarded dev server"
+								aria-haspopup="menu"
+								aria-expanded={open}
+								className="flex h-9 w-6 items-center justify-center rounded-full text-muted active:bg-surface-2"
+							>
+								<ChevronDown size={14} className={open ? 'rotate-180' : undefined} />
+							</button>
+							{open ? (
+								<>
+									<button
+										type="button"
+										aria-label="Close forwarded dev servers"
+										className="fixed inset-0 z-20 cursor-default"
+										onClick={() => setOpen(false)}
+									/>
+									<div
+										role="menu"
+										aria-label="Forwarded dev servers"
+										className="fade-in absolute right-0 top-full z-30 mt-1 min-w-52 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+									>
+										{forwards.map(forward => (
+											<a
+												key={`${forward.port}:${forward.url}`}
+												href={forward.url ?? undefined}
+												target="_blank"
+												rel="noreferrer"
+												onClick={() => setOpen(false)}
+												role="menuitem"
+												className="flex items-center gap-3 px-3 py-2.5 text-left text-sm active:bg-surface-2"
+											>
+												<span className="min-w-0 flex-1 truncate">{forward.name}</span>
+												<span className="font-mono text-xs text-faint">:{forward.port}</span>
+											</a>
+										))}
+									</div>
+								</>
+							) : null}
+						</>
+					) : null}
+				</div>
 			) : (
 				<button
 					type="button"
@@ -81,7 +133,7 @@ export function DevServerControls({ workspaceId }: { workspaceId: string }) {
 					)}
 				</button>
 			)}
-			{state?.running ? (
+			{state?.running || state?.forwarded ? (
 				<button
 					type="button"
 					onClick={() => void apply(false)}
