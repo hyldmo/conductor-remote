@@ -106,6 +106,15 @@ Two asymmetric halves — keep them separate:
     concurrent phones join the same read. Cursor Agent exposes auth but no allowance;
     OpenCode's `stats` is local token/cost accounting, not provider quota, so both say
     unavailable rather than inventing a percentage.
+  - **Sidebar line changes are git-owned too, but never make `/api/state` wait.**
+    `workspaces` carries no additions/deletions, and asking the full diff endpoint for
+    every row would materialise megabytes of patch text every five seconds.
+    `src/change-stats.ts` therefore attaches the last `workspaceDiffStats` answer and
+    refreshes stale worktrees behind a four-process queue. It uses the diff view's same
+    merge-base and tracked-plus-untracked semantics, refreshes a newly-updated row
+    immediately, keeps a working row within five seconds, and lets an idle one rest for
+    a minute. Clean and binary-only diffs stay absent from the row rather than printing
+    the meaningless `+0 -0`.
 - **Deep links carry the two writes that aren't fragile — creating a workspace
   and focusing one.** The *documented* links
   (conductor.build/docs/reference/deep-links) are

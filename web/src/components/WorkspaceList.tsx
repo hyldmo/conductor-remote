@@ -23,6 +23,7 @@ import { unreadCount } from '../lib/read.ts'
 import type { CachedModelGroup, Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs, WORKING_HINT_MS } from '../store.ts'
 import { ProviderMark } from './AgentIcons.tsx'
+import { ChangeStats } from './ChangeStats.tsx'
 import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
 import { LogsSheet } from './LogsSheet.tsx'
@@ -548,15 +549,21 @@ function WorkspaceCard({
 			</div>
 			<div className="min-w-0 flex-1 space-y-1.25 overflow-hidden">
 				<div className="flex items-center gap-2">
-					<span
-						className={cn(
-							'min-w-0 flex-1 truncate text-sm leading-none',
-							unread ? 'font-bold' : 'font-medium',
-							unread || selected ? 'text-text' : 'text-muted'
-						)}
-					>
-						{workspaceTitle(w)}
-					</span>
+					<div className="flex min-w-0 flex-1 items-center gap-1.5">
+						<span
+							className={cn(
+								'min-w-0 truncate text-sm leading-none',
+								unread ? 'font-bold' : 'font-medium',
+								unread || selected ? 'text-text' : 'text-muted'
+							)}
+						>
+							{workspaceTitle(w)}
+						</span>
+						{/* Conductor's own sidebar puts +adds/-deletes beside the workspace title.
+						    Keeping them in this left-hand cluster makes the patch size part of the
+						    identity scan; pins and unread state still hold the far edge. */}
+						<ChangeStats stats={w.change_stats} />
+					</div>
 					{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
 					{/* Unread is a per-chat flag, so one unread chat has no number worth printing — a
 					    dot says it; the count only appears once several chats here have news. */}

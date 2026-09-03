@@ -4,6 +4,7 @@ import path from 'node:path'
 import { agentProcessStarts, type BackgroundTask, openBackgroundTasks, TASK_FRAME_FILTER } from './background-tasks.ts'
 import type { ConductorDb } from './db.ts'
 import type { FirstPrompt } from './firstprompt.ts'
+import type { DiffStats } from './git.ts'
 import { describeRepoIcon, type RepoIcon, type ResolvedIcon, resolveRepoIcon } from './icons.ts'
 import type { ParkedPrompt } from './parked.ts'
 import { workspaceTitle } from './shared.ts'
@@ -199,6 +200,8 @@ export interface Workspace extends WorkspaceRow {
 	pr_number?: number | null
 	/** PR web URL for the `#N ↗` link; set by src/pr.ts. */
 	pr_url?: string | null
+	/** Added/removed lines against `baseBranch`; filled from a short-lived git cache by src/change-stats.ts. */
+	change_stats?: DiffStats | null
 	/** A first prompt the relay hasn't delivered yet; set by src/server.ts from src/firstprompt.ts. */
 	pending_prompt?: FirstPrompt | null
 	/** Prompts parked for the lock screen, each naming its chat; set by src/server.ts from src/parked.ts. */
