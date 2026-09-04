@@ -133,11 +133,14 @@ describe('diff file navigation', () => {
 
 		const changed = renderTree('changed')
 		expect(changed).toContain('aria-label="Collapse src, 2 files"')
+		expect(changed).toContain('data-folder-icon="src"')
+		expect(changed).toContain('data-folder-expanded="true"')
 		expect(changed).toContain('aria-label="src/index.ts"')
 		expect(changed).toContain('data-file-icon="typescript"')
 
 		const all = renderTree('all')
 		expect(all).toContain('aria-label="Expand src, 2 files"')
+		expect(all).toContain('data-folder-expanded="false"')
 		expect(all).not.toContain('aria-label="src/index.ts"')
 		expect(all).toContain('aria-label="README.md"')
 
