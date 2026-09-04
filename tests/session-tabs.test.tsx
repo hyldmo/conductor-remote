@@ -77,6 +77,29 @@ describe('phone chat tabs', () => {
 		expect(html.match(/<button/g)).toHaveLength(7)
 	})
 
+	test('shows the full tab title without a width cap', () => {
+		const longTitle = 'Auk brain memory retrieval improvements'
+		const html = renderToStaticMarkup(
+			<SessionTabs
+				sessions={[{ ...session, title: longTitle }]}
+				activeId={session.id}
+				readMarks={{}}
+				promptStates={{}}
+				onSelect={vi.fn()}
+				onContext={vi.fn()}
+				onNewChat={vi.fn()}
+				onClose={vi.fn()}
+				creating={false}
+				closingId={null}
+				online
+			/>
+		)
+
+		expect(html).toContain(`<span class="whitespace-nowrap">${longTitle}</span>`)
+		expect(html).not.toContain('truncate')
+		expect(html).not.toContain('max-w-36')
+	})
+
 	test('keeps durable workflow children out of the parent tab row', () => {
 		const childSession: Session = { ...session, id: 'chat-2', title: 'Explorer' }
 		const manualSession: Session = { ...session, id: 'chat-3', title: 'Manual' }

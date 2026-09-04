@@ -598,7 +598,7 @@ export function SessionTabs({
 								) : s.background_tasks?.length ? (
 									<Hourglass size={11} className="shrink-0 text-faint" aria-label="Waiting for a background task" />
 								) : null}
-								<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
+								<span className="whitespace-nowrap">{s.title || 'Untitled'}</span>
 								{roles[s.id] ? <RoleChip name={roles[s.id].role} /> : null}
 								{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
 								{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}

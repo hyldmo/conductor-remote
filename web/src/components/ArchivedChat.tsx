@@ -58,7 +58,7 @@ export function ArchivedChat({ workspace }: { workspace: SearchWorkspace }) {
 							onClick={() => setSearchParams({ session: s.id }, { replace: true })}
 							className={cn('pill shrink-0', s.id === sessionId && 'pill-active')}
 						>
-							<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
+							<span className="whitespace-nowrap">{s.title || 'Untitled'}</span>
 						</button>
 					))}
 				</nav>
