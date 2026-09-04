@@ -12,6 +12,7 @@ import {
 } from '../hooks.ts'
 import { ApiError, client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import type { DiffFileScope } from '../lib/diff.ts'
 import { buildResolver, MentionResolverProvider } from '../lib/fileMentions.ts'
 import { shortModel, timestampMs, workspaceTitle } from '../lib/format.ts'
 import { isLockedError } from '../lib/lock.ts'
@@ -43,6 +44,7 @@ export function SessionView() {
 	const pickedSession = searchParams.get('session')
 	const pickSession = (id: string) => setSearchParams({ session: id }, { replace: true })
 	const [diffOpen, setDiffOpen] = useState(false)
+	const [diffFileScope, setDiffFileScope] = useState<DiffFileScope>('changed')
 	const [selectedDiff, setSelectedDiff] = useState<{ workspaceId: string; path: string } | null>(null)
 	const [diffNavigatorOpen, setDiffNavigatorOpen] = useState(false)
 	const selectedDiffFile = selectedDiff && selectedDiff.workspaceId === workspaceId ? selectedDiff.path : null
@@ -81,11 +83,17 @@ export function SessionView() {
 	const actuator = data?.actuator
 	const { data: anyWorkspace, isLoading: loadingAny } = useAnyWorkspace(workspaceId, missing)
 
-	// What turns a file an agent named in a message into a source link. The list is the
-	// worktree's own, so it belongs to the workspace on screen rather than to a chat, and
-	// the resolver is memoised because every inline code span in the transcript reads it —
-	// a new one per render would undo the bail-outs the whole transcript depends on.
-	const { data: workspaceFiles } = useWorkspaceFiles(workspaceId, !!liveWorkspace?.worktree)
+	// One previewable worktree list serves the All-files rail and turns a file an agent
+	// named in a message into a source link. It belongs to the workspace on screen rather
+	// than to a chat, and the resolver is memoised because every inline code span in the
+	// transcript reads it — a new one per render would undo the bail-outs the whole
+	// transcript depends on.
+	const workspaceFilesQuery = useWorkspaceFiles(
+		workspaceId,
+		!!liveWorkspace?.worktree,
+		diffOpen && diffFileScope === 'all'
+	)
+	const { data: workspaceFiles } = workspaceFilesQuery
 	const worktree = liveWorkspace?.worktree ?? null
 	const files = workspaceFiles?.files
 	const fileReferences = useMemo(
@@ -284,11 +292,15 @@ export function SessionView() {
 
 	const selectDiffFile = (path: string) => {
 		setSelectedDiff({ workspaceId: ws.id, path })
-		// The changed-file rail stays mounted on desktop. On a phone it is an overlay,
+		// The file rail stays mounted on desktop. On a phone it is an overlay,
 		// so selecting a row dismisses it to reveal this file in the transcript's slot.
 		setDiffNavigatorOpen(false)
 	}
-	const diffReview: DiffReviewState = { workspace: ws, query: diffQuery }
+	const changeDiffFileScope = (scope: DiffFileScope) => {
+		setDiffFileScope(scope)
+		if (scope === 'all' && ws.worktree) void workspaceFilesQuery.refetch()
+	}
+	const diffReview: DiffReviewState = { workspace: ws, query: diffQuery, filesQuery: workspaceFilesQuery }
 
 	const dismissDelegation = async (delegationId: string) => {
 		setDelegationError(null)
@@ -384,6 +396,7 @@ export function SessionView() {
 								key={selectedDiffFile}
 								review={diffReview}
 								filePath={selectedDiffFile}
+								scope={diffFileScope}
 								onSelectFile={selectDiffFile}
 								onShowFiles={() => setDiffNavigatorOpen(true)}
 								onClose={closeDiffFile}
@@ -408,6 +421,8 @@ export function SessionView() {
 							<MobileDiffNavigator
 								review={diffReview}
 								sessionId={sessionId}
+								scope={diffFileScope}
+								onScopeChange={changeDiffFileScope}
 								selectedFile={selectedDiffFile}
 								onSelectFile={selectDiffFile}
 								onClose={closeDiff}
@@ -445,6 +460,8 @@ export function SessionView() {
 					<DiffPanel
 						review={diffReview}
 						sessionId={sessionId}
+						scope={diffFileScope}
+						onScopeChange={changeDiffFileScope}
 						selectedFile={selectedDiffFile}
 						onSelectFile={selectDiffFile}
 						onClose={closeDiff}
@@ -668,16 +685,49 @@ function ContextButton({ session, onOpen }: { session: Session; onOpen: () => vo
 	)
 }
 
-/** Changed files stay as the right rail on lg+. */
+/** One shared segmented control for the desktop rail and mobile file navigator. */
+export function DiffFileScopeToggle({
+	scope,
+	onChange
+}: {
+	scope: DiffFileScope
+	onChange: (scope: DiffFileScope) => void
+}) {
+	return (
+		<fieldset aria-label="Files shown" className="flex shrink-0 rounded-full bg-surface-2 p-0.5 text-xs">
+			{(['changed', 'all'] as const).map(value => (
+				<button
+					key={value}
+					type="button"
+					onClick={() => onChange(value)}
+					aria-label={value === 'changed' ? 'Changed files' : 'All files'}
+					aria-pressed={scope === value}
+					className={cn(
+						'rounded-full px-2.5 py-1 font-medium text-muted transition',
+						scope === value && 'bg-bg text-text shadow-sm'
+					)}
+				>
+					{value === 'changed' ? 'Changed' : 'All'}
+				</button>
+			))}
+		</fieldset>
+	)
+}
+
+/** Workspace files stay as the right rail on lg+. */
 function DiffPanel({
 	review,
 	sessionId,
+	scope,
+	onScopeChange,
 	selectedFile,
 	onSelectFile,
 	onClose
 }: {
 	review: DiffReviewState
 	sessionId: string | null
+	scope: DiffFileScope
+	onScopeChange: (scope: DiffFileScope) => void
 	selectedFile: string | null
 	onSelectFile: (path: string) => void
 	onClose: () => void
@@ -685,7 +735,8 @@ function DiffPanel({
 	return (
 		<aside className="hidden flex-col bg-bg lg:flex lg:w-[380px] lg:shrink-0 lg:border-l lg:border-border-soft xl:w-[460px]">
 			<header className="flex items-center gap-2 border-b border-border-soft px-3 py-2.5">
-				<span className="flex-1 text-[15px] font-semibold">Changed files</span>
+				<span className="flex-1 text-[15px] font-semibold">Files</span>
+				<DiffFileScopeToggle scope={scope} onChange={onScopeChange} />
 				<button
 					type="button"
 					onClick={onClose}
@@ -695,7 +746,13 @@ function DiffPanel({
 					<X size={20} />
 				</button>
 			</header>
-			<DiffView review={review} sessionId={sessionId} selectedFile={selectedFile} onSelectFile={onSelectFile} />
+			<DiffView
+				review={review}
+				sessionId={sessionId}
+				scope={scope}
+				selectedFile={selectedFile}
+				onSelectFile={onSelectFile}
+			/>
 		</aside>
 	)
 }
@@ -704,20 +761,25 @@ function DiffPanel({
 function MobileDiffNavigator({
 	review,
 	sessionId,
+	scope,
+	onScopeChange,
 	selectedFile,
 	onSelectFile,
 	onClose
 }: {
 	review: DiffReviewState
 	sessionId: string | null
+	scope: DiffFileScope
+	onScopeChange: (scope: DiffFileScope) => void
 	selectedFile: string | null
 	onSelectFile: (path: string) => void
 	onClose: () => void
 }) {
 	return (
-		<section className="absolute inset-0 z-20 flex flex-col bg-bg lg:hidden" aria-label="Changed files">
+		<section className="absolute inset-0 z-20 flex flex-col bg-bg lg:hidden" aria-label="Workspace files">
 			<header className="flex shrink-0 items-center gap-2 border-b border-border-soft px-3 py-2.5">
-				<span className="flex-1 text-[15px] font-semibold">Changed files</span>
+				<span className="flex-1 text-[15px] font-semibold">Files</span>
+				<DiffFileScopeToggle scope={scope} onChange={onScopeChange} />
 				<button
 					type="button"
 					onClick={onClose}
@@ -727,7 +789,13 @@ function MobileDiffNavigator({
 					<X size={20} />
 				</button>
 			</header>
-			<DiffView review={review} sessionId={sessionId} selectedFile={selectedFile} onSelectFile={onSelectFile} />
+			<DiffView
+				review={review}
+				sessionId={sessionId}
+				scope={scope}
+				selectedFile={selectedFile}
+				onSelectFile={onSelectFile}
+			/>
 		</section>
 	)
 }

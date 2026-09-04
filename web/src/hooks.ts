@@ -515,22 +515,24 @@ export function useSessions(workspaceId: string | undefined, poll = true) {
 }
 
 /**
- * The worktree's file list, which is what lets a file an agent named in prose become a
- * link (`web/src/lib/fileMentions.ts`).
+ * The worktree's previewable file list, used by the All-files review rail and to turn
+ * a file an agent named in prose into a link (`web/src/lib/fileMentions.ts`).
  *
- * Polled by nothing: a message says `src/foo.ts` about a file that already exists, and a
- * file created a minute ago is picked up the next time this goes stale. It matters that
- * the array identity holds still across those refetches — every inline code span in the
- * chat reads the resolver built from it, so a new array on each poll would re-render all
- * of them for nothing. React Query's structural sharing is what keeps it, and the long
- * `staleTime` is what makes the question rare in the first place.
+ * Normally polled by nothing: a message says `src/foo.ts` about a file that already exists,
+ * and a file created a minute ago is picked up the next time this goes stale. The all-files
+ * review mode is the exception and opts into polling while open. It matters that the
+ * array identity holds still across those refetches — every inline code span in the chat
+ * reads the resolver built from it, so a new array on each poll would re-render all of them
+ * for nothing. React Query's structural sharing is what keeps it, and the long `staleTime`
+ * is what makes the ordinary mention-link question rare in the first place.
  */
-export function useWorkspaceFiles(workspaceId: string | undefined, enabled: boolean) {
+export function useWorkspaceFiles(workspaceId: string | undefined, enabled: boolean, poll = false) {
 	return useQuery({
 		queryKey: ['workspaceFiles', workspaceId],
 		queryFn: () => client.workspaceFiles(workspaceId as string),
 		enabled: enabled && !!workspaceId,
 		staleTime: 120_000,
+		refetchInterval: poll ? 5000 : false,
 		retry: false
 	})
 }
@@ -557,6 +559,17 @@ export function useDiff(workspaceId: string | undefined, enabled: boolean) {
 		if (query.isError) report(false, query.error)
 	}, [query.isError, query.error, report])
 	return query
+}
+
+/** A source file selected from the workspace rail, refreshed while it stays on screen. */
+export function useFilePreview(reference: string | null, enabled: boolean) {
+	return useQuery({
+		queryKey: ['filePreview', reference],
+		queryFn: () => client.filePreview(reference as string),
+		enabled: enabled && !!reference,
+		refetchInterval: 5000,
+		retry: false
+	})
 }
 
 /**

@@ -1,5 +1,18 @@
 import type { DiffFile } from './types.ts'
 
+export type DiffFileScope = 'changed' | 'all'
+
+/** The rail entries for one scope. All-files rows retain diff counts when they have them. */
+export function filesForScope(
+	scope: DiffFileScope,
+	changedFiles: readonly DiffFile[],
+	workspaceFiles: readonly string[]
+): readonly DiffFile[] {
+	if (scope === 'changed') return changedFiles
+	const changedByPath = new Map(changedFiles.map(file => [file.path, file]))
+	return [...workspaceFiles].sort().map(path => changedByPath.get(path) ?? { path, added: 0, removed: 0 })
+}
+
 /**
  * The workspace endpoint ships one ordinary unified patch. The review UI presents it
  * one file at a time, so split only at git's file headers — hunk contents may contain

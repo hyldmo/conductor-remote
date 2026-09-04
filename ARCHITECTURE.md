@@ -126,7 +126,8 @@ web/              React PWA (Vite root)
                   explicit raster links and attachment pills also resolve ignored project-relative
                   files, while absolute and ~ paths pass through for the relay to allow), clipboard (copyText,
                   behind the Copy on a response and on every fenced block)
-  src/components/ Header, WorkspaceList, SessionView, Transcript, Markdown + Code, DiffView,
+  src/components/ Header, WorkspaceList, SessionView, Transcript, Markdown + Code, DiffView
+                  (changed/all file rail with patch/source viewer), SourceLines,
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
                   RolesSettings, WorkflowModePill, DelegationPipeline, QueueBubble,
                   WorkspaceMenu (the status groups, plus Archive), MergeBanner (merge + continue), MessageNav,

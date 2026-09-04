@@ -9,7 +9,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { DiffButton, SessionTabs } = await import('../web/src/components/SessionView.tsx')
+const { DiffButton, DiffFileScopeToggle, SessionTabs } = await import('../web/src/components/SessionView.tsx')
 
 const session: Session = {
 	id: 'chat-1',
@@ -129,6 +129,16 @@ describe('phone chat tabs', () => {
 })
 
 describe('workspace diff shortcut', () => {
+	test('offers changed and all file scopes', () => {
+		const changed = renderToStaticMarkup(<DiffFileScopeToggle scope="changed" onChange={vi.fn()} />)
+		const all = renderToStaticMarkup(<DiffFileScopeToggle scope="all" onChange={vi.fn()} />)
+
+		expect(changed).toContain('aria-label="Changed files" aria-pressed="true"')
+		expect(changed).toContain('aria-label="All files" aria-pressed="false"')
+		expect(all).toContain('aria-label="Changed files" aria-pressed="false"')
+		expect(all).toContain('aria-label="All files" aria-pressed="true"')
+	})
+
 	test('shows a dot only when the workspace has changes', () => {
 		const changed = renderToStaticMarkup(
 			<DiffButton stats={{ added: 12, removed: 0 }} open={false} onToggle={vi.fn()} />
