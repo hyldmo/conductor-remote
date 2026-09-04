@@ -229,7 +229,7 @@ export function Transcript({
 
 	return (
 		<div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-			<AgentSubtabStrip tabs={nativeTabs} label="Subagents" />
+			<AgentSubtabStrip tabs={nativeTabs} label="Subagents" parentSelected={!selectedSubagentId} />
 			<div className="relative flex min-h-0 min-w-0 flex-1">
 				<div
 					ref={scroller}

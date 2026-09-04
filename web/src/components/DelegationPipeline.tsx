@@ -501,8 +501,17 @@ function PipelineTabs({
  * Keeping the presentation address-agnostic lets both preserve the same visual
  * hierarchy without pretending a native child is a promptable Conductor chat.
  */
-export function AgentSubtabStrip({ tabs, label }: { tabs: AgentSubtab[]; label: string }) {
-	if (!tabs.length) return null
+export function AgentSubtabStrip({
+	tabs,
+	label,
+	parentSelected = true
+}: {
+	tabs: AgentSubtab[]
+	label: string
+	/** A child view uses the transcript area but does not own this navigation level. */
+	parentSelected?: boolean
+}) {
+	if (!parentSelected || !tabs.length) return null
 	return (
 		<nav
 			aria-label={label}

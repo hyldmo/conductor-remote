@@ -233,26 +233,23 @@ describe('delegation phone surfaces', () => {
 	})
 
 	test('shares the agent strip with selectable provider-native children', () => {
-		const html = renderToStaticMarkup(
-			<AgentSubtabStrip
-				label="Subagents"
-				tabs={[
-					{
-						key: 'tool-call-1',
-						label: 'Inspect parser',
-						model: '5.6 Sol',
-						agentType: 'codex',
-						selected: true,
-						onSelect: vi.fn()
-					}
-				]}
-			/>
-		)
+		const tabs = [
+			{
+				key: 'tool-call-1',
+				label: 'Inspect parser',
+				model: '5.6 Sol',
+				agentType: 'codex',
+				selected: true,
+				onSelect: vi.fn()
+			}
+		]
+		const html = renderToStaticMarkup(<AgentSubtabStrip label="Subagents" tabs={tabs} />)
 
 		expect(html).toContain('aria-label="Subagents"')
 		expect(html).toContain('aria-current="page"')
 		expect(html).toContain('Inspect parser')
 		expect(html).toContain('5.6 Sol')
+		expect(renderToStaticMarkup(<AgentSubtabStrip label="Subagents" tabs={tabs} parentSelected={false} />)).toBe('')
 	})
 
 	test('role identity survives independently of an active job', () => {

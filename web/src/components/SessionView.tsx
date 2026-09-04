@@ -60,6 +60,49 @@ export function workflowForActiveSession(
 	return jobWorkflowId ? workflows.find(workflow => workflow.id === jobWorkflowId) : undefined
 }
 
+interface DelegationPipelineSelection {
+	workflow?: WorkflowRunWire
+	jobs: DelegationProjection[]
+	roles: Record<string, SessionRoleAssignment>
+}
+
+/** Child tabs belong beneath their parent chat, never whichever top-level tab happens to be open. */
+export function delegationPipelineForParentSession(
+	workflows: readonly WorkflowRunWire[],
+	jobs: readonly DelegationProjection[],
+	roles: Readonly<Record<string, SessionRoleAssignment>>,
+	sessionId: string | null
+): DelegationPipelineSelection | undefined {
+	if (!sessionId) return undefined
+	const workflow = workflows.find(candidate => candidate.rootSessionId === sessionId)
+	const parentJobs = jobs.filter(job => job.parentSessionId === sessionId)
+	const activeAssignment = roles[sessionId]
+	const hasPersistedLegacyChildren = Object.values(roles).some(
+		assignment => assignment.delegationId && !assignment.workflowId
+	)
+	// Legacy jobs were deleted after returning, while their role assignments survived.
+	// Their old role document did not record the parent id, but did mark that parent as
+	// planning; keep those completed children reachable only from that parent tab.
+	const isLegacyParent =
+		activeAssignment?.role === 'planning' &&
+		!activeAssignment.delegationId &&
+		!activeAssignment.workflowId &&
+		hasPersistedLegacyChildren
+	if (!workflow && !parentJobs.length && !isLegacyParent) return undefined
+
+	const parentLegacyJobIds = new Set(parentJobs.filter(job => !job.workflowId).map(job => job.id))
+	const scopedRoles = Object.fromEntries(
+		Object.entries(roles).filter(([candidateId, assignment]) => {
+			if (candidateId === sessionId) return true
+			if (assignment.workflowId) return assignment.workflowId === workflow?.id
+			if (!assignment.delegationId) return false
+			return isLegacyParent || parentLegacyJobIds.has(assignment.delegationId)
+		})
+	)
+
+	return { workflow, jobs: parentJobs, roles: scopedRoles }
+}
+
 export function SessionView() {
 	const { workspaceId } = useParams<{ workspaceId: string }>()
 	// Which chat is on screen lives in the URL, because two things set it: the tab strip
@@ -158,9 +201,12 @@ export function SessionView() {
 	const workspaceWorkflows = (data?.workflows ?? []).filter(run => run.workspaceId === workspaceId)
 	if (ws?.workflow && !workspaceWorkflows.some(run => run.id === ws.workflow?.id)) workspaceWorkflows.push(ws.workflow)
 	const sessionWorkflow = workflowForActiveSession(workspaceWorkflows, sessionId, sessionRoles, delegations)
-	// The summary may show the workspace's most relevant run while ownership-sensitive
-	// composer controls use only `sessionWorkflow` below.
-	const displayedWorkflow = sessionWorkflow ?? ws?.workflow ?? workspaceWorkflows[0]
+	const delegationPipeline = delegationPipelineForParentSession(
+		workspaceWorkflows,
+		delegations,
+		sessionRoles,
+		pickedSubagent ? null : sessionId
+	)
 	const activeWorkflowAssignment = sessionId ? sessionRoles[sessionId] : undefined
 	const activeWorkflowJob = sessionId
 		? delegations.find(job => job.workflowId === sessionWorkflow?.id && job.childSessionId === sessionId)
@@ -443,14 +489,16 @@ export function SessionView() {
 							</button>
 						</div>
 					) : null}
-					<DelegationPipeline
-						workflow={displayedWorkflow}
-						jobs={delegations}
-						sessions={sessions}
-						roles={sessionRoles}
-						activeSessionId={sessionId}
-						onSelectSession={pickSession}
-					/>
+					{delegationPipeline ? (
+						<DelegationPipeline
+							workflow={delegationPipeline.workflow}
+							jobs={delegationPipeline.jobs}
+							sessions={sessions}
+							roles={delegationPipeline.roles}
+							activeSessionId={sessionId}
+							onSelectSession={pickSession}
+						/>
+					) : null}
 					{ws.delegation_warning || delegationError ? (
 						<div className="shrink-0 border-b border-del/30 bg-del/5 px-3 py-1.5 text-xs text-del">
 							{delegationError ?? ws.delegation_warning}
