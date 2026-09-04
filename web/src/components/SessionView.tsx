@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { FileDiff, FolderTree, Hourglass, LoaderCircle, Plus, Workflow, X } from 'lucide-react'
+import { ArrowLeft, FileDiff, FolderTree, Hourglass, LoaderCircle, Plus, Workflow, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import {
@@ -112,6 +112,7 @@ export function SessionView() {
 	// nothing would tell the state to give way. One source of truth, last writer wins.
 	const [searchParams, setSearchParams] = useSearchParams()
 	const pickedSession = searchParams.get('session')
+	const pickedSubagent = searchParams.get('subagent')
 	const pickSession = (id: string) => setSearchParams({ session: id }, { replace: true })
 	const [diffOpen, setDiffOpen] = useState(false)
 	const [diffFileScope, setDiffFileScope] = useState<DiffFileScope>('changed')
@@ -190,6 +191,10 @@ export function SessionView() {
 		sessions[0]?.id ??
 		null
 	const activeSession = sessions.find(s => s.id === sessionId)
+	const pickSubagent = (toolUseId: string | null) => {
+		if (!sessionId) return
+		setSearchParams(toolUseId ? { session: sessionId, subagent: toolUseId } : { session: sessionId }, { replace: true })
+	}
 	const sessionRoles = { ...(sessionsData?.session_roles ?? {}), ...(ws?.session_roles ?? {}) }
 	const delegations = ws?.delegations ?? []
 	const legacyDelegations = delegations.filter(job => !job.workflowId)
@@ -200,7 +205,7 @@ export function SessionView() {
 		workspaceWorkflows,
 		delegations,
 		sessionRoles,
-		sessionId
+		pickedSubagent ? null : sessionId
 	)
 	const activeWorkflowAssignment = sessionId ? sessionRoles[sessionId] : undefined
 	const activeWorkflowJob = sessionId
@@ -449,7 +454,7 @@ export function SessionView() {
 					{sessions.length > 0 || ws.state === 'ready' ? (
 						<SessionTabs
 							sessions={sessions}
-							activeId={sessionId}
+							activeId={pickedSubagent ? null : sessionId}
 							readMarks={readMarks}
 							promptStates={promptStates}
 							roles={sessionRoles}
@@ -523,9 +528,13 @@ export function SessionView() {
 								turnStartedAt={activeSession?.turn_started_at}
 								waiting={activeSession?.background_tasks}
 								delegations={legacyDelegations}
+								agentType={activeSession?.agent_type}
+								model={activeSession?.model}
+								selectedSubagentId={pickedSubagent}
 								queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
 								onFork={forkChat}
 								onSelectSession={pickSession}
+								onSelectSubagent={pickSubagent}
 								onDismissDelegation={delegationId => void dismissDelegation(delegationId)}
 								onOpenRoles={() => setRolesOpen(true)}
 							/>
@@ -544,33 +553,39 @@ export function SessionView() {
 							/>
 						) : null}
 					</div>
-					{/* The agent controls — and the Stop button — render inside the composer card. */}
-					<Composer
-						key={ws.id}
-						session={activeSession}
-						sessionId={sessionId}
-						workspaceId={ws.id}
-						working={working}
-						actuator={actuator}
-						onFork={prompt => forkChat({ thinking: true, tools: false }, prompt)}
-						onContext={
-							activeSession
-								? () =>
-										setContextSession({
-											workspaceId: ws.id,
-											id: activeSession.id,
-											title: activeSession.title
-										})
-								: undefined
-						}
-						workflowStarted={
-							!!(sessionId && sessionRoles[sessionId]) || !!(ws.pending_prompt && sessionId === ws.active_session_id)
-						}
-						workflow={sessionWorkflow}
-						workflowRole={workflowRole}
-						focusDraft={sessionId === focusComposerFor}
-						onDraftFocused={() => setFocusComposerFor(null)}
-					/>
+					{/* A native child is only a transcript slice, never a promptable Conductor
+					    session. Keep the parent composer out of that view so a reply cannot look
+					    like it is being sent to the child. */}
+					{pickedSubagent ? (
+						<SubagentReplyNotice title={activeSession?.title} onReturn={() => pickSubagent(null)} />
+					) : (
+						<Composer
+							key={ws.id}
+							session={activeSession}
+							sessionId={sessionId}
+							workspaceId={ws.id}
+							working={working}
+							actuator={actuator}
+							onFork={prompt => forkChat({ thinking: true, tools: false }, prompt)}
+							onContext={
+								activeSession
+									? () =>
+											setContextSession({
+												workspaceId: ws.id,
+												id: activeSession.id,
+												title: activeSession.title
+											})
+									: undefined
+							}
+							workflowStarted={
+								!!(sessionId && sessionRoles[sessionId]) || !!(ws.pending_prompt && sessionId === ws.active_session_id)
+							}
+							workflow={sessionWorkflow}
+							workflowRole={workflowRole}
+							focusDraft={sessionId === focusComposerFor}
+							onDraftFocused={() => setFocusComposerFor(null)}
+						/>
+					)}
 				</div>
 
 				{diffOpen ? (
@@ -597,6 +612,22 @@ export function SessionView() {
 				) : null}
 			</div>
 		</MentionResolverProvider>
+	)
+}
+
+/** Native children cannot receive a phone prompt; return to their real parent first. */
+export function SubagentReplyNotice({ title, onReturn }: { title?: string | null; onReturn: () => void }) {
+	return (
+		<div className="pb-safe flex shrink-0 items-center justify-center border-t border-border-soft px-4 py-3">
+			<button
+				type="button"
+				onClick={onReturn}
+				className="flex min-w-0 items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium text-accent transition active:bg-surface-2"
+			>
+				<ArrowLeft size={14} className="shrink-0" />
+				<span className="truncate">Return to {title || 'parent chat'} to reply</span>
+			</button>
+		</div>
 	)
 }
 

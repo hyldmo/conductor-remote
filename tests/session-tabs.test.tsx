@@ -15,6 +15,7 @@ const {
 	DiffFileScopeToggle,
 	DiffFolderToggle,
 	SessionTabs,
+	SubagentReplyNotice,
 	workflowForActiveSession
 } = await import('../web/src/components/SessionView.tsx')
 
@@ -265,6 +266,13 @@ describe('phone chat tabs', () => {
 			/>
 		)
 		expect(html).toContain('aria-label="New chat, same files"')
+	})
+
+	test('makes a native child read-only and names the parent reply destination', () => {
+		const html = renderToStaticMarkup(<SubagentReplyNotice title="Alpha" onReturn={vi.fn()} />)
+
+		expect(html).toContain('Return to Alpha to reply')
+		expect(html).toContain('border-t')
 	})
 })
 

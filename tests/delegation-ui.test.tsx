@@ -11,7 +11,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
 const [
-	{ DelegationPipeline, UiQuarantineBanner, WorkflowWarningBanner },
+	{ AgentSubtabStrip, DelegationPipeline, UiQuarantineBanner, WorkflowWarningBanner },
 	{ QueueBubble },
 	{ RoleChip, RoleEditorCard, roleAgentType, roleDraftCanSave, roleModelProblem, roleWithModel }
 ] = await Promise.all([
@@ -230,6 +230,26 @@ describe('delegation phone surfaces', () => {
 		)
 		expect(html).toContain('Workflow is unavailable')
 		expect(html).toContain('unsupported future schema')
+	})
+
+	test('shares the agent strip with selectable provider-native children', () => {
+		const tabs = [
+			{
+				key: 'tool-call-1',
+				label: 'Inspect parser',
+				model: '5.6 Sol',
+				agentType: 'codex',
+				selected: true,
+				onSelect: vi.fn()
+			}
+		]
+		const html = renderToStaticMarkup(<AgentSubtabStrip label="Subagents" tabs={tabs} />)
+
+		expect(html).toContain('aria-label="Subagents"')
+		expect(html).toContain('aria-current="page"')
+		expect(html).toContain('Inspect parser')
+		expect(html).toContain('5.6 Sol')
+		expect(renderToStaticMarkup(<AgentSubtabStrip label="Subagents" tabs={tabs} parentSelected={false} />)).toBe('')
 	})
 
 	test('role identity survives independently of an active job', () => {

@@ -259,7 +259,9 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   CLI protocols with no model request. Cursor Agent and OpenCode keep their own
   provider cards without pretending local accounting is a subscription limit.
 - ✅ Live transcript per session (assistant text, tool calls, queued messages),
-  incremental polling.
+  incremental polling. Provider-native subagents reuse the workflow agent-subtab
+  strip: the parent keeps one compact spawn row, while each native child opens as
+  its own read-only transcript slice instead of duplicating its work inline.
 - ✅ **Fork a chat** with the selected response only, a concise transcript,
   reasoning, or the full tool-call transcript. Keep it as a new tab over the same files,
   or switch on **To new workspace** to carry the current committed, staged,
