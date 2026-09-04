@@ -9,11 +9,11 @@ import { languageForTool, languageForToolOutput } from '../lib/highlight.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { isUnconfirmed, type PendingMessage, pendingMatchesTranscript } from '../lib/pending.ts'
 import { assistantTurnEnds, latestAssistantForActions, turnOrigin } from '../lib/transcript-actions.ts'
-import { type TranscriptNode, transcriptTree } from '../lib/transcript-tree.ts'
+import { type TranscriptNode, transcriptSubagents, transcriptTree } from '../lib/transcript-tree.ts'
 import type { BackgroundTask, DelegationProjection, PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { Code } from './Code.tsx'
-import { DelegationBubbles } from './DelegationPipeline.tsx'
+import { AgentSubtabStrip, DelegationBubbles } from './DelegationPipeline.tsx'
 import { ChatLink, Markdown, sourceReference } from './Markdown.tsx'
 import { MessageNav } from './MessageNav.tsx'
 import { Patch } from './Patch.tsx'
@@ -42,8 +42,12 @@ export function Transcript({
 	waiting,
 	delegations = [],
 	poll,
+	agentType,
+	model,
+	selectedSubagentId,
 	onFork,
 	onSelectSession,
+	onSelectSubagent,
 	onDismissDelegation,
 	onOpenRoles
 }: {
@@ -71,9 +75,16 @@ export function Transcript({
 	queued?: PendingPrompt | null
 	/** `false` for an archived chat: it is fetched once, because it has no next message. */
 	poll?: boolean
+	/** Provider identity inherited by native children unless their SDK says otherwise. */
+	agentType?: string | null
+	model?: string | null
+	/** Spawning tool id for the native child transcript currently on screen. */
+	selectedSubagentId?: string | null
 	/** Opens a new chat or workspace with a selected transcript cut staged as an attachment. */
 	onFork?: (format: SplitFormat) => Promise<void>
 	onSelectSession?: (sessionId: string) => void
+	/** Native children share this session; selection addresses their durable tool call instead. */
+	onSelectSubagent?: (toolUseId: string | null) => void
 	onDismissDelegation?: (delegationId: string) => void
 	onOpenRoles?: () => void
 }) {
@@ -85,15 +96,21 @@ export function Transcript({
 	const scroller = useRef<HTMLDivElement>(null)
 	const atBottom = useRef(true)
 
-	// Conductor interleaves a delegated agent's frames with its parent's, but gives every
-	// child a durable pointer back to the spawning tool call. Rebuild that hierarchy first;
-	// only the root entries belong to this chat's Copy/Fork and turn-duration controls.
+	// Conductor interleaves a native agent's frames with its parent's, but gives every
+	// child a durable pointer back to the spawning tool call. Rebuild that hierarchy,
+	// then expose each call as the same second-level tab workflow children already use.
 	const nodes = useMemo(() => transcriptTree(entries), [entries])
+	const subagents = useMemo(() => transcriptSubagents(nodes), [nodes])
+	const selectedSubagent = selectedSubagentId
+		? subagents.find(subagent => subagent.id === selectedSubagentId)
+		: undefined
+	const showingSubagent = !!selectedSubagent
+	const visibleNodes = selectedSubagent?.node.children ?? nodes
 	const rootEntries = useMemo(() => nodes.map(node => node.e), [nodes])
 	// Grouping is pure of `entries`, and `entries` only changes when a row actually
 	// lands — so this holds the row list (and each group's slice) at the same identity
 	// across the polls above, which is what lets the memoised rows below bail out.
-	const rows = useMemo(() => groupSteps(nodes), [nodes])
+	const rows = useMemo(() => groupSteps(visibleNodes), [visibleNodes])
 	// The newest turn's Copy/Fork is drawn *after* every row rather than under its
 	// response: an agent that speaks and then keeps working buries the buttons
 	// mid-transcript, where they read as belonging to the step below them. Older turns
@@ -110,6 +127,13 @@ export function Transcript({
 		() => new Map(assistantTurnEnds(rootEntries).map(e => [e, turnOrigin(rootEntries, e, turnStartedAt)])),
 		[rootEntries, turnStartedAt]
 	)
+	const selectedSubagentFinal = selectedSubagent ? subagentFinal(selectedSubagent.node) : null
+
+	// A copied/stale URL can name a tool call this transcript no longer contains. Wait
+	// for the initial read before clearing it, then fail open to the real parent chat.
+	useEffect(() => {
+		if (selectedSubagentId && !loading && !selectedSubagent) onSelectSubagent?.(null)
+	}, [selectedSubagentId, selectedSubagent, loading, onSelectSubagent])
 
 	// The relay owns the entry, so dropping it is a request, not a local edit. A
 	// parked prompt (lock screen) belongs to its chat, a first prompt to its workspace.
@@ -157,16 +181,16 @@ export function Transcript({
 	}
 
 	const waitingCount = waiting?.length ?? 0
-	// biome-ignore lint/correctness/useExhaustiveDependencies: fire on new entries, a new optimistic bubble, or an indicator toggling to keep the view pinned
+	// biome-ignore lint/correctness/useExhaustiveDependencies: fire on new entries, view selection, a new optimistic bubble, or an indicator toggling to keep the view pinned
 	useLayoutEffect(() => {
 		const el = scroller.current
 		if (el && atBottom.current) el.scrollTop = el.scrollHeight
-	}, [entries, visiblePending.length, working, waitingCount])
+	}, [entries, visiblePending.length, working, waitingCount, selectedSubagentId])
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reset scroll intent when switching sessions
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset scroll intent when switching real or virtual sessions
 	useEffect(() => {
 		atBottom.current = true
-	}, [sessionId])
+	}, [sessionId, selectedSubagentId])
 
 	// The scroller shrinks when the software keyboard opens (useVisualViewportHeight
 	// resizes the whole column) and when the composer autogrows. Without this, its
@@ -186,106 +210,136 @@ export function Transcript({
 	// waiting on that setup, showing it beats an empty pane that looks like a loss.
 	if (!sessionId && !showQueued) return <Empty>No active session in this workspace.</Empty>
 
-	const empty = entries.length === 0 && visiblePending.length === 0 && !showQueued && !hasDelegations
+	const parentEmpty = entries.length === 0 && visiblePending.length === 0 && !showQueued && !hasDelegations
+	const subagentEmpty = showingSubagent && visibleNodes.length === 0 && !selectedSubagentFinal
+	const empty = showingSubagent ? subagentEmpty : parentEmpty
+	const nativeTabs = subagents.map(subagent => {
+		const failed = !!subagent.node.e.error
+		const selected = subagent.id === selectedSubagent?.id
+		return {
+			key: subagent.id,
+			label: subagent.label,
+			model: model ?? null,
+			agentType: agentType ?? null,
+			...(failed ? { status: 'Failed', state: 'failed' as const } : {}),
+			selected,
+			...(onSelectSubagent ? { onSelect: () => onSelectSubagent(selected ? null : subagent.id) } : {})
+		}
+	})
 
 	return (
-		<div className="relative flex min-h-0 min-w-0 flex-1">
-			<div ref={scroller} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
-				{loading && empty ? (
-					<Spinner label="Loading transcript…" />
-				) : error && empty ? (
-					<Empty>{error}</Empty>
-				) : empty && !working ? (
-					<Empty>No messages yet.</Empty>
-				) : (
-					<div className="flex min-w-0 flex-col gap-2.5">
-						{rows.map(row =>
-							row.kind === 'steps' ? (
-								<StepGroup key={row.key} nodes={row.nodes} />
-							) : (
-								<Fragment key={row.key}>
-									<NodeEntry node={row.node} />
-									{inlineActions.has(rowKey(row.node.e)) ? (
-										<ChatActions
-											text={row.node.e.text}
-											at={row.node.e.ts}
-											startedAt={turnStarts.get(row.node.e)}
-											rowid={row.node.e.rowid}
-											through={row.node.e.rowid}
-											onFork={onFork}
-										/>
-									) : null}
-								</Fragment>
-							)
-						)}
-						{actionTarget ? (
-							<ChatActions
-								text={actionTarget.text}
-								at={actionTarget.ts}
-								startedAt={turnStarts.get(actionTarget)}
-								rowid={actionTarget.rowid}
-								working={working}
-								onFork={onFork}
-							/>
-						) : null}
-						{delegations.length && onSelectSession && onDismissDelegation && onOpenRoles ? (
-							<DelegationBubbles
-								jobs={delegations}
-								sessionId={sessionId}
-								onSelectSession={onSelectSession}
-								onDismiss={onDismissDelegation}
-								onOpenRoles={onOpenRoles}
-							/>
-						) : null}
-						{visiblePending.map(p => (
-							<PendingEntry
-								key={p.id}
-								p={p}
-								onRetry={() =>
-									sendPrompt({
-										id: p.id,
-										sessionId: p.sessionId,
-										workspaceId: p.workspaceId,
-										text: p.text,
-										queue: p.queue,
-										workflow: p.workflow
-									})
-								}
-								onDismiss={() => removePending(p.id)}
-							/>
-						))}
-						{showQueued ? (
-							<QueuedEntry
-								queued={showQueued}
-								// Keyed on the entry being retried, not re-rolled per tap, so a Retry whose
-								// answer goes missing can be tapped again without sending twice — the same
-								// identity a failed bubble gets from its own id (web/src/lib/api.ts).
-								onRetry={
-									sessionId
-										? () =>
+		<div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+			<AgentSubtabStrip tabs={nativeTabs} label="Subagents" />
+			<div className="relative flex min-h-0 min-w-0 flex-1">
+				<div
+					ref={scroller}
+					onScroll={onScroll}
+					className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3"
+					data-subagent-transcript={selectedSubagent?.label}
+				>
+					{loading && empty ? (
+						<Spinner label="Loading transcript…" />
+					) : error && empty ? (
+						<Empty>{error}</Empty>
+					) : subagentEmpty ? (
+						<Empty>No activity from this agent yet.</Empty>
+					) : empty && !working ? (
+						<Empty>No messages yet.</Empty>
+					) : (
+						<div className="flex min-w-0 flex-col gap-2.5">
+							{rows.map(row =>
+								row.kind === 'steps' ? (
+									<StepGroup key={row.key} nodes={row.nodes} />
+								) : (
+									<Fragment key={row.key}>
+										<NodeEntry node={row.node} onSelectSubagent={onSelectSubagent} />
+										{!showingSubagent && inlineActions.has(rowKey(row.node.e)) ? (
+											<ChatActions
+												text={row.node.e.text}
+												at={row.node.e.ts}
+												startedAt={turnStarts.get(row.node.e)}
+												rowid={row.node.e.rowid}
+												through={row.node.e.rowid}
+												onFork={onFork}
+											/>
+										) : null}
+									</Fragment>
+								)
+							)}
+							{selectedSubagentFinal && selectedSubagent ? (
+								<SubagentResult text={selectedSubagentFinal} failed={!!selectedSubagent.node.e.error} />
+							) : null}
+							{!showingSubagent && actionTarget ? (
+								<ChatActions
+									text={actionTarget.text}
+									at={actionTarget.ts}
+									startedAt={turnStarts.get(actionTarget)}
+									rowid={actionTarget.rowid}
+									working={working}
+									onFork={onFork}
+								/>
+							) : null}
+							{!showingSubagent && delegations.length && onSelectSession && onDismissDelegation && onOpenRoles ? (
+								<DelegationBubbles
+									jobs={delegations}
+									sessionId={sessionId}
+									onSelectSession={onSelectSession}
+									onDismiss={onDismissDelegation}
+									onOpenRoles={onOpenRoles}
+								/>
+							) : null}
+							{!showingSubagent
+								? visiblePending.map(p => (
+										<PendingEntry
+											key={p.id}
+											p={p}
+											onRetry={() =>
 												sendPrompt({
-													id: `queued:${showQueued.sessionId ?? showQueued.workspaceId}:${showQueued.createdAt}`,
-													sessionId,
-													workspaceId,
-													text: showQueued.text
+													id: p.id,
+													sessionId: p.sessionId,
+													workspaceId: p.workspaceId,
+													text: p.text,
+													queue: p.queue,
+													workflow: p.workflow
 												})
-										: undefined
-								}
-								onDismiss={() => dismiss(showQueued)}
-							/>
-						) : null}
-						{waiting?.map(task => (
-							<WaitingIndicator key={task.taskId} task={task} />
-						))}
-						{/* The agent can publish a short update, then carry on with tools. Keep its
-					    live indicator after every transcript row so activity always reads as the
-					    newest item, rather than attaching it to that earlier update. */}
-						{working ? <WorkingIndicator since={workingSince} /> : null}
-					</div>
-				)}
+											}
+											onDismiss={() => removePending(p.id)}
+										/>
+									))
+								: null}
+							{!showingSubagent && showQueued ? (
+								<QueuedEntry
+									queued={showQueued}
+									// Keyed on the entry being retried, not re-rolled per tap, so a Retry whose
+									// answer goes missing can be tapped again without sending twice — the same
+									// identity a failed bubble gets from its own id (web/src/lib/api.ts).
+									onRetry={
+										sessionId
+											? () =>
+													sendPrompt({
+														id: `queued:${showQueued.sessionId ?? showQueued.workspaceId}:${showQueued.createdAt}`,
+														sessionId,
+														workspaceId,
+														text: showQueued.text
+													})
+											: undefined
+									}
+									onDismiss={() => dismiss(showQueued)}
+								/>
+							) : null}
+							{!showingSubagent ? waiting?.map(task => <WaitingIndicator key={task.taskId} task={task} />) : null}
+							{/* The agent can publish a short update, then carry on with tools. Keep its
+							    live indicator after every transcript row so activity always reads as the
+							    newest item, rather than attaching it to that earlier update. */}
+							{!showingSubagent && working ? <WorkingIndicator since={workingSince} /> : null}
+						</div>
+					)}
+				</div>
+				{!showingSubagent ? (
+					/* Reads the transcript's own DOM (`data-user-msg`), so it needs no entry list of its own. */
+					<MessageNav scroller={scroller} />
+				) : null}
 			</div>
-			{/* Reads the transcript's own DOM (`data-user-msg`), so it needs no entry list of its own. */}
-			<MessageNav scroller={scroller} />
 		</div>
 	)
 }
@@ -315,8 +369,8 @@ function groupSteps(nodes: TranscriptNode[]): Row[] {
 		run = []
 	}
 	for (const node of nodes) {
-		// An Agent call is already a group of its own, with the child transcript under a
-		// rail. Folding that into an opaque "N steps" disclosure would hide the feature.
+		// An Agent call is already a named doorway to its child subtab. Folding that into
+		// an opaque "N steps" disclosure would hide the feature.
 		if (!node.e.subagentLabel && (node.e.role === 'tool' || node.e.role === 'thinking')) {
 			run.push(node)
 			continue
@@ -361,52 +415,75 @@ const StepGroup = memo(function StepGroup({ nodes }: { nodes: TranscriptNode[] }
 	)
 }, sameNodes)
 
-/** Render a node as either an ordinary transcript row or Conductor's nested Agent block. */
-function NodeEntry({ node }: { node: TranscriptNode }) {
-	return node.e.subagentLabel ? <SubagentEntry node={node} /> : <Entry e={node.e} />
+/** Render a node as either an ordinary transcript row or a doorway to its agent subtab. */
+function NodeEntry({
+	node,
+	onSelectSubagent
+}: {
+	node: TranscriptNode
+	onSelectSubagent?: (toolUseId: string | null) => void
+}) {
+	const toolUseId = node.e.toolUseId
+	return node.e.subagentLabel ? (
+		<SubagentEntry node={node} onOpen={toolUseId && onSelectSubagent ? () => onSelectSubagent(toolUseId) : undefined} />
+	) : (
+		<Entry e={node.e} />
+	)
 }
 
 /**
- * A delegated agent in the shape Conductor uses on the desktop: one labelled Agent
- * header, then that agent's own commentary and tools under a vertical rail.
+ * The spawning call remains in its parent's chronology, but its potentially enormous
+ * child transcript lives behind the matching subtab above. This is the native-agent
+ * equivalent of a workflow's delegation bubble: enough context to explain what the
+ * parent did, without rendering the same child work in two places.
  *
  * Child frames may have been interleaved with parent messages in SQLite. `transcriptTree`
- * has already pulled only the frames carrying this call's parent id under the rail, so
- * the parent can continue below the whole block without impersonating the subagent.
+ * has already pulled them out of the parent view by durable id, so the parent can keep
+ * speaking below this row without impersonating the subagent.
  */
-export function SubagentEntry({ node }: { node: TranscriptNode }) {
-	const { e, children } = node
-	// Claude's synchronous Agent tool returns its final report as the parent tool result,
-	// rather than another child assistant frame. Codex collaboration returns transport
-	// bookkeeping there (`{"status":"completed",…}`), which is not part of the chat.
-	const final = e.output && (e.error || e.tool === 'Agent' || e.tool === 'Task') ? e.output : null
-	const hasBody = children.length > 0 || !!final
-
+export function SubagentEntry({ node, onOpen }: { node: TranscriptNode; onOpen?: () => void }) {
+	const { e } = node
+	const contents = (
+		<>
+			<Waypoints size={14} strokeWidth={1.7} className="shrink-0 text-faint" aria-hidden />
+			<span className="shrink-0 font-medium text-text">Agent</span>
+			<span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted">{e.subagentLabel}</span>
+			{e.error ? <span className="shrink-0 text-[11px] text-del">failed</span> : null}
+			{onOpen ? <span className="shrink-0 text-[11px] text-faint">Open</span> : null}
+		</>
+	)
 	return (
 		<section className="min-w-0 px-0.5" data-subagent={e.subagentLabel}>
-			<div className="flex min-w-0 items-center gap-2 py-1 text-[12.5px]">
-				<Waypoints size={14} strokeWidth={1.7} className="shrink-0 text-faint" aria-hidden />
-				<span className="shrink-0 font-medium text-text">Agent</span>
-				<span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted">{e.subagentLabel}</span>
-				{e.error ? <span className="shrink-0 text-[11px] text-del">failed</span> : null}
-			</div>
-			{hasBody ? (
-				<div className="ml-[7px] min-w-0 border-l border-border pl-4 pb-1 pt-1">
-					<div className="flex min-w-0 flex-col gap-2.5">
-						{children.map(child => (
-							<NodeEntry key={rowKey(child.e)} node={child} />
-						))}
-						{final ? (
-							<div className="flex flex-col items-start" data-subagent-result>
-								<Bubble className={cn('max-w-[92%] px-0.5', e.error && 'text-del/80')}>
-									<Markdown>{final}</Markdown>
-								</Bubble>
-							</div>
-						) : null}
-					</div>
-				</div>
-			) : null}
+			{onOpen ? (
+				<button
+					type="button"
+					onClick={onOpen}
+					aria-label={`Open agent ${e.subagentLabel}`}
+					className="flex w-full min-w-0 items-center gap-2 rounded-lg py-1 text-left text-[12.5px] transition active:bg-surface-2"
+				>
+					{contents}
+				</button>
+			) : (
+				<div className="flex min-w-0 items-center gap-2 py-1 text-[12.5px]">{contents}</div>
+			)}
 		</section>
+	)
+}
+
+/** Claude returns a synchronous Agent/Task report on the call; Codex's output is transport bookkeeping. */
+function subagentFinal(node: TranscriptNode): string | null {
+	const { e } = node
+	return e.output && (e.error || e.tool === 'Agent' || e.tool === 'Task') ? e.output : null
+}
+
+/** A synchronous child's final report, rendered only inside its selected virtual transcript. */
+export function SubagentResult({ text, failed }: { text: string; failed?: boolean }) {
+	return (
+		<div className="flex flex-col items-start" data-subagent-result>
+			<Bubble className={cn('max-w-[92%] px-0.5', failed && 'text-del/80')}>
+				<Markdown>{text}</Markdown>
+			</Bubble>
+		</div>
 	)
 }
 

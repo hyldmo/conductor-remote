@@ -1,4 +1,4 @@
-import { Archive } from 'lucide-react'
+import { Archive, ArrowLeft } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { useSessions } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
@@ -30,10 +30,16 @@ export function ArchivedChat({ workspace }: { workspace: SearchWorkspace }) {
 	// notification and the tab strip all write to one place.
 	const [searchParams, setSearchParams] = useSearchParams()
 	const picked = searchParams.get('session')
+	const pickedSubagent = searchParams.get('subagent')
 	const { data, isLoading } = useSessions(workspace.id, false)
 
 	const sessions = data?.sessions ?? []
 	const sessionId = (picked && sessions.some(s => s.id === picked) ? picked : null) ?? sessions[0]?.id ?? null
+	const activeSession = sessions.find(s => s.id === sessionId)
+	const selectSubagent = (toolUseId: string | null) => {
+		if (!sessionId) return
+		setSearchParams(toolUseId ? { session: sessionId, subagent: toolUseId } : { session: sessionId }, { replace: true })
+	}
 	const subtitle = [workspace.repo_name, workspace.branch].filter(Boolean).join(' · ')
 
 	return (
@@ -56,7 +62,7 @@ export function ArchivedChat({ workspace }: { workspace: SearchWorkspace }) {
 							type="button"
 							key={s.id}
 							onClick={() => setSearchParams({ session: s.id }, { replace: true })}
-							className={cn('pill shrink-0', s.id === sessionId && 'pill-active')}
+							className={cn('pill shrink-0', s.id === sessionId && !pickedSubagent && 'pill-active')}
 						>
 							<span className="whitespace-nowrap">{s.title || 'Untitled'}</span>
 						</button>
@@ -69,7 +75,11 @@ export function ArchivedChat({ workspace }: { workspace: SearchWorkspace }) {
 				<Transcript
 					sessionId={sessionId}
 					workspaceId={workspace.id}
-					turnStartedAt={sessions.find(s => s.id === sessionId)?.turn_started_at}
+					turnStartedAt={activeSession?.turn_started_at}
+					agentType={activeSession?.agent_type}
+					model={activeSession?.model}
+					selectedSubagentId={pickedSubagent}
+					onSelectSubagent={selectSubagent}
 					poll={false}
 				/>
 			)}
@@ -77,7 +87,18 @@ export function ArchivedChat({ workspace }: { workspace: SearchWorkspace }) {
 			    reads exactly like a live one, and nothing else on screen says why typing does
 			    not work. */}
 			<div className="pb-safe shrink-0 border-t border-border-soft px-4 py-3 text-center text-xs text-faint">
-				Read-only — unarchive it in Conductor to reply.
+				{pickedSubagent ? (
+					<button
+						type="button"
+						onClick={() => selectSubagent(null)}
+						className="mx-auto flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-accent transition active:bg-surface-2"
+					>
+						<ArrowLeft size={14} />
+						Back to parent transcript
+					</button>
+				) : (
+					'Read-only — unarchive it in Conductor to reply.'
+				)}
 			</div>
 		</div>
 	)

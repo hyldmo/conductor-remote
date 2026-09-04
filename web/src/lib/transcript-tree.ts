@@ -6,6 +6,13 @@ export interface TranscriptNode {
 	children: TranscriptNode[]
 }
 
+/** A selectable provider-native child inside one Conductor chat transcript. */
+export interface TranscriptSubagent {
+	id: string
+	label: string
+	node: TranscriptNode
+}
+
 /**
  * Rebuild Conductor's delegated-agent hierarchy from the SDK's durable parent ids.
  *
@@ -44,4 +51,29 @@ export function transcriptTree(entries: readonly TranscriptEntry[]): TranscriptN
 	}
 
 	return entries.filter(entry => !attached.has(entry)).map(entry => build(entry, new Set()))
+}
+
+/**
+ * Flatten every selectable agent call for the transcript's virtual child-tab strip.
+ *
+ * Native subagents share their parent's `sessions` row, so the spawning tool id is
+ * their only durable address. Nested agents join the same strip: selecting one shows
+ * exactly its own frame subtree while its parent remains the real chat tab above it.
+ * A malformed call without an id stays visible in the parent transcript but cannot
+ * become a tab whose selection would be impossible to restore.
+ */
+export function transcriptSubagents(nodes: readonly TranscriptNode[]): TranscriptSubagent[] {
+	const found: TranscriptSubagent[] = []
+	const seen = new Set<string>()
+	const visit = (node: TranscriptNode) => {
+		const id = node.e.toolUseId
+		const label = node.e.subagentLabel
+		if (id && label && !seen.has(id)) {
+			seen.add(id)
+			found.push({ id, label, node })
+		}
+		for (const child of node.children) visit(child)
+	}
+	for (const node of nodes) visit(node)
+	return found.sort((a, b) => a.node.e.rowid - b.node.e.rowid || a.id.localeCompare(b.id))
 }

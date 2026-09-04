@@ -137,7 +137,8 @@ web/              React PWA (Vite root)
                   seen), pending sends and stable Workflow mutation client ids (pending.ts),
                   push (permission/subscribe/reconcile), the unlock link a locked Mac gets
                   (lock.ts), transcript-merge (folds each tool result onto the call it answers,
-                  identity intact), transcript-actions (where a Fork control may sit), highlight
+                  identity intact), transcript-tree (rebuilds native child frames and gives each
+                  spawned agent a durable virtual subtab), transcript-actions (where a Fork control may sit), highlight
                   (eleven languages, registered one at a time), fileMentions (turns `src/git.ts`
                   in a message into a source link, worktree file list as the existence check;
                   explicit raster links and attachment pills also resolve ignored project-relative
