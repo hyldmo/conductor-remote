@@ -55,7 +55,7 @@ describe('new-workspace Workflow mode', () => {
 		const prompt = workflowRootPrompt({
 			workflowId: 'workflow-1',
 			objective: result.prepared.objective,
-			role: result.prepared.roles.planning,
+			roles: result.prepared.roles,
 			phaseCapability: workflowCapabilityToken('A'.repeat(43)),
 			cycle: 1,
 			revision: 0
@@ -65,6 +65,16 @@ describe('new-workspace Workflow mode', () => {
 		expect(prompt).toContain('already scheduled one tracked explorer')
 		expect(prompt).toContain('delegate_task')
 		expect(prompt).toContain('Do not edit files')
+		expect(prompt).toContain('## Frozen roles for this Workflow')
+		expect(prompt).toContain('- planning — Fable 5.1: this root chat; plan and integrate delegated work')
+		expect(prompt).toContain(
+			'- exploration — opencode-go/muse-spark-1.3-contributor: read-only investigation and evidence'
+		)
+		expect(prompt).toContain('- implementation — 5.6 Sol: code changes and verification')
+		expect(prompt).toContain('This catalog is authoritative for this run')
+		expect(prompt).not.toContain('list_roles')
+		expect(prompt).not.toContain('effort')
+		expect(prompt).not.toContain('fast')
 		expect(prompt).not.toContain('Plan mode')
 	})
 

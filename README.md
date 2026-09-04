@@ -445,7 +445,9 @@ choices previously read from Conductor's real picker; a missing or ambiguous lab
 stays red and Start is refused before the relay opens a tab. The shipped
 `exploration` placeholder is intentionally invalid when several Spark rows exist,
 so choose the exact one once. Start freezes all three roles for that run; editing a
-definition later affects only the next run. In **New workspace** and the composer of
+definition later affects only the next run. The root receives those frozen model labels
+and responsibilities in its first prompt; it does not need to call `list_roles`, whose
+output describes mutable defaults for later runs. In **New workspace** and the composer of
 an untouched **+ New chat**, the **Workflow** pill is the kickoff switch. Its accepted
 state appears immediately from the top-level Workflow list, including before a new
 workspace is bound. The planning tuple is read-only, while the generic Plan control

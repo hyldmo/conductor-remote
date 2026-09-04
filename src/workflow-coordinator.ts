@@ -829,7 +829,7 @@ export class WorkflowCoordinator {
 							workflowRootPrompt({
 								workflowId: run.id,
 								objective: run.objective,
-								role: promptRole(run.roles.planning),
+								roles: run.roles,
 								phaseCapability: token as string,
 								cycle: 0,
 								revision: 0
