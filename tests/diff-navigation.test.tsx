@@ -3,7 +3,14 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { DiffFile, Workspace, WorkspaceDiff } from '../src/wire.ts'
 import { Patch } from '../web/src/components/Patch.tsx'
-import { filesForScope, patchForFile, preparePatch, splitWorkspacePatch } from '../web/src/lib/diff.ts'
+import {
+	buildDiffFileTree,
+	filesForScope,
+	filesInTreeOrder,
+	patchForFile,
+	preparePatch,
+	splitWorkspacePatch
+} from '../web/src/lib/diff.ts'
 
 Object.defineProperty(globalThis, 'location', { configurable: true, value: { hash: '', pathname: '/', search: '' } })
 Object.defineProperty(globalThis, 'localStorage', {
@@ -12,7 +19,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { DiffFileViewer, DiffView } = await import('../web/src/components/DiffView.tsx')
+const { DiffFileList, DiffFileViewer, DiffView } = await import('../web/src/components/DiffView.tsx')
 
 const files: DiffFile[] = [
 	{ path: 'one.ts', added: 1, removed: 0 },
@@ -86,6 +93,56 @@ describe('diff file navigation', () => {
 		expect(all).toContain('one.ts')
 		expect(all).not.toContain('two.ts')
 		expect(all).toContain('three.ts')
+	})
+
+	it('groups files into sorted folders with aggregate change counts', () => {
+		const nested: DiffFile[] = [
+			{ path: 'README.md', added: 0, removed: 0 },
+			{ path: 'src/index.ts', added: 4, removed: 1 },
+			{ path: 'src/lib/file10.ts', added: 0, removed: 3 },
+			{ path: 'src/lib/file2.ts', added: 2, removed: 0 },
+			{ path: 'tests/diff.test.ts', added: 1, removed: 1 }
+		]
+		const tree = buildDiffFileTree(nested)
+
+		expect(tree.map(node => `${node.kind}:${node.name}`)).toEqual(['folder:src', 'folder:tests', 'file:README.md'])
+		const src = tree[0]
+		expect(src).toMatchObject({ kind: 'folder', path: 'src', fileCount: 3, added: 6, removed: 4 })
+		if (src?.kind !== 'folder') throw new Error('src folder missing')
+		expect(src.children.map(node => `${node.kind}:${node.name}`)).toEqual(['folder:lib', 'file:index.ts'])
+		expect(filesInTreeOrder(nested).map(file => file.path)).toEqual([
+			'src/lib/file2.ts',
+			'src/lib/file10.ts',
+			'src/index.ts',
+			'tests/diff.test.ts',
+			'README.md'
+		])
+	})
+
+	it('opens Changed folders and keeps All folders compact until selected', () => {
+		const nested: DiffFile[] = [
+			{ path: 'README.md', added: 0, removed: 0 },
+			{ path: 'src/index.ts', added: 4, removed: 1 },
+			{ path: 'src/lib/format.ts', added: 2, removed: 0 }
+		]
+		const renderTree = (scope: 'changed' | 'all', selectedFile: string | null = null) =>
+			renderToStaticMarkup(
+				<DiffFileList files={nested} scope={scope} selectedFile={selectedFile} onSelectFile={vi.fn()} />
+			)
+
+		const changed = renderTree('changed')
+		expect(changed).toContain('aria-label="Collapse src, 2 files"')
+		expect(changed).toContain('aria-label="src/index.ts"')
+
+		const all = renderTree('all')
+		expect(all).toContain('aria-label="Expand src, 2 files"')
+		expect(all).not.toContain('aria-label="src/index.ts"')
+		expect(all).toContain('aria-label="README.md"')
+
+		const selected = renderTree('all', 'src/lib/format.ts')
+		expect(selected).toContain('aria-label="Collapse src, 2 files"')
+		expect(selected).toContain('aria-label="Collapse src/lib, 1 file"')
+		expect(selected).toContain('aria-label="src/lib/format.ts"')
 	})
 
 	it('splits a workspace patch into independently viewable files', () => {
