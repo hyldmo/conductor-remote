@@ -10,7 +10,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { SubagentEntry } = await import('../web/src/components/Transcript.tsx')
+const { SubagentEntry, SubagentResult } = await import('../web/src/components/Transcript.tsx')
 
 const entry = (patch: Partial<TranscriptEntry>): TranscriptEntry => ({
 	id: 'entry',
@@ -23,7 +23,7 @@ const entry = (patch: Partial<TranscriptEntry>): TranscriptEntry => ({
 })
 
 describe('subagent transcript rendering', () => {
-	test('draws the labelled child transcript under a rail and hides collaboration bookkeeping', () => {
+	test('leaves a compact doorway in the parent instead of duplicating the child transcript', () => {
 		const node: TranscriptNode = {
 			e: entry({
 				role: 'tool',
@@ -35,28 +35,18 @@ describe('subagent transcript rendering', () => {
 			children: [{ e: entry({ id: 'child', text: 'The rebase is clean.' }), children: [] }]
 		}
 
-		const html = renderToStaticMarkup(<SubagentEntry node={node} />)
+		const html = renderToStaticMarkup(<SubagentEntry node={node} onOpen={() => {}} />)
 
 		expect(html).toContain('data-subagent="Rebase main"')
 		expect(html).toContain('>Agent<')
-		expect(html).toContain('The rebase is clean.')
-		expect(html).toContain('border-l')
+		expect(html).toContain('aria-label="Open agent Rebase main"')
+		expect(html).toContain('>Open<')
+		expect(html).not.toContain('The rebase is clean.')
 		expect(html).not.toContain('receiverThreadIds')
 	})
 
-	test('renders the final report returned by a synchronous Claude Agent', () => {
-		const node: TranscriptNode = {
-			e: entry({
-				role: 'tool',
-				tool: 'Agent',
-				toolUseId: 'toolu_explore',
-				subagentLabel: 'Inspect parser',
-				output: '**Found it.**'
-			}),
-			children: []
-		}
-
-		const html = renderToStaticMarkup(<SubagentEntry node={node} />)
+	test('renders a synchronous Claude report only in the selected child view', () => {
+		const html = renderToStaticMarkup(<SubagentResult text="**Found it.**" />)
 
 		expect(html).toContain('data-subagent-result="true"')
 		expect(html).toContain('<strong>Found it.</strong>')

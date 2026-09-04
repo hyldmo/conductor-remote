@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { parseMessage, type TranscriptEntry } from '../src/transcript.ts'
-import { transcriptTree } from '../web/src/lib/transcript-tree.ts'
+import { transcriptSubagents, transcriptTree } from '../web/src/lib/transcript-tree.ts'
 
 const row = (content: string, rowid: number, id = `message-${rowid}`) => ({
 	rowid,
@@ -113,5 +113,43 @@ describe('subagent transcript hierarchy', () => {
 		expect(tree.map(node => node.e.id)).toEqual(['root', 'orphan'])
 		expect(tree[0].children[0].e.id).toBe('nested')
 		expect(tree[0].children[0].children[0].e.id).toBe('grandchild')
+	})
+
+	test('gives root and nested subagents stable virtual-tab addresses in spawn order', () => {
+		const laterRoot: TranscriptEntry = {
+			...textEntry('later-root', 8, 'Agent'),
+			role: 'tool',
+			tool: 'Agent',
+			toolUseId: 'later-call',
+			subagentLabel: 'Later root'
+		}
+		const root: TranscriptEntry = {
+			...textEntry('root', 1, 'Agent'),
+			role: 'tool',
+			tool: 'Agent',
+			toolUseId: 'root-call',
+			subagentLabel: 'Review'
+		}
+		const nested: TranscriptEntry = {
+			...textEntry('nested', 4, 'Agent', 'root-call'),
+			role: 'tool',
+			tool: 'Agent',
+			toolUseId: 'nested-call',
+			subagentLabel: 'Inspect tests'
+		}
+		const malformed: TranscriptEntry = {
+			...textEntry('malformed', 2, 'Agent'),
+			role: 'tool',
+			tool: 'Agent',
+			subagentLabel: 'No durable id'
+		}
+
+		const tabs = transcriptSubagents(transcriptTree([laterRoot, root, nested, malformed]))
+
+		expect(tabs.map(tab => [tab.id, tab.label])).toEqual([
+			['root-call', 'Review'],
+			['nested-call', 'Inspect tests'],
+			['later-call', 'Later root']
+		])
 	})
 })

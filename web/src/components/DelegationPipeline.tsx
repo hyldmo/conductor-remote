@@ -402,6 +402,18 @@ interface PipelineTab {
 	state?: 'busy' | 'waiting' | 'failed' | 'done'
 }
 
+/** One real workflow child or virtual provider-native child in the shared agent strip. */
+export interface AgentSubtab {
+	key: string
+	label: string
+	model: string | null
+	agentType: string | null
+	status?: string
+	state?: 'busy' | 'waiting' | 'failed' | 'done'
+	selected?: boolean
+	onSelect?: () => void
+}
+
 function pipelineTabs(
 	jobs: DelegationProjection[],
 	sessions: Session[],
@@ -462,6 +474,34 @@ function PipelineTabs({
 	activeSessionId?: string | null
 	onSelectSession: (sessionId: string) => void
 }) {
+	return (
+		<AgentSubtabStrip
+			label={label}
+			tabs={tabs.map(tab => {
+				const childSessionId = tab.childSessionId
+				return {
+					key: tab.key,
+					label: tab.role,
+					model: tab.model,
+					agentType: tab.agentType,
+					status: tab.status,
+					state: tab.state,
+					selected: !!childSessionId && childSessionId === activeSessionId,
+					...(childSessionId ? { onSelect: () => onSelectSession(childSessionId) } : {})
+				}
+			})}
+		/>
+	)
+}
+
+/**
+ * The product's second navigation level: compact provider-aware agent tabs.
+ *
+ * Workflow children use real session ids; native subagents use spawning tool ids.
+ * Keeping the presentation address-agnostic lets both preserve the same visual
+ * hierarchy without pretending a native child is a promptable Conductor chat.
+ */
+export function AgentSubtabStrip({ tabs, label }: { tabs: AgentSubtab[]; label: string }) {
 	if (!tabs.length) return null
 	return (
 		<nav
@@ -473,11 +513,10 @@ function PipelineTabs({
 			) : null}
 			{tabs.map((tab, index) => {
 				const failed = tab.state === 'failed'
-				const selected = !!tab.childSessionId && tab.childSessionId === activeSessionId
 				const contents = (
 					<>
 						<ProviderMark agentType={tab.agentType} model={tab.model} className="size-3.5" />
-						<span className="max-w-28 truncate font-medium">{tab.role}</span>
+						<span className="max-w-28 truncate font-medium">{tab.label}</span>
 						{tab.model ? <span className="max-w-28 truncate text-faint">{tab.model}</span> : null}
 						{tab.status ? (
 							<span className={cn('flex shrink-0 items-center gap-1', failed ? 'text-del' : 'text-muted')}>
@@ -495,17 +534,17 @@ function PipelineTabs({
 						) : null}
 					</>
 				)
-				const childSessionId = tab.childSessionId
 				return (
 					<div key={tab.key} className="flex shrink-0 items-center gap-1.5">
 						{index ? <ArrowRight size={11} className="shrink-0 text-faint" /> : null}
-						{childSessionId ? (
+						{tab.onSelect ? (
 							<button
 								type="button"
-								onClick={() => onSelectSession(childSessionId)}
+								onClick={tab.onSelect}
+								aria-current={tab.selected ? 'page' : undefined}
 								className={cn(
 									'flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-border-soft px-2 text-[11px] active:bg-surface-2',
-									selected && 'border-accent/50 bg-surface-2',
+									tab.selected && 'border-accent/50 bg-surface-2',
 									failed && 'border-del/40'
 								)}
 							>
