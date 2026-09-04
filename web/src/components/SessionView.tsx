@@ -1,5 +1,16 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, FileDiff, FolderTree, Hourglass, LoaderCircle, Plus, Workflow, X } from 'lucide-react'
+import {
+	ArrowLeft,
+	ChartPie,
+	FileDiff,
+	FolderTree,
+	Hourglass,
+	LoaderCircle,
+	MessageSquarePlus,
+	Plus,
+	Workflow,
+	X
+} from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import {
@@ -13,9 +24,17 @@ import {
 } from '../hooks.ts'
 import { ApiError, client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { type Command, useRegisterCommands } from '../lib/commands.ts'
 import type { DiffFileScope } from '../lib/diff.ts'
 import { buildResolver, MentionResolverProvider } from '../lib/fileMentions.ts'
-import { shortModel, timestampMs, workspaceTitle } from '../lib/format.ts'
+import {
+	SETTABLE_STATUSES,
+	shortModel,
+	timestampMs,
+	workspaceStatus,
+	workspaceStatusLabel,
+	workspaceTitle
+} from '../lib/format.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
@@ -39,7 +58,7 @@ import { RoleChip, RolesSettings } from './RolesSettings.tsx'
 import type { SplitFormat } from './Transcript.tsx'
 import { Transcript } from './Transcript.tsx'
 import { PromptStatusDot, Spinner, UnlockLink } from './ui.tsx'
-import { WorkspaceMenu } from './WorkspaceMenu.tsx'
+import { useWorkspaceActions, WorkspaceMenu } from './WorkspaceMenu.tsx'
 
 /** Resolve Workflow ownership from the exact chat, never from a workspace-level display fallback. */
 export function workflowForActiveSession(
@@ -133,6 +152,7 @@ export function SessionView() {
 	} | null>(null)
 	const queryClient = useQueryClient()
 	const navigate = useNavigate()
+	const workspaceActions = useWorkspaceActions(workspaceId)
 	const { data, isLoading } = useWorkspaces()
 	const liveWorkspace = data?.workspaces.find(w => w.id === workspaceId)
 	const diffQuery = useDiff(workspaceId, diffOpen && !!liveWorkspace)
@@ -245,6 +265,63 @@ export function SessionView() {
 	// keeps quiet about a chat being read, which cannot reach one delivered before it was
 	// opened.
 	useClearChatNotification(sessionId, activeUpdatedAt)
+
+	// The palette's rows for this workspace (`lib/commands.ts`). Keyed on the few facts
+	// that decide what is offered and checked, with the handlers behind a ref: the poll
+	// re-reads the workspace every 2.5s and must not re-register anything.
+	const latest = useRef<{ toggleDiff: () => void; createChat: () => Promise<void>; openContext: () => void } | null>(
+		null
+	)
+	const statusNow = ws ? workspaceStatus(ws) : null
+	const canCreateChat = !!ws && ws.state === 'ready' && online && !creatingChat
+	const canSetStatus = !!ws && online && !workspaceActions.busy
+	const hasChat = !!activeSession
+	const setStatus = workspaceActions.setStatus
+	const workspaceCommands = useMemo<Command[]>(() => {
+		if (!statusNow) return []
+		return [
+			{
+				id: 'workspace.diff',
+				label: diffOpen ? 'Hide changes' : 'Show changes',
+				group: 'Workspace',
+				icon: FileDiff,
+				keywords: ['diff', 'files', 'review', 'patch'],
+				run: () => latest.current?.toggleDiff()
+			},
+			{
+				id: 'workspace.newChat',
+				label: 'New chat',
+				group: 'Workspace',
+				icon: MessageSquarePlus,
+				keywords: ['tab', 'session', 'same files'],
+				enabled: canCreateChat,
+				run: () => latest.current?.createChat()
+			},
+			{
+				id: 'workspace.context',
+				label: 'Context breakdown',
+				group: 'Workspace',
+				icon: ChartPie,
+				keywords: ['tokens', 'window', 'usage'],
+				enabled: hasChat,
+				run: () => latest.current?.openContext()
+			},
+			...SETTABLE_STATUSES.map(
+				(status): Command => ({
+					id: `workspace.status.${status}`,
+					label: `Status: ${workspaceStatusLabel(status)}`,
+					group: 'Workspace',
+					keywords: ['mark', 'move', 'sidebar', 'group'],
+					checked: status === statusNow,
+					enabled: canSetStatus,
+					run: () => {
+						if (status !== statusNow) void setStatus(status)
+					}
+				})
+			)
+		]
+	}, [statusNow, diffOpen, canCreateChat, canSetStatus, hasChat, setStatus])
+	useRegisterCommands('workspace', workspaceCommands)
 
 	if (!ws) {
 		if (anyWorkspace) return <ArchivedChat workspace={anyWorkspace.workspace} />
@@ -398,6 +475,13 @@ export function SessionView() {
 			setDiffNavigatorOpen(true)
 		}
 	}
+	latest.current = {
+		toggleDiff,
+		createChat,
+		openContext: () => {
+			if (activeSession) setContextSession({ workspaceId: ws.id, id: activeSession.id, title: activeSession.title })
+		}
+	}
 
 	const selectDiffFile = (path: string) => {
 		setSelectedDiff({ workspaceId: ws.id, path })
@@ -446,7 +530,11 @@ export function SessionView() {
 								>
 									<Workflow size={18} />
 								</button>
-								<WorkspaceMenu workspace={ws} agentsRunning={sessions.filter(s => s.status === 'working').length} />
+								<WorkspaceMenu
+									workspace={ws}
+									agentsRunning={sessions.filter(s => s.status === 'working').length}
+									actions={workspaceActions}
+								/>
 								<DiffButton stats={ws.change_stats} open={diffOpen} onToggle={toggleDiff} />
 							</>
 						}

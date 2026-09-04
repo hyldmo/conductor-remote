@@ -143,13 +143,16 @@ web/              React PWA (Vite root)
                   in a message into a source link, worktree file list as the existence check;
                   explicit raster links and attachment pills also resolve ignored project-relative
                   files, while absolute and ~ paths pass through for the relay to allow), clipboard (copyText,
-                  behind the Copy on a response and on every fenced block)
+                  behind the Copy on a response and on every fenced block), commands (the ⌘K
+                  palette's registry: each view registers the actions it owns while mounted,
+                  one matcher and one shortcut dispatcher read the flat list)
   src/components/ Header, WorkspaceList, SessionView, Transcript, Markdown + Code, DiffView
                   (changed/all file rail with patch/source viewer), SourceLines,
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
                   RolesSettings, WorkflowModePill, DelegationPipeline, QueueBubble,
                   WorkspaceMenu (the status groups, plus Archive), MergeBanner (merge + continue), MessageNav,
-                  DevServerControls, ContextBreakdownSheet, SearchSheet + SearchPane, ArchivedChat (a hit whose
+                  DevServerControls, ContextBreakdownSheet, SearchSheet + SearchPane + CommandResults (one
+                  ⌘K box for chats and actions), ArchivedChat (a hit whose
                   worktree is gone), NewWorkspaceSheet, PlanUsageSheet (the Models panel:
                   provider defaults plus usage), LogsSheet, TokenGate, QRCode +
                   QRScanner, ReloadPrompt, ui, and ConnectSheet

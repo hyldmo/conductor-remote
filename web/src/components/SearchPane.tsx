@@ -205,6 +205,7 @@ function ResultRow({
 	return (
 		<button
 			type="button"
+			data-palette-row=""
 			className={cn(CARD, selected && 'border-accent/50 bg-surface-2')}
 			onClick={() => onOpen(w.id, row.sessionId)}
 		>

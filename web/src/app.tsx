@@ -16,6 +16,7 @@ import {
 	useWorkspaces
 } from './hooks.ts'
 import { cn } from './lib/cn.ts'
+import { useCommandShortcuts } from './lib/commands.ts'
 import { useApp } from './store.ts'
 
 export function App() {
@@ -63,6 +64,8 @@ function Shell() {
 	usePushSync()
 	// Durable read marks and drafts stay local-first, then reconcile with the host.
 	usePrefsSync()
+	// One listener for every registered shortcut, on every screen the shell draws.
+	useCommandShortcuts()
 	return (
 		<VoiceCallProvider>
 			<div className="flex h-full min-h-0 flex-col overflow-hidden">
