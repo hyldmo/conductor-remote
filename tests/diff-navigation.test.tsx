@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { DiffFile, Workspace, WorkspaceDiff } from '../src/wire.ts'
 import { Patch } from '../web/src/components/Patch.tsx'
-import { filesForScope, patchForFile, splitWorkspacePatch } from '../web/src/lib/diff.ts'
+import { filesForScope, patchForFile, preparePatch, splitWorkspacePatch } from '../web/src/lib/diff.ts'
 
 Object.defineProperty(globalThis, 'location', { configurable: true, value: { hash: '', pathname: '/', search: '' } })
 Object.defineProperty(globalThis, 'localStorage', {
@@ -98,6 +98,13 @@ describe('diff file navigation', () => {
 		expect(html).toContain('a/two.ts')
 		expect(html).toContain('+two')
 		expect(html).not.toContain('a/one.ts')
+	})
+
+	it('makes Conductor bare edit hunks renderable without losing their status', () => {
+		const prepared = preparePatch('updated src/one.ts\n@@ -1 +1 @@\n-old\n+const one = 1', 'src/one.ts')
+
+		expect(prepared.preamble).toBe('updated src/one.ts')
+		expect(prepared.patch).toBe('--- src/one.ts\n+++ src/one.ts\n@@ -1 +1 @@\n-old\n+const one = 1')
 	})
 
 	it('reports a file whose section fell beyond the workspace patch limit', () => {

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
@@ -14,6 +15,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 // ignores it, so the prod bundle is unaffected.
 const webPort = Number(process.env.WEB_PORT) || 5173
 const relayPort = Number(process.env.RELAY_PORT) || 8787
+const webModule = (path: string) => fileURLToPath(new URL(path, import.meta.url))
 
 // Baked into the bundle as `__APP_VERSION__` so the running app knows which build it
 // is — shown on the Connect sheet beside the relay version, and compared against the
@@ -29,13 +31,36 @@ export default defineConfig({
 		__APP_VERSION__: JSON.stringify(appVersion)
 	},
 	root: 'web',
+	resolve: {
+		alias: [
+			// Pierre intentionally exposes every Shiki grammar and theme as a dynamic
+			// import. Workbox would consequently precache more than 11 MB even though
+			// the phone only ever requests the grammar for the file on screen. Keep the
+			// renderer intact while giving it the relay's deliberately bounded registry.
+			{ find: /^shiki$/, replacement: webModule('./web/src/lib/pierre-shiki.ts') },
+			{ find: /^shiki\/wasm$/, replacement: webModule('./web/src/lib/pierre-shiki-wasm.ts') },
+			{ find: '@pierre/theming/themes', replacement: webModule('./web/src/lib/pierre-themes.ts') }
+		]
+	},
 	// Repo-root `public/` (outside the `web` root) so Conductor's repo-icon lookup —
 	// which only scans root-level paths like `public/apple-touch-icon.png` — finds
 	// the same assets the PWA serves, with no duplicated icon file.
 	publicDir: '../public',
 	build: {
 		outDir: '../dist',
-		emptyOutDir: true
+		emptyOutDir: true,
+		rollupOptions: {
+			output: {
+				// Grammar chunks are immutable, on-demand assets. Giving them a stable
+				// directory lets Workbox leave them out of the install-time app shell.
+				chunkFileNames: chunk =>
+					chunk.moduleIds.some(
+						id => id.includes('/node_modules/shiki/dist/langs/') || id.includes('/node_modules/@shikijs/langs/')
+					)
+						? 'assets/diff-syntax/[name]-[hash].js'
+						: 'assets/[name]-[hash].js'
+			}
+		}
 	},
 	server: {
 		host: true,
@@ -88,7 +113,19 @@ export default defineConfig({
 				// Drop prior-build precache entries when a new SW activates, so a stale shell
 				// can't linger and re-serve old hashed assets.
 				cleanupOutdatedCaches: true,
-				runtimeCaching: []
+				// A diff downloads only its own Shiki grammar. Cache that immutable chunk
+				// after first use without making every phone fetch every language on update.
+				globIgnores: ['**/assets/diff-syntax/**'],
+				runtimeCaching: [
+					{
+						urlPattern: ({ url }) => url.pathname.startsWith('/assets/diff-syntax/'),
+						handler: 'CacheFirst',
+						options: {
+							cacheName: 'diff-syntax',
+							expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 365 }
+						}
+					}
+				]
 			}
 		})
 	]
