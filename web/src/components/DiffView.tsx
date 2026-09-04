@@ -229,7 +229,7 @@ export function DiffFileViewer({
 									: 'No textual patch is available for this file.'}
 							</Empty>
 						) : null}
-						{patch !== null ? <Patch patch={patch} className="min-w-max p-4" /> : null}
+						{patch !== null ? <Patch patch={patch} fileName={filePath} hideFileHeader className="p-4" /> : null}
 					</>
 				) : (
 					<>

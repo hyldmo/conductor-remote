@@ -37,3 +37,39 @@ export function patchForFile(patch: string, files: readonly DiffFile[], path: st
 	if (index < 0) return null
 	return splitWorkspacePatch(patch)[index] ?? null
 }
+
+export interface PreparedPatch {
+	/** A single-file unified patch that @pierre/diffs can parse. */
+	patch: string
+	/** Conductor's edit status, when it preceded a bare hunk. */
+	preamble: string | null
+}
+
+/**
+ * Conductor edit results contain only `@@` hunks, prefixed by a human status line.
+ * Pierre deliberately accepts complete unified patches instead, so give those hunks
+ * synthetic file headers while keeping the status available to render above them.
+ */
+export function preparePatch(patch: string, fileName?: string): PreparedPatch {
+	const lines = patch.split('\n')
+	const firstHunk = lines.findIndex(line => line.startsWith('@@ '))
+	if (firstHunk < 0) return { patch, preamble: null }
+
+	const headerIndex = lines
+		.slice(0, firstHunk)
+		.findIndex(line => line.startsWith('diff --git ') || line.startsWith('--- '))
+	if (headerIndex >= 0) {
+		const preamble = lines.slice(0, headerIndex).join('\n').trim()
+		return {
+			patch: lines.slice(headerIndex).join('\n'),
+			preamble: preamble || null
+		}
+	}
+
+	const preamble = lines.slice(0, firstHunk).join('\n').trim()
+	const safeName = (fileName?.trim() || 'change.txt').replace(/[\t\r\n]/g, ' ')
+	return {
+		patch: [`--- ${safeName}`, `+++ ${safeName}`, ...lines.slice(firstHunk)].join('\n'),
+		preamble: preamble || null
+	}
+}

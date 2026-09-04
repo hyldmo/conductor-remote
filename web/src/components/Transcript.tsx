@@ -866,7 +866,7 @@ const ToolEntry = memo(function ToolEntry({ e }: { e: TranscriptEntry }) {
 					<div className={cn('min-w-0', e.detail && 'border-t border-border-soft pt-2')}>
 						<Label>{e.error ? 'error' : e.diff ? 'changes' : 'output'}</Label>
 						{e.diff ? (
-							<Patch patch={e.output} />
+							<Patch patch={e.output} fileName={e.detail} />
 						) : (
 							<Mono
 								text={e.output}

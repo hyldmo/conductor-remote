@@ -1,15 +1,39 @@
-import { useMemo } from 'react'
+import { lazy, Suspense, useMemo } from 'react'
 import { cn } from '../lib/cn.ts'
 
+export interface PatchProps {
+	patch: string
+	fileName?: string
+	hideFileHeader?: boolean
+	truncated?: boolean
+	className?: string
+}
+
+const PierrePatch = lazy(() => import('./PierrePatch.tsx'))
+
 /**
- * A unified diff, coloured by line.
+ * A unified diff owned by Pierre: syntax, gutters, change emphasis and hunks. The
+ * small line-coloured renderer remains only while Pierre loads and for metadata-
+ * only patches (binary files, pure renames and mode changes) that have no code body.
  *
  * Two screens show one: the workspace diff (DiffView) and an edit step inside a chat,
  * whose result Conductor stores as a `diffString` (src/transcript.ts). They were the
  * same fifteen lines twice over, and a patch that reads differently in two places reads
  * as two different changes.
  */
-export function Patch({ patch, truncated, className }: { patch: string; truncated?: boolean; className?: string }) {
+export function Patch(props: PatchProps) {
+	// Binary, rename-only and mode-only patches have no code for Shiki to colour. Pierre
+	// would reduce those to an empty body once its duplicate file header is hidden.
+	if (!props.patch.split('\n').some(line => line.startsWith('@@ '))) return <PlainPatch {...props} />
+
+	return (
+		<Suspense fallback={<PlainPatch {...props} />}>
+			<PierrePatch {...props} />
+		</Suspense>
+	)
+}
+
+export function PlainPatch({ patch, truncated, className }: PatchProps) {
 	const lines = useMemo(() => patch.split('\n'), [patch])
 	return (
 		<pre className={cn('overflow-x-auto font-mono text-[11.5px] leading-[1.5]', className)}>
