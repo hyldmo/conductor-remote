@@ -66,6 +66,7 @@ import type {
 	WorkflowReplayRequest,
 	WorkflowRetryRequest,
 	WorkspaceDiff,
+	WorkspaceFileDiff,
 	WorkspaceFilesResponse,
 	WorkspaceResponse
 } from './types.ts'
@@ -295,6 +296,9 @@ export const client = {
 			file
 		),
 	diff: (workspaceId: string) => api<WorkspaceDiff>(routes.diff.path(workspaceId)),
+	/** Complete patch for the changed file currently open in the review viewer. */
+	fileDiff: (workspaceId: string, path: string) =>
+		api<WorkspaceFileDiff>(`${routes.fileDiff.path(workspaceId)}?path=${encodeURIComponent(path)}`),
 	/** Previewable worktree files for chat links and the diff window's All-files rail. */
 	workspaceFiles: (workspaceId: string) => api<WorkspaceFilesResponse>(routes.workspaceFiles.path(workspaceId)),
 	/**

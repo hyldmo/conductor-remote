@@ -22,7 +22,7 @@ import { isAllowedPreviewPath, parseFileReference, parseImageReference } from '.
 import { FirstPromptQueue } from './firstprompt.ts'
 import { captureForkWorkspace, materializeForkWorkspace, releaseForkWorkspace } from './fork-workspace.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
-import { listSourceFiles, workspaceDiff } from './git.ts'
+import { listSourceFiles, workspaceDiff, workspaceFileDiff } from './git.ts'
 import {
 	installLogCapture,
 	isManaged,
@@ -3267,6 +3267,21 @@ const server = http.createServer(async (req, res) => {
 				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
 				if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
 				const diff = await workspaceDiff(ws.worktree, ws.baseBranch)
+				return json(req, res, 200, diff)
+			}
+
+			// GET /api/workspaces/:id/diff/file?path=… — the complete patch for the file
+			// currently on screen. The aggregate endpoint stays bounded for phone-sized
+			// responses, while a late file no longer disappears behind that bound.
+			const fileDiffOf = routeParam(routes.fileDiff, req.method, pathname)
+			if (fileDiffOf) {
+				const ws = reads.getWorkspace(fileDiffOf)
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
+				const file = url.searchParams.get('path')
+				if (!file) return json(req, res, 400, { error: 'file path is required' })
+				const diff = await workspaceFileDiff(ws.worktree, ws.baseBranch, file)
+				if (!diff) return json(req, res, 404, { error: 'changed file not found' })
 				return json(req, res, 200, diff)
 			}
 

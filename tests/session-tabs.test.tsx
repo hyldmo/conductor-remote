@@ -9,7 +9,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { DiffButton, DiffFileScopeToggle, SessionTabs, workflowForActiveSession } = await import(
+const { DiffButton, DiffFileScopeToggle, DiffFolderToggle, SessionTabs, workflowForActiveSession } = await import(
 	'../web/src/components/SessionView.tsx'
 )
 
@@ -135,6 +135,29 @@ describe('phone chat tabs', () => {
 		expect(html.match(/<button/g)).toHaveLength(7)
 	})
 
+	test('shows the full tab title without a width cap', () => {
+		const longTitle = 'Auk brain memory retrieval improvements'
+		const html = renderToStaticMarkup(
+			<SessionTabs
+				sessions={[{ ...session, title: longTitle }]}
+				activeId={session.id}
+				readMarks={{}}
+				promptStates={{}}
+				onSelect={vi.fn()}
+				onContext={vi.fn()}
+				onNewChat={vi.fn()}
+				onClose={vi.fn()}
+				creating={false}
+				closingId={null}
+				online
+			/>
+		)
+
+		expect(html).toContain(`<span class="whitespace-nowrap">${longTitle}</span>`)
+		expect(html).not.toContain('truncate')
+		expect(html).not.toContain('max-w-36')
+	})
+
 	test('keeps durable workflow children out of the parent tab row', () => {
 		const childSession: Session = { ...session, id: 'chat-2', title: 'Explorer' }
 		const manualSession: Session = { ...session, id: 'chat-3', title: 'Manual' }
@@ -195,6 +218,15 @@ describe('workspace diff shortcut', () => {
 		expect(changed).toContain('aria-label="All files" aria-pressed="false"')
 		expect(all).toContain('aria-label="Changed files" aria-pressed="false"')
 		expect(all).toContain('aria-label="All files" aria-pressed="true"')
+	})
+
+	test('makes folder grouping an explicit file-rail preference', () => {
+		const folders = renderToStaticMarkup(<DiffFolderToggle showFolders onChange={vi.fn()} />)
+		const flat = renderToStaticMarkup(<DiffFolderToggle showFolders={false} onChange={vi.fn()} />)
+
+		expect(folders).toContain('aria-label="Group files into folders"')
+		expect(folders).toContain('aria-pressed="true"')
+		expect(flat).toContain('aria-pressed="false"')
 	})
 
 	test('shows a dot only when the workspace has changes', () => {

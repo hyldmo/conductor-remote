@@ -1,11 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { FileDiff, Hourglass, LoaderCircle, Plus, Workflow, X } from 'lucide-react'
+import { FileDiff, FolderTree, Hourglass, LoaderCircle, Plus, Workflow, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import {
 	useAnyWorkspace,
 	useClearChatNotification,
 	useDiff,
+	useFileDiff,
 	useSessions,
 	useWorkspaceFiles,
 	useWorkspaces
@@ -91,6 +92,11 @@ export function SessionView() {
 	const { data, isLoading } = useWorkspaces()
 	const liveWorkspace = data?.workspaces.find(w => w.id === workspaceId)
 	const diffQuery = useDiff(workspaceId, diffOpen && !!liveWorkspace)
+	const fileDiffQuery = useFileDiff(
+		workspaceId,
+		selectedDiffFile,
+		diffOpen && diffFileScope === 'changed' && !!liveWorkspace && !!diffQuery.data?.truncated
+	)
 	// `/api/state` lists only live workspaces, so an id that isn't in it is either archived
 	// or gone. Ask by id before saying "not found": the worktree is deleted on archive, the
 	// transcript is not, and search reaches those chats — 1,846 of the 1,886 here.
@@ -104,6 +110,8 @@ export function SessionView() {
 	const markRead = useApp(s => s.markRead)
 	const setDraft = useApp(s => s.setDraft)
 	const online = useApp(s => s.online)
+	const showFolders = useApp(s => s.view.showFolders)
+	const setView = useApp(s => s.setView)
 
 	const ws = liveWorkspace
 	const actuator = data?.actuator
@@ -350,7 +358,12 @@ export function SessionView() {
 		setDiffFileScope(scope)
 		if (scope === 'all' && ws.worktree) void workspaceFilesQuery.refetch()
 	}
-	const diffReview: DiffReviewState = { workspace: ws, query: diffQuery, filesQuery: workspaceFilesQuery }
+	const diffReview: DiffReviewState = {
+		workspace: ws,
+		query: diffQuery,
+		filesQuery: workspaceFilesQuery,
+		fileQuery: fileDiffQuery
+	}
 
 	const dismissDelegation = async (delegationId: string) => {
 		setDelegationError(null)
@@ -448,6 +461,7 @@ export function SessionView() {
 								review={diffReview}
 								filePath={selectedDiffFile}
 								scope={diffFileScope}
+								showFolders={showFolders}
 								onSelectFile={selectDiffFile}
 								onShowFiles={() => setDiffNavigatorOpen(true)}
 								onClose={closeDiffFile}
@@ -474,6 +488,8 @@ export function SessionView() {
 								sessionId={sessionId}
 								scope={diffFileScope}
 								onScopeChange={changeDiffFileScope}
+								showFolders={showFolders}
+								onShowFoldersChange={value => setView({ showFolders: value })}
 								selectedFile={selectedDiffFile}
 								onSelectFile={selectDiffFile}
 								onClose={closeDiff}
@@ -515,6 +531,8 @@ export function SessionView() {
 						sessionId={sessionId}
 						scope={diffFileScope}
 						onScopeChange={changeDiffFileScope}
+						showFolders={showFolders}
+						onShowFoldersChange={value => setView({ showFolders: value })}
 						selectedFile={selectedDiffFile}
 						onSelectFile={selectDiffFile}
 						onClose={closeDiff}
@@ -640,7 +658,7 @@ export function SessionTabs({
 								) : s.background_tasks?.length ? (
 									<Hourglass size={11} className="shrink-0 text-faint" aria-label="Waiting for a background task" />
 								) : null}
-								<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
+								<span className="whitespace-nowrap">{s.title || 'Untitled'}</span>
 								{roles[s.id] ? <RoleChip name={roles[s.id].role} /> : null}
 								{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
 								{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}
@@ -729,7 +747,7 @@ function ContextButton({ session, onOpen }: { session: Session; onOpen: () => vo
 			aria-label={`Context for ${session.title || 'Untitled'}: ${Math.round(used)}% used`}
 			aria-haspopup="dialog"
 			className={cn(
-				'mr-1 flex h-7 min-w-10 shrink-0 items-center justify-center rounded-full px-2 text-[11px] tabular-nums transition active:bg-bg/70',
+				'flex h-7 min-w-10 shrink-0 items-center justify-center rounded-full px-2 text-[11px] tabular-nums transition active:bg-bg/70',
 				used >= 80 ? 'text-working' : 'text-faint'
 			)}
 		>
@@ -767,12 +785,39 @@ export function DiffFileScopeToggle({
 	)
 }
 
+/** One persisted switch shared by the desktop rail and mobile file navigator. */
+export function DiffFolderToggle({
+	showFolders,
+	onChange
+}: {
+	showFolders: boolean
+	onChange: (showFolders: boolean) => void
+}) {
+	return (
+		<button
+			type="button"
+			onClick={() => onChange(!showFolders)}
+			aria-label="Group files into folders"
+			aria-pressed={showFolders}
+			title="Group files into folders"
+			className={cn(
+				'flex size-8 shrink-0 items-center justify-center rounded-full text-faint transition active:bg-surface-2',
+				showFolders && 'bg-surface-2 text-text'
+			)}
+		>
+			<FolderTree size={16} />
+		</button>
+	)
+}
+
 /** Workspace files stay as the right rail on lg+. */
 function DiffPanel({
 	review,
 	sessionId,
 	scope,
 	onScopeChange,
+	showFolders,
+	onShowFoldersChange,
 	selectedFile,
 	onSelectFile,
 	onClose
@@ -781,6 +826,8 @@ function DiffPanel({
 	sessionId: string | null
 	scope: DiffFileScope
 	onScopeChange: (scope: DiffFileScope) => void
+	showFolders: boolean
+	onShowFoldersChange: (showFolders: boolean) => void
 	selectedFile: string | null
 	onSelectFile: (path: string) => void
 	onClose: () => void
@@ -790,6 +837,7 @@ function DiffPanel({
 			<header className="flex items-center gap-2 border-b border-border-soft px-3 py-2.5">
 				<span className="flex-1 text-[15px] font-semibold">Files</span>
 				<DiffFileScopeToggle scope={scope} onChange={onScopeChange} />
+				<DiffFolderToggle showFolders={showFolders} onChange={onShowFoldersChange} />
 				<button
 					type="button"
 					onClick={onClose}
@@ -803,6 +851,7 @@ function DiffPanel({
 				review={review}
 				sessionId={sessionId}
 				scope={scope}
+				showFolders={showFolders}
 				selectedFile={selectedFile}
 				onSelectFile={onSelectFile}
 			/>
@@ -816,6 +865,8 @@ function MobileDiffNavigator({
 	sessionId,
 	scope,
 	onScopeChange,
+	showFolders,
+	onShowFoldersChange,
 	selectedFile,
 	onSelectFile,
 	onClose
@@ -824,6 +875,8 @@ function MobileDiffNavigator({
 	sessionId: string | null
 	scope: DiffFileScope
 	onScopeChange: (scope: DiffFileScope) => void
+	showFolders: boolean
+	onShowFoldersChange: (showFolders: boolean) => void
 	selectedFile: string | null
 	onSelectFile: (path: string) => void
 	onClose: () => void
@@ -833,6 +886,7 @@ function MobileDiffNavigator({
 			<header className="flex shrink-0 items-center gap-2 border-b border-border-soft px-3 py-2.5">
 				<span className="flex-1 text-[15px] font-semibold">Files</span>
 				<DiffFileScopeToggle scope={scope} onChange={onScopeChange} />
+				<DiffFolderToggle showFolders={showFolders} onChange={onShowFoldersChange} />
 				<button
 					type="button"
 					onClick={onClose}
@@ -846,6 +900,7 @@ function MobileDiffNavigator({
 				review={review}
 				sessionId={sessionId}
 				scope={scope}
+				showFolders={showFolders}
 				selectedFile={selectedFile}
 				onSelectFile={onSelectFile}
 			/>

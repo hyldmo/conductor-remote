@@ -1644,6 +1644,13 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     The **workspace diff stays plain**: per-line highlighting of a 400 kB patch
     (`MAX_PATCH_BYTES`) measured 77ms and ~20,000 extra spans, and every line would be
     highlighted alone, so a block comment loses its colour after the first line anyway.
+    That 400 kB is only the aggregate response's safety bound, not a boundary in the file
+    viewer: once that aggregate reaches its bound, selecting a changed file fetches its
+    complete patch through
+    `GET /api/workspaces/:id/diff/file?path=…` (`git.ts` ▸ `workspaceFileDiff`). The file
+    list can therefore remain bounded and complete while a file ordered after a large patch
+    is still reviewable; slicing the aggregate response used to leave those rows present
+    but replace their contents with "falls beyond the workspace diff preview."
   - **A file an agent names in prose is a link too, and only when the file is really
     there** (`web/src/lib/fileMentions.ts`). Agents write paths in backticks all day —
     "updated `tests/foo.ts`", "plan written to `~/.gstack/plan.md`" — and every one of

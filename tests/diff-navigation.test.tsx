@@ -3,7 +3,15 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { DiffFile, Workspace, WorkspaceDiff } from '../src/wire.ts'
 import { Patch } from '../web/src/components/Patch.tsx'
-import { filesForScope, patchForFile, preparePatch, splitWorkspacePatch } from '../web/src/lib/diff.ts'
+import {
+	buildDiffFileTree,
+	filesForScope,
+	filesInFlatOrder,
+	filesInTreeOrder,
+	patchForFile,
+	preparePatch,
+	splitWorkspacePatch
+} from '../web/src/lib/diff.ts'
 
 Object.defineProperty(globalThis, 'location', { configurable: true, value: { hash: '', pathname: '/', search: '' } })
 Object.defineProperty(globalThis, 'localStorage', {
@@ -12,7 +20,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { DiffView } = await import('../web/src/components/DiffView.tsx')
+const { DiffFileList, DiffFileViewer, DiffView } = await import('../web/src/components/DiffView.tsx')
 
 const files: DiffFile[] = [
 	{ path: 'one.ts', added: 1, removed: 0 },
@@ -51,13 +59,19 @@ const review = {
 		isLoading: false,
 		isError: false,
 		error: null
+	},
+	fileQuery: {
+		data: { path: 'two.ts', patch: patch.slice(patch.indexOf('diff --git a/two.ts')) },
+		isLoading: false,
+		isError: false,
+		error: null
 	}
 }
 
 const renderReview = (scope: 'changed' | 'all') =>
 	renderToStaticMarkup(
 		<QueryClientProvider client={new QueryClient()}>
-			<DiffView review={review} scope={scope} selectedFile={null} onSelectFile={vi.fn()} />
+			<DiffView review={review} scope={scope} showFolders selectedFile={null} onSelectFile={vi.fn()} />
 		</QueryClientProvider>
 	)
 
@@ -82,6 +96,75 @@ describe('diff file navigation', () => {
 		expect(all).toContain('three.ts')
 	})
 
+	it('groups files into sorted folders with aggregate change counts', () => {
+		const nested: DiffFile[] = [
+			{ path: 'README.md', added: 0, removed: 0 },
+			{ path: 'src/index.ts', added: 4, removed: 1 },
+			{ path: 'src/lib/file10.ts', added: 0, removed: 3 },
+			{ path: 'src/lib/file2.ts', added: 2, removed: 0 },
+			{ path: 'tests/diff.test.ts', added: 1, removed: 1 }
+		]
+		const tree = buildDiffFileTree(nested)
+
+		expect(tree.map(node => `${node.kind}:${node.name}`)).toEqual(['folder:src', 'folder:tests', 'file:README.md'])
+		const src = tree[0]
+		expect(src).toMatchObject({ kind: 'folder', path: 'src', fileCount: 3, added: 6, removed: 4 })
+		if (src?.kind !== 'folder') throw new Error('src folder missing')
+		expect(src.children.map(node => `${node.kind}:${node.name}`)).toEqual(['folder:lib', 'file:index.ts'])
+		expect(filesInTreeOrder(nested).map(file => file.path)).toEqual([
+			'src/lib/file2.ts',
+			'src/lib/file10.ts',
+			'src/index.ts',
+			'tests/diff.test.ts',
+			'README.md'
+		])
+	})
+
+	it('opens Changed folders and keeps All folders compact until selected', () => {
+		const nested: DiffFile[] = [
+			{ path: 'README.md', added: 0, removed: 0 },
+			{ path: 'src/index.ts', added: 4, removed: 1 },
+			{ path: 'src/lib/format.ts', added: 2, removed: 0 }
+		]
+		const renderTree = (scope: 'changed' | 'all', selectedFile: string | null = null) =>
+			renderToStaticMarkup(
+				<DiffFileList files={nested} scope={scope} showFolders selectedFile={selectedFile} onSelectFile={vi.fn()} />
+			)
+
+		const changed = renderTree('changed')
+		expect(changed).toContain('aria-label="Collapse src, 2 files"')
+		expect(changed).toContain('aria-label="src/index.ts"')
+		expect(changed).toContain('data-file-icon="typescript"')
+
+		const all = renderTree('all')
+		expect(all).toContain('aria-label="Expand src, 2 files"')
+		expect(all).not.toContain('aria-label="src/index.ts"')
+		expect(all).toContain('aria-label="README.md"')
+
+		const selected = renderTree('all', 'src/lib/format.ts')
+		expect(selected).toContain('aria-label="Collapse src, 2 files"')
+		expect(selected).toContain('aria-label="Collapse src/lib, 1 file"')
+		expect(selected).toContain('aria-label="src/lib/format.ts"')
+	})
+
+	it('can show the same files as a flat, full-path list', () => {
+		const nested: DiffFile[] = [
+			{ path: 'src/file10.ts', added: 0, removed: 3 },
+			{ path: 'README.md', added: 0, removed: 0 },
+			{ path: 'src/file2.ts', added: 2, removed: 0 }
+		]
+		const html = renderToStaticMarkup(
+			<DiffFileList files={nested} scope="changed" showFolders={false} selectedFile={null} onSelectFile={vi.fn()} />
+		)
+
+		expect(filesInFlatOrder(nested).map(file => file.path)).toEqual(['README.md', 'src/file2.ts', 'src/file10.ts'])
+		expect(html).toContain('aria-label="Changed files"')
+		expect(html).not.toContain('Collapse src')
+		expect(html).toContain('data-file-icon="typescript"')
+		expect(html).toContain('>src/file2.ts<')
+		expect(html).toContain('>src/file10.ts<')
+	})
+
 	it('splits a workspace patch into independently viewable files', () => {
 		const sections = splitWorkspacePatch(patch)
 
@@ -91,9 +174,36 @@ describe('diff file navigation', () => {
 		expect(sections[1]).toContain('a/two.ts')
 	})
 
-	it('renders only the file selected in the changed-files rail', () => {
+	it('renders only the file selected from an ordinary bounded workspace patch', () => {
 		const selected = patchForFile(patch, files, 'two.ts')
 		const html = renderToStaticMarkup(<Patch patch={selected ?? ''} />)
+
+		expect(html).toContain('a/two.ts')
+		expect(html).toContain('+two')
+		expect(html).not.toContain('a/one.ts')
+	})
+
+	it('renders a selected file from its own patch response', () => {
+		const truncatedReview = {
+			...review,
+			query: {
+				...review.query,
+				data: { ...diff, patch: patch.slice(0, patch.indexOf('diff --git a/two.ts')), truncated: true }
+			}
+		}
+		const html = renderToStaticMarkup(
+			<QueryClientProvider client={new QueryClient()}>
+				<DiffFileViewer
+					review={truncatedReview}
+					filePath="two.ts"
+					scope="changed"
+					showFolders
+					onSelectFile={vi.fn()}
+					onShowFiles={vi.fn()}
+					onClose={vi.fn()}
+				/>
+			</QueryClientProvider>
+		)
 
 		expect(html).toContain('a/two.ts')
 		expect(html).toContain('+two')
@@ -105,11 +215,5 @@ describe('diff file navigation', () => {
 
 		expect(prepared.preamble).toBe('updated src/one.ts')
 		expect(prepared.patch).toBe('--- src/one.ts\n+++ src/one.ts\n@@ -1 +1 @@\n-old\n+const one = 1')
-	})
-
-	it('reports a file whose section fell beyond the workspace patch limit', () => {
-		const firstSectionOnly = splitWorkspacePatch(patch)[0] ?? ''
-
-		expect(patchForFile(firstSectionOnly, files, 'two.ts')).toBeNull()
 	})
 })

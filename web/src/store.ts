@@ -21,26 +21,29 @@ import {
 } from './lib/prefs.ts'
 import type { ReadMarks } from './lib/read.ts'
 import type { AgentPatch, DraftAttachment, UpdateStatus } from './lib/types.ts'
+import { ALL_REPOS, parseRepoSelection, type RepoSelection } from './lib/workspace-filter.ts'
 
 let offlineTimer: ReturnType<typeof setTimeout> | null = null
 const initialPrefs = loadLocalPrefs()
 export const WORKING_HINT_MS = 15_000
 
 /**
- * Sidebar view preferences — grouping and filtering mirror the desktop app's
- * popover, with phone-only row presentation kept here too. `recent` has no
- * desktop equivalent: day buckets (Today / Yesterday / …) for reaching the chat
- * you left a minute ago.
+ * Sidebar view preferences. Workspace grouping and filtering mirror the desktop
+ * app's popover, while row details and the file rail's folder layout are local
+ * presentation choices. `recent` has no desktop equivalent: day buckets (Today /
+ * Yesterday / …) for reaching the chat you left a minute ago.
  */
 export type GroupBy = 'status' | 'repo' | 'recent' | 'none'
 export type SortBy = 'updated' | 'created' | 'name'
 export interface ViewPrefs {
 	groupBy: GroupBy
-	/** Repo names to filter to. An empty list includes every repo. */
-	repos: string[]
+	/** Every repo, or the exact checked set (which may deliberately be empty). */
+	repoSelection: RepoSelection
 	sortBy: SortBy
 	/** Show aggregate git additions/deletions on each workspace row. */
 	showDiffs: boolean
+	/** Group the changed/all-files rail into collapsible repository folders. */
+	showFolders: boolean
 	/**
 	 * Drop workspaces whose PR has landed (see `isMerged`). Off by default — a
 	 * filter that hides rows has to be asked for, never inherited.
@@ -60,9 +63,10 @@ const VIEW_KEY = 'conductor-remote-view'
 const LAST_NEW_WORKSPACE_REPO_KEY = 'conductor-remote-last-new-workspace-repo'
 const defaultView: ViewPrefs = {
 	groupBy: 'status',
-	repos: [],
+	repoSelection: ALL_REPOS,
 	sortBy: 'updated',
 	showDiffs: true,
+	showFolders: true,
 	hideMerged: false,
 	hideDone: false,
 	collapsed: []
@@ -80,15 +84,18 @@ function prunePatch(patch: AgentPatch): AgentPatch {
 
 function loadView(): ViewPrefs {
 	try {
-		const { repo: legacyRepo, ...saved } = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') as Partial<ViewPrefs> & {
+		const {
+			repo: legacyRepo,
+			repos: legacyRepos,
+			repoSelection: savedSelection,
+			...saved
+		} = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') as Partial<ViewPrefs> & {
 			repo?: unknown
+			repos?: unknown
+			repoSelection?: unknown
 		}
-		const repos = Array.isArray(saved.repos)
-			? saved.repos.filter((repo): repo is string => typeof repo === 'string')
-			: typeof legacyRepo === 'string'
-				? [legacyRepo]
-				: []
-		return { ...defaultView, ...saved, repos }
+		const repoSelection = parseRepoSelection(savedSelection, legacyRepos ?? legacyRepo)
+		return { ...defaultView, ...saved, repoSelection }
 	} catch {
 		return defaultView
 	}
