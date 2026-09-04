@@ -561,6 +561,17 @@ export function useDiff(workspaceId: string | undefined, enabled: boolean) {
 	return query
 }
 
+/** A selected file's complete patch when the bounded workspace response omitted it. */
+export function useFileDiff(workspaceId: string | undefined, filePath: string | null, enabled: boolean) {
+	return useQuery({
+		queryKey: ['fileDiff', workspaceId, filePath],
+		queryFn: () => client.fileDiff(workspaceId as string, filePath as string),
+		enabled: enabled && !!workspaceId && !!filePath,
+		refetchInterval: 5000,
+		retry: false
+	})
+}
+
 /** A source file selected from the workspace rail, refreshed while it stays on screen. */
 export function useFilePreview(reference: string | null, enabled: boolean) {
 	return useQuery({

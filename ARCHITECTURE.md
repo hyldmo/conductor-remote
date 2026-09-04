@@ -46,8 +46,9 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively
   git.ts          workspace diff + aggregate line stats vs target branch (incl. untracked via
-                  --no-index), plus the worktree's file list (GET /api/workspaces/:id/files)
-                  that decides which file an agent named in a message becomes a link
+                  --no-index), complete on-demand patches for the file open in the review UI,
+                  plus the worktree's file list (GET /api/workspaces/:id/files) that decides
+                  which file an agent named in a message becomes a link
   fork-workspace.ts  non-disruptive Git snapshot + restore for a split sent to a new workspace;
                   preserves source HEAD, index and working tree through short-lived private refs
   change-stats.ts bounded, background cache of git line stats for /api/state; working rows

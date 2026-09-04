@@ -12,7 +12,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { DiffView } = await import('../web/src/components/DiffView.tsx')
+const { DiffFileViewer, DiffView } = await import('../web/src/components/DiffView.tsx')
 
 const files: DiffFile[] = [
 	{ path: 'one.ts', added: 1, removed: 0 },
@@ -48,6 +48,12 @@ const review = {
 	query: { data: diff, isLoading: false, isError: false, error: null },
 	filesQuery: {
 		data: { files: ['three.ts', 'one.ts'], truncated: false },
+		isLoading: false,
+		isError: false,
+		error: null
+	},
+	fileQuery: {
+		data: { path: 'two.ts', patch: patch.slice(patch.indexOf('diff --git a/two.ts')) },
 		isLoading: false,
 		isError: false,
 		error: null
@@ -91,9 +97,35 @@ describe('diff file navigation', () => {
 		expect(sections[1]).toContain('a/two.ts')
 	})
 
-	it('renders only the file selected in the changed-files rail', () => {
+	it('renders only the file selected from an ordinary bounded workspace patch', () => {
 		const selected = patchForFile(patch, files, 'two.ts')
 		const html = renderToStaticMarkup(<Patch patch={selected ?? ''} />)
+
+		expect(html).toContain('a/two.ts')
+		expect(html).toContain('+two')
+		expect(html).not.toContain('a/one.ts')
+	})
+
+	it('renders a selected file from its own patch response', () => {
+		const truncatedReview = {
+			...review,
+			query: {
+				...review.query,
+				data: { ...diff, patch: patch.slice(0, patch.indexOf('diff --git a/two.ts')), truncated: true }
+			}
+		}
+		const html = renderToStaticMarkup(
+			<QueryClientProvider client={new QueryClient()}>
+				<DiffFileViewer
+					review={truncatedReview}
+					filePath="two.ts"
+					scope="changed"
+					onSelectFile={vi.fn()}
+					onShowFiles={vi.fn()}
+					onClose={vi.fn()}
+				/>
+			</QueryClientProvider>
+		)
 
 		expect(html).toContain('a/two.ts')
 		expect(html).toContain('+two')
@@ -105,11 +137,5 @@ describe('diff file navigation', () => {
 
 		expect(prepared.preamble).toBe('updated src/one.ts')
 		expect(prepared.patch).toBe('--- src/one.ts\n+++ src/one.ts\n@@ -1 +1 @@\n-old\n+const one = 1')
-	})
-
-	it('reports a file whose section fell beyond the workspace patch limit', () => {
-		const firstSectionOnly = splitWorkspacePatch(patch)[0] ?? ''
-
-		expect(patchForFile(firstSectionOnly, files, 'two.ts')).toBeNull()
 	})
 })

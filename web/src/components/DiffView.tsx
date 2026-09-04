@@ -4,7 +4,7 @@ import { useFilePreview } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import type { DiffFileScope } from '../lib/diff.ts'
 import { filesForScope, patchForFile } from '../lib/diff.ts'
-import type { DiffFile, Workspace, WorkspaceDiff, WorkspaceFilesResponse } from '../lib/types.ts'
+import type { DiffFile, Workspace, WorkspaceDiff, WorkspaceFileDiff, WorkspaceFilesResponse } from '../lib/types.ts'
 import { MergeBanner } from './MergeBanner.tsx'
 import { Patch } from './Patch.tsx'
 import { SourceLines } from './SourceLines.tsx'
@@ -23,6 +23,7 @@ export interface DiffReviewState {
 	workspace: Workspace
 	query: ReviewQuery<WorkspaceDiff>
 	filesQuery: ReviewQuery<WorkspaceFilesResponse>
+	fileQuery: ReviewQuery<WorkspaceFileDiff>
 }
 
 /** The right review rail: actions and workspace files, never the patch itself. */
@@ -143,7 +144,7 @@ export function DiffFileViewer({
 	onShowFiles: () => void
 	onClose: () => void
 }) {
-	const { workspace, query, filesQuery } = review
+	const { workspace, query, filesQuery, fileQuery } = review
 	const { data, isLoading, isError, error } = query
 	const files = useMemo(
 		() => filesForScope(scope, data?.files ?? [], filesQuery.data?.files ?? []),
@@ -151,10 +152,13 @@ export function DiffFileViewer({
 	)
 	const fileIndex = files.findIndex(file => file.path === filePath)
 	const file = fileIndex >= 0 ? files[fileIndex] : undefined
-	const patch = useMemo(
-		() => (scope === 'changed' && data ? patchForFile(data.patch, data.files, filePath) : null),
+	const aggregatePatch = useMemo(
+		() => (scope === 'changed' && data && !data.truncated ? patchForFile(data.patch, data.files, filePath) : null),
 		[scope, data, filePath]
 	)
+	const needsFileResponse = scope === 'changed' && !!data?.truncated
+	const fileResponse = needsFileResponse && fileQuery.data?.path === filePath ? fileQuery.data : null
+	const patch = fileResponse?.patch ?? aggregatePatch
 	const previous = fileIndex > 0 ? files[fileIndex - 1] : undefined
 	const next = fileIndex >= 0 && fileIndex < files.length - 1 ? files[fileIndex + 1] : undefined
 	const sourceReference = scope === 'all' && workspace.worktree ? `${workspace.worktree}/${filePath}` : null
@@ -222,14 +226,17 @@ export function DiffFileViewer({
 						{isLoading && !data ? <Spinner label="Loading changes…" /> : null}
 						{isError ? <Empty>{error?.message}</Empty> : null}
 						{data && fileIndex < 0 ? <Empty>This file is no longer changed.</Empty> : null}
-						{data && fileIndex >= 0 && patch === null ? (
-							<Empty>
-								{data.truncated
-									? 'This file falls beyond the workspace diff preview.'
-									: 'No textual patch is available for this file.'}
-							</Empty>
+						{data && fileIndex >= 0 && needsFileResponse && fileQuery.isLoading && !fileResponse ? (
+							<Spinner label="Loading file changes…" />
 						) : null}
-						{patch !== null ? <Patch patch={patch} fileName={filePath} hideFileHeader className="p-4" /> : null}
+						{data && fileIndex >= 0 && needsFileResponse && fileQuery.isError && !fileResponse ? (
+							<Empty>{fileQuery.error?.message}</Empty>
+						) : null}
+						{data && fileIndex >= 0 && !needsFileResponse && patch === null ? (
+							<Empty>No textual patch is available for this file.</Empty>
+						) : null}
+						{fileResponse && !patch ? <Empty>No textual patch is available for this file.</Empty> : null}
+						{patch ? <Patch patch={patch} fileName={filePath} hideFileHeader className="p-4" /> : null}
 					</>
 				) : (
 					<>
