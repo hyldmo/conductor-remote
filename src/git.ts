@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import path from 'node:path'
 import { promisify } from 'node:util'
 import { isPreviewableSource } from './shared.ts'
 
@@ -28,6 +29,12 @@ export interface WorkspaceDiff {
 	unpushed: boolean
 }
 
+/** One changed file's complete patch, fetched independently of the aggregate preview cap. */
+export interface WorkspaceFileDiff {
+	path: string
+	patch: string
+}
+
 const MAX_PATCH_BYTES = 400_000
 const MAX_LISTED_FILES = 20_000
 
@@ -38,6 +45,20 @@ async function git(cwd: string, args: string[]): Promise<string> {
 		timeout: 15000
 	})
 	return stdout
+}
+
+/** `git diff --no-index` reports an ordinary difference with exit code 1. */
+async function noIndexDiff(cwd: string, file: string): Promise<string> {
+	try {
+		const { stdout } = await exec('git', ['-C', cwd, 'diff', '--no-index', '--no-color', '--', '/dev/null', file], {
+			encoding: 'utf8',
+			maxBuffer: 8 * 1024 * 1024,
+			timeout: 10000
+		})
+		return stdout
+	} catch (err) {
+		return (err as { stdout?: string }).stdout ?? ''
+	}
 }
 
 /**
@@ -57,20 +78,11 @@ async function untrackedDiff(cwd: string): Promise<{ files: DiffFile[]; patch: s
 	const files: DiffFile[] = []
 	const patches: string[] = []
 	for (const p of paths) {
-		try {
-			// --no-index exits 1 when files differ, so read stdout from the error.
-			await exec('git', ['-C', cwd, 'diff', '--no-index', '--no-color', '--', '/dev/null', p], {
-				encoding: 'utf8',
-				maxBuffer: 4 * 1024 * 1024,
-				timeout: 10000
-			})
-		} catch (err) {
-			const out = (err as { stdout?: string }).stdout ?? ''
-			if (!out) continue
-			const added = out.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length
-			files.push({ path: p, added, removed: 0 })
-			patches.push(out)
-		}
+		const out = await noIndexDiff(cwd, p)
+		if (!out) continue
+		const added = out.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length
+		files.push({ path: p, added, removed: 0 })
+		patches.push(out)
 	}
 	return { files, patch: patches.join('') }
 }
@@ -189,6 +201,43 @@ export async function workspaceDiff(worktree: string, base: string): Promise<Wor
 	const { dirty, unpushed } = await localState(worktree)
 
 	return { base: ref, mergeBase, files, patch, truncated, dirty, unpushed }
+}
+
+/**
+ * The complete patch for one selected changed file. The phone asks for this separately
+ * so a file remains reviewable even when its section follows the aggregate 400 KB cap.
+ */
+export async function workspaceFileDiff(
+	worktree: string,
+	base: string,
+	requestedPath: string
+): Promise<WorkspaceFileDiff | null> {
+	if (!requestedPath || requestedPath.includes('\0') || path.isAbsolute(requestedPath)) return null
+
+	const root = path.resolve(worktree)
+	const relative = path.relative(root, path.resolve(root, requestedPath))
+	if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null
+
+	const { against } = await diffBasis(worktree, base)
+	// A literal pathspec prevents a filename beginning with `:` from becoming Git pathspec syntax.
+	const literalPathspec = `:(literal)${relative}`
+	const tracked = await git(worktree, ['diff', '--no-color', against, '--', literalPathspec]).catch(() => '')
+	if (tracked) return { path: relative, patch: tracked }
+
+	// `git diff <base>` omits untracked files. Only synthesize a patch when Git says this
+	// exact path is untracked and not ignored; never let the request name an arbitrary file.
+	const untracked = await git(worktree, [
+		'ls-files',
+		'--others',
+		'--exclude-standard',
+		'-z',
+		'--',
+		literalPathspec
+	]).catch(() => '')
+	if (!untracked.split('\0').includes(relative)) return null
+
+	const patch = await noIndexDiff(worktree, relative)
+	return patch ? { path: relative, patch } : null
 }
 
 /**

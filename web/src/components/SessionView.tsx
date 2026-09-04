@@ -6,6 +6,7 @@ import {
 	useAnyWorkspace,
 	useClearChatNotification,
 	useDiff,
+	useFileDiff,
 	useSessions,
 	useWorkspaceFiles,
 	useWorkspaces
@@ -65,6 +66,11 @@ export function SessionView() {
 	const { data, isLoading } = useWorkspaces()
 	const liveWorkspace = data?.workspaces.find(w => w.id === workspaceId)
 	const diffQuery = useDiff(workspaceId, diffOpen && !!liveWorkspace)
+	const fileDiffQuery = useFileDiff(
+		workspaceId,
+		selectedDiffFile,
+		diffOpen && diffFileScope === 'changed' && !!liveWorkspace && !!diffQuery.data?.truncated
+	)
 	// `/api/state` lists only live workspaces, so an id that isn't in it is either archived
 	// or gone. Ask by id before saying "not found": the worktree is deleted on archive, the
 	// transcript is not, and search reaches those chats — 1,846 of the 1,886 here.
@@ -300,7 +306,12 @@ export function SessionView() {
 		setDiffFileScope(scope)
 		if (scope === 'all' && ws.worktree) void workspaceFilesQuery.refetch()
 	}
-	const diffReview: DiffReviewState = { workspace: ws, query: diffQuery, filesQuery: workspaceFilesQuery }
+	const diffReview: DiffReviewState = {
+		workspace: ws,
+		query: diffQuery,
+		filesQuery: workspaceFilesQuery,
+		fileQuery: fileDiffQuery
+	}
 
 	const dismissDelegation = async (delegationId: string) => {
 		setDelegationError(null)

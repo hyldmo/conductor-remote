@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { attachChangeStats } from '../src/change-stats.ts'
-import { sumNumstat, workspaceDiff, workspaceDiffStats } from '../src/git.ts'
+import { sumNumstat, workspaceDiff, workspaceDiffStats, workspaceFileDiff } from '../src/git.ts'
 import type { Workspace } from '../src/reads.ts'
 
 describe('workspace diff stats', () => {
@@ -44,6 +44,38 @@ describe('workspace diff stats', () => {
 
 	test('ignores binary markers while summing numstat', () => {
 		expect(sumNumstat('12\t3\tsrc/a.ts\n-\t-\tpublic/a.png\n')).toEqual({ added: 12, removed: 3 })
+	})
+
+	test('reads a selected file even when it falls beyond the aggregate patch limit', async () => {
+		writeFileSync(path.join(repo, 'a-large.txt'), 'before\n')
+		writeFileSync(path.join(repo, 'z-selected.txt'), 'before\n')
+		git('add', 'a-large.txt', 'z-selected.txt')
+		git('commit', '--quiet', '-m', 'more files')
+
+		writeFileSync(path.join(repo, 'a-large.txt'), 'changed line\n'.repeat(40_000))
+		writeFileSync(path.join(repo, 'z-selected.txt'), 'after\n')
+
+		const aggregate = await workspaceDiff(repo, 'HEAD')
+		expect(aggregate.truncated).toBe(true)
+		expect(aggregate.files.some(file => file.path === 'z-selected.txt')).toBe(true)
+		expect(aggregate.patch).not.toContain('diff --git a/z-selected.txt b/z-selected.txt')
+
+		const selected = await workspaceFileDiff(repo, 'HEAD', 'z-selected.txt')
+		expect(selected?.path).toBe('z-selected.txt')
+		expect(selected?.patch).toContain('diff --git a/z-selected.txt b/z-selected.txt')
+		expect(selected?.patch).toContain('-before')
+		expect(selected?.patch).toContain('+after')
+	})
+
+	test('reads an exact untracked file without allowing paths outside the worktree', async () => {
+		writeFileSync(path.join(repo, 'new file.txt'), 'one\ntwo\n')
+
+		const selected = await workspaceFileDiff(repo, 'HEAD', 'new file.txt')
+		expect(selected?.path).toBe('new file.txt')
+		expect(selected?.patch).toContain('diff --git a/new file.txt b/new file.txt')
+		expect(selected?.patch).toContain('+one')
+		expect(await workspaceFileDiff(repo, 'HEAD', 'tracked.txt')).toBeNull()
+		expect(await workspaceFileDiff(repo, 'HEAD', '../outside.txt')).toBeNull()
 	})
 
 	test('serves state immediately, then attaches the background result', async () => {
