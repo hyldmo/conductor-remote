@@ -16,6 +16,7 @@ import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { NEW_WORKSPACE_DRAFT } from '../lib/draft.ts'
 import { enterSubmits } from '../lib/keys.ts'
+import { type NewWorkspaceRepoStatus, newWorkspaceDisabledReason } from '../lib/new-workspace.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
 import type { AgentPatch, DraftAttachment } from '../lib/types.ts'
 import { useApp } from '../store.ts'
@@ -77,7 +78,8 @@ function discardAttachment(stageId: string | undefined): void {
  * survive the relay updating itself underneath the app.
  */
 export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
-	const { data } = useRepos()
+	const reposQuery = useRepos()
+	const { data } = reposQuery
 	const modelCatalog = useModelCatalog()
 	const modelDefaults = useModelDefaults()
 	const roles = useRoles()
@@ -154,6 +156,27 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				? 'Workflow mode needs a configured planning role.'
 				: planningIssue?.error.message
 	const workflowReady = !!planningRole && !workflowProblem
+	const repoStatus: NewWorkspaceRepoStatus = selected
+		? 'selected'
+		: reposQuery.isLoading
+			? 'loading'
+			: reposQuery.isError
+				? 'error'
+				: repos.length === 0
+					? 'empty'
+					: 'required'
+	const disabledReason = newWorkspaceDisabledReason({
+		online,
+		repoStatus,
+		uploading,
+		attachmentError,
+		workflowMode,
+		hasInitialPrompt,
+		workflowReady,
+		workflowLoading: roles.isLoading,
+		workflowProblem
+	})
+	const createDisabled = busy || disabledReason !== null
 	const ordinaryModel = agent.model ?? defaultModel ?? null
 	const selectedModel = workflowMode ? (planningRole?.model ?? 'Planning role') : ordinaryModel
 	const planAvailable = supportsPlanMode(null, ordinaryModel)
@@ -270,15 +293,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 
 	const create = async () => {
 		const text = prompt.trim()
-		if (
-			!repo ||
-			busy ||
-			uploading ||
-			attachmentError ||
-			!online ||
-			(workflowMode && (!hasInitialPrompt || !workflowReady))
-		)
-			return
+		if (createDisabled) return
 		setBusy(true)
 		setError(null)
 		try {
@@ -556,17 +571,14 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 			</div>
 
 			<div className="pb-safe border-t border-border-soft p-3">
+				<div className="mb-2 min-h-4 text-center text-xs leading-4 text-muted" aria-live="polite">
+					{disabledReason ? <span id="new-workspace-create-reason">{disabledReason}</span> : null}
+				</div>
 				<button
 					type="button"
 					onClick={create}
-					disabled={
-						!repo ||
-						busy ||
-						uploading ||
-						attachmentError ||
-						!online ||
-						(workflowMode && (!hasInitialPrompt || !workflowReady))
-					}
+					disabled={createDisabled}
+					aria-describedby={disabledReason ? 'new-workspace-create-reason' : undefined}
 					className="w-full rounded-2xl bg-accent px-4 py-3 text-[15px] font-semibold text-bg transition active:scale-[0.985] disabled:opacity-40"
 				>
 					{busy
