@@ -9,9 +9,14 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { DiffButton, DiffFileScopeToggle, DiffFolderToggle, SessionTabs, workflowForActiveSession } = await import(
-	'../web/src/components/SessionView.tsx'
-)
+const {
+	delegationPipelineForParentSession,
+	DiffButton,
+	DiffFileScopeToggle,
+	DiffFolderToggle,
+	SessionTabs,
+	workflowForActiveSession
+} = await import('../web/src/components/SessionView.tsx')
 
 const session: Session = {
 	id: 'chat-1',
@@ -87,6 +92,60 @@ describe('phone chat tabs', () => {
 			)?.id
 		).toBe(second.id)
 		expect(workflowForActiveSession([first, second], 'ordinary-chat', {}, [childJob])).toBeUndefined()
+	})
+
+	test('shows delegation subtabs only beneath the selected parent tab', () => {
+		const workflow: WorkflowRunWire = {
+			id: 'workflow-1',
+			workspaceId: 'workspace-1',
+			rootSessionId: 'parent-1',
+			phase: 'exploring',
+			objectiveExcerpt: 'Inspect it.',
+			roles: {
+				planning: { model: 'Fable 5.1', agentType: 'claude' },
+				exploration: { model: '5.6 Terra', agentType: 'codex' },
+				implementation: { model: '5.6 Sol', agentType: 'codex' }
+			},
+			jobs: {
+				exploration: { requested: 1, running: 1, returned: 0, failed: 0 },
+				implementation: { requested: 0, running: 0, returned: 0, failed: 0 }
+			},
+			actions: {
+				canRetry: false,
+				canAdopt: false,
+				canReplayAmbiguous: false,
+				canCancel: true,
+				canComplete: false
+			},
+			createdAt: 1,
+			updatedAt: 2
+		}
+		const childJob = {
+			id: 'job-1',
+			workspaceId: 'workspace-1',
+			parentSessionId: 'parent-1',
+			childSessionId: 'child-1',
+			workflowId: workflow.id,
+			role: 'exploration',
+			resolvedRole: workflow.roles.exploration,
+			prompt: 'Inspect it.',
+			returnMode: 'queue',
+			status: 'running',
+			attempts: 0,
+			createdAt: 1,
+			updatedAt: 2
+		} satisfies DelegationProjection
+		const roles = {
+			'parent-1': { role: 'planning', workflowId: workflow.id, assignedAt: 1 },
+			'child-1': { role: 'exploration', workflowId: workflow.id, delegationId: childJob.id, assignedAt: 2 }
+		}
+
+		const selected = delegationPipelineForParentSession([workflow], [childJob], roles, 'parent-1')
+		expect(selected?.workflow?.id).toBe(workflow.id)
+		expect(selected?.jobs).toEqual([childJob])
+		expect(selected?.roles).toEqual(roles)
+		expect(delegationPipelineForParentSession([workflow], [childJob], roles, 'child-1')).toBeUndefined()
+		expect(delegationPipelineForParentSession([workflow], [childJob], roles, 'ordinary-chat')).toBeUndefined()
 	})
 
 	test('hides the close control when there is only one tab', () => {
