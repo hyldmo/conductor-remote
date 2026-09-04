@@ -74,6 +74,7 @@ function usage() {
 			'Install flags (each also settable via the env var in [brackets]):',
 			'  --expose public|tailnet   reachability: public Funnel (default) or tailnet-only  [EXPOSE]',
 			'  --port <n>                listen port (default 8787)                             [RELAY_PORT]',
+			'  --voice-port <n>          public voice listener loopback port (default 8788)       [VOICE_PORT]',
 			'  --host <addr>             bind address (default 127.0.0.1)                       [RELAY_HOST]',
 			'  --hostname <name>         pin the Tailscale device name so the phone URL never drifts [RELAY_HOSTNAME]',
 			'  --token <secret>          pin the shared secret (default: generated + persisted) [RELAY_TOKEN]',

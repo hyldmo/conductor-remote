@@ -11,7 +11,7 @@
  * asserted separately, since the boundary is a preference that must never win over the cap.
  */
 import { describe, expect, it } from 'vitest'
-import { clipExact, oneLine } from '../src/speech.ts'
+import { clipExact, oneLine, speechText } from '../src/speech.ts'
 
 const LONG = 'the quick brown fox jumps over the lazy dog and keeps running well past the cap'
 
@@ -56,5 +56,22 @@ describe('oneLine', () => {
 
 	it('still honours the cap after collapsing', () => {
 		expect(oneLine(`  ${LONG}  `, 20).length).toBeLessThanOrEqual(20)
+	})
+})
+
+describe('speechText', () => {
+	it('keeps prose but removes visual Markdown and source details', () => {
+		expect(
+			speechText(
+				'# Done\n\nSee [the change](https://example.com/change) in `src/app.ts`.\n\n```ts\nconst secret = 1\n```',
+				500
+			)
+		).toBe('Done\n\nSee the change in src/app.ts.\n\n…')
+	})
+
+	it('drops bare URLs and still obeys the exact cap', () => {
+		const spoken = speechText(`Read https://example.com/really/long/path ${LONG}`, 32)
+		expect(spoken).toContain('link')
+		expect(spoken.length).toBeLessThanOrEqual(32)
 	})
 })

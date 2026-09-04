@@ -244,6 +244,39 @@ export function responseErrorMessage(error: unknown, fallback: string): string {
 export const HIT_OPEN = '\u0001'
 export const HIT_CLOSE = '\u0002'
 
+/**
+ * OpenAI's built-in Realtime voices, in the order the phone presents them. The
+ * two voices OpenAI recommends for quality lead the list; every value is shared
+ * with the relay so a stale or hand-written client cannot ask it to configure an
+ * arbitrary voice id.
+ */
+export const OPENAI_REALTIME_VOICES = [
+	'marin',
+	'cedar',
+	'alloy',
+	'ash',
+	'ballad',
+	'coral',
+	'echo',
+	'sage',
+	'shimmer',
+	'verse'
+] as const
+
+export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number]
+
+/** The deliberately small language picker for the first voice surface. */
+export const VOICE_LANGUAGES = ['auto', 'no', 'en'] as const
+export type VoiceLanguage = (typeof VOICE_LANGUAGES)[number]
+
+export function isOpenAIRealtimeVoice(value: unknown): value is OpenAIRealtimeVoice {
+	return typeof value === 'string' && (OPENAI_REALTIME_VOICES as readonly string[]).includes(value)
+}
+
+export function isVoiceLanguage(value: unknown): value is VoiceLanguage {
+	return typeof value === 'string' && (VOICE_LANGUAGES as readonly string[]).includes(value)
+}
+
 /** One attachment token in Conductor's prompt syntax. */
 export interface AttachmentToken {
 	/** Character offsets in the prompt, with `end` immediately after the closing parenthesis. */

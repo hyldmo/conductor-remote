@@ -158,6 +158,8 @@ export interface SessionState {
 	workspaceId: string
 	/** 'working' | 'idle' | 'error' — Conductor's own live agent status. */
 	status: string | null
+	/** Session activity, in Conductor's own sortable timestamp format. */
+	updatedAt: string
 	/**
 	 * When this chat's most recent *user-started* turn was dispatched (see `listSessions`).
 	 * Unchanged across a turn an agent started for itself, which is how the notifier tells
@@ -689,6 +691,7 @@ export class Reads {
 			tab_count: number
 			turn_started_at: string | null
 			last_user_message_at: string | null
+			updated_at: string
 		}>(
 			// These two together are the notifier's record of whether a *person* had
 			// anything to do with the turn that just ended. An agent that schedules its own
@@ -696,7 +699,7 @@ export class Reads {
 			// `status` cycles working → idle on every lap. Both are needed: `turn_started_at`
 			// stays at the first message when a person steers the running turn, while
 			// `last_user_message_at` moves. See src/notify.ts.
-			`SELECT s.id, s.status, s.title, s.workspace_id, s.last_user_message_at,
+			`SELECT s.id, s.status, s.title, s.workspace_id, s.last_user_message_at, s.updated_at,
 			        w.workspace_name, w.pr_title, w.branch, w.directory_name,
 			        r.name AS repo_name,
 			        (SELECT COUNT(*) FROM sessions t WHERE t.workspace_id = w.id AND COALESCE(t.is_hidden, 0) = 0) AS tab_count,
@@ -710,6 +713,7 @@ export class Reads {
 			sessionId: r.id,
 			workspaceId: r.workspace_id,
 			status: r.status,
+			updatedAt: r.updated_at,
 			turnStartedAt: r.turn_started_at,
 			lastUserMessageAt: r.last_user_message_at,
 			workspaceTitle: workspaceTitle({ ...r, id: r.workspace_id }),
@@ -717,6 +721,39 @@ export class Reads {
 			// A single-tab workspace's chat title is just the workspace again — only name it when it disambiguates.
 			sessionTitle: r.tab_count > 1 ? r.title : null
 		}))
+	}
+
+	/**
+	 * The newest structured AskUserQuestion input, when a harness emitted one. Conductor's
+	 * normal gstack path writes the same decision as prose, so this is deliberately a fallback
+	 * behind `lastAssistantText`, not a second primary transcript parser.
+	 */
+	lastQuestionInput(sessionId: string): unknown | null {
+		const rows = this.db.query<{ content: string | null }>(
+			`SELECT content FROM session_messages
+			 WHERE session_id = ? AND content LIKE '%AskUserQuestion%'
+			 ORDER BY rowid DESC LIMIT 40`,
+			[sessionId]
+		)
+		for (const row of rows) {
+			if (!row.content) continue
+			try {
+				const parsed = JSON.parse(row.content) as {
+					message?: { content?: { type?: unknown; name?: unknown; input?: unknown }[] }
+				}
+				for (const block of parsed.message?.content ?? []) {
+					if (
+						block.type === 'tool_use' &&
+						typeof block.name === 'string' &&
+						block.name.toLowerCase().endsWith('askuserquestion')
+					)
+						return block.input ?? null
+				}
+			} catch {
+				// The LIKE is only a cheap prefilter; malformed history is skipped like parseMessage does.
+			}
+		}
+		return null
 	}
 
 	/**

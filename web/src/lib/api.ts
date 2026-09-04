@@ -27,6 +27,7 @@ import type {
 	ModelsResult,
 	NewChatResult,
 	NoSleepResult,
+	OpenAIRealtimeVoice,
 	PlanUsageResponse,
 	Prefs,
 	PrefsResponse,
@@ -50,6 +51,9 @@ import type {
 	StopResult,
 	UpdateRolesResult,
 	UploadAttachmentResult,
+	VoiceCallResponse,
+	VoiceLanguage,
+	VoiceTicketResponse,
 	WorkspaceDiff,
 	WorkspaceFilesResponse,
 	WorkspaceResponse
@@ -219,6 +223,23 @@ function cachedObjectUrl(path: string): Promise<string> {
 
 export const client = {
 	state: () => api<StateResponse>(routes.state.path()),
+	/** Mint a short-lived native-call URI using the same bearer this PWA already holds. */
+	voiceTicket: () => api<VoiceTicketResponse>(routes.voiceTicket.path(), { method: routes.voiceTicket.method }),
+	/** Negotiate an app-wide Realtime call without sending the permanent key to the browser. */
+	voiceCall: (sdp: string, voice: OpenAIRealtimeVoice, language: VoiceLanguage) =>
+		api<VoiceCallResponse>(
+			routes.voiceCall.path(),
+			{
+				method: routes.voiceCall.method,
+				body: JSON.stringify({ sdp, voice, language })
+			},
+			ACTION_TIMEOUT_MS
+		),
+	/** Let the broker speak only after the browser can receive the greeting. */
+	voiceCallReady: (callId: string) =>
+		api<{ ok: true }>(routes.voiceCallReady.path(callId), { method: routes.voiceCallReady.method }, ACTION_TIMEOUT_MS),
+	voiceCallEnd: (callId: string) =>
+		api<{ ok: true }>(routes.voiceCallEnd.path(callId), { method: routes.voiceCallEnd.method }, ACTION_TIMEOUT_MS),
 	/** A repo's icon as an object URL, fetched with the auth header (token never rides in the URL). Cached per repo. */
 	repoIcon: (repoName: string): Promise<string> => cachedObjectUrl(routes.repoIcon.path(repoName)),
 	/** A local image from chat Markdown. The relay realpaths and authorizes it before reading. */

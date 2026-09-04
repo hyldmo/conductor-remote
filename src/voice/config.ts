@@ -23,6 +23,8 @@ export function voicePort(): number {
 export interface VoiceConfig {
 	/** Scoped bearer for `/voice/mcp`. Minted on first read; never the relay token. */
 	mcpToken: string
+	/** HMAC key carried through Twilio and re-checked on the OpenAI webhook. */
+	trunkSecret: string
 	/** OpenAI's Standard Webhooks signing secret for `realtime.call.incoming` (`whsec_…`). */
 	webhookSecret: string | null
 	/** OpenAI API key: accepts the call and opens the observer socket. */
@@ -33,22 +35,51 @@ export interface VoiceConfig {
 	allowedCallers: string[]
 	/** DTMF PIN gathered before OpenAI is bridged. Null disables the bridge outright. */
 	pin: string | null
+	/** Case-sensitive OpenAI project id used as the SIP user part. */
+	projectId: string | null
+	/** Public mount, e.g. `https://mac.example.ts.net/voice`. */
+	publicBaseUrl: string | null
+	model: string
+	voice: string
+	sipHost: string
 }
 
 export function voiceConfigPath(): string {
 	return path.join(stateDir(), 'voice.json')
 }
 
-const EMPTY: Omit<VoiceConfig, 'mcpToken'> = {
+const EMPTY: Omit<VoiceConfig, 'mcpToken' | 'trunkSecret'> = {
 	webhookSecret: null,
 	openaiKey: null,
 	twilioAuthToken: null,
 	allowedCallers: [],
-	pin: null
+	pin: null,
+	projectId: null,
+	publicBaseUrl: null,
+	model: 'gpt-realtime-2.1-mini',
+	voice: 'marin',
+	sipHost: 'sip.api.openai.com'
+}
+
+export function openAIOriginForSipHost(sipHost: string): string {
+	switch (sipHost) {
+		case 'sip.api.openai.com':
+			return 'https://api.openai.com'
+		case 'sip-eu.api.openai.com':
+			return 'https://eu.api.openai.com'
+		default:
+			throw new Error('voice.sip-host must be sip.api.openai.com or sip-eu.api.openai.com')
+	}
 }
 
 function asStringOrNull(value: unknown): string | null {
 	return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function normalizedPublicUrl(value: string | null): string | null {
+	if (!value) return null
+	const trimmed = value.replace(/\/+$/, '')
+	return trimmed.endsWith('/voice') ? trimmed : `${trimmed}/voice`
 }
 
 /**
@@ -67,15 +98,22 @@ export function readVoiceConfig(file: string = voiceConfigPath()): VoiceConfig {
 	const config: VoiceConfig = {
 		...EMPTY,
 		mcpToken: asStringOrNull(raw.mcpToken) ?? crypto.randomBytes(16).toString('hex'),
+		trunkSecret: asStringOrNull(raw.trunkSecret) ?? crypto.randomBytes(32).toString('hex'),
 		webhookSecret: asStringOrNull(raw.webhookSecret),
 		openaiKey: asStringOrNull(raw.openaiKey),
 		twilioAuthToken: asStringOrNull(raw.twilioAuthToken),
 		allowedCallers: Array.isArray(raw.allowedCallers)
 			? raw.allowedCallers.filter((c): c is string => typeof c === 'string' && Boolean(c.trim())).map(c => c.trim())
 			: [],
-		pin: asStringOrNull(raw.pin)
+		pin: asStringOrNull(raw.pin),
+		projectId: asStringOrNull(raw.projectId),
+		publicBaseUrl: normalizedPublicUrl(asStringOrNull(raw.publicBaseUrl)),
+		model: asStringOrNull(raw.model) ?? EMPTY.model,
+		voice: asStringOrNull(raw.voice) ?? EMPTY.voice,
+		sipHost: asStringOrNull(raw.sipHost) ?? EMPTY.sipHost
 	}
-	if (asStringOrNull(raw.mcpToken) !== config.mcpToken) writeVoiceConfig(config, file)
+	if (asStringOrNull(raw.mcpToken) !== config.mcpToken || asStringOrNull(raw.trunkSecret) !== config.trunkSecret)
+		writeVoiceConfig(config, file)
 	return config
 }
 
@@ -88,4 +126,71 @@ export function writeVoiceConfig(config: VoiceConfig, file: string = voiceConfig
 	} catch {
 		// a file we just wrote; if the mode cannot be set the write above already failed loudly
 	}
+}
+
+export const VOICE_SETTING_NAMES = [
+	'voice.openai-key',
+	'voice.webhook-secret',
+	'voice.twilio-auth-token',
+	'voice.allowed-callers',
+	'voice.pin',
+	'voice.project-id',
+	'voice.public-url',
+	'voice.model',
+	'voice.voice',
+	'voice.sip-host'
+] as const
+
+/** Apply one CLI setting without ever returning or printing the secret value. `unset` clears nullable fields. */
+export function setVoiceSetting(name: string, value: string, file: string = voiceConfigPath()): VoiceConfig {
+	if (!(VOICE_SETTING_NAMES as readonly string[]).includes(name)) throw new Error(`unknown voice setting "${name}"`)
+	const config = readVoiceConfig(file)
+	const nullable = value === 'unset' ? null : value.trim() || null
+	switch (name) {
+		case 'voice.openai-key':
+			config.openaiKey = nullable
+			break
+		case 'voice.webhook-secret':
+			config.webhookSecret = nullable
+			break
+		case 'voice.twilio-auth-token':
+			config.twilioAuthToken = nullable
+			break
+		case 'voice.allowed-callers':
+			config.allowedCallers =
+				value === 'unset'
+					? []
+					: value
+							.split(',')
+							.map(item => item.trim())
+							.filter(Boolean)
+			break
+		case 'voice.pin':
+			if (nullable && !/^\d{4,12}$/.test(nullable)) throw new Error('voice.pin must be 4–12 digits or unset')
+			config.pin = nullable
+			break
+		case 'voice.project-id':
+			config.projectId = nullable
+			break
+		case 'voice.public-url':
+			if (nullable && !/^https:\/\/[^/]+(?:\/voice)?\/?$/.test(nullable))
+				throw new Error('voice.public-url must be an HTTPS origin optionally ending in /voice, or unset')
+			config.publicBaseUrl = normalizedPublicUrl(nullable)
+			break
+		case 'voice.model':
+			if (!nullable) throw new Error('voice.model cannot be unset')
+			config.model = nullable
+			break
+		case 'voice.voice':
+			if (!nullable) throw new Error('voice.voice cannot be unset')
+			config.voice = nullable
+			break
+		case 'voice.sip-host':
+			if (!nullable) throw new Error('voice.sip-host cannot be unset')
+			openAIOriginForSipHost(nullable)
+			config.sipHost = nullable
+			break
+	}
+	writeVoiceConfig(config, file)
+	return config
 }

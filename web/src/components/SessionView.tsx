@@ -362,8 +362,8 @@ export function SessionView() {
 					) : null}
 					<div className="relative min-h-0 flex flex-1 flex-col">
 						{/* The relay's undelivered prompt for this chat: one parked for the lock screen
-						    wins (it names its session; oldest first, since delivery is FIFO), else the
-						    workspace's first prompt still waiting on setup. */}
+							    wins (it names its session; oldest first, since delivery is FIFO), else the
+							    workspace's first prompt still waiting on setup. */}
 						{selectedDiffFile ? (
 							<DiffFileViewer
 								key={selectedDiffFile}

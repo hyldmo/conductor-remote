@@ -12,6 +12,7 @@ function chat(
 		sessionId,
 		workspaceId: 'ws-1',
 		status,
+		updatedAt: '2026-09-02 00:00:00',
 		turnStartedAt,
 		lastUserMessageAt,
 		workspaceTitle: 'Build photo window',

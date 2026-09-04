@@ -6,6 +6,7 @@ const state = (status: string): SessionState => ({
 	sessionId: 'chat-1',
 	workspaceId: 'workspace-1',
 	status,
+	updatedAt: '2026-09-04 00:00:00',
 	turnStartedAt: null,
 	lastUserMessageAt: null,
 	workspaceTitle: 'Workspace',

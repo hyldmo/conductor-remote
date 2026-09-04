@@ -50,3 +50,26 @@ export function oneLine(text: string, max: number): string {
 		max
 	)
 }
+
+/**
+ * Turn the Markdown that is useful on screen into prose that is useful in an
+ * ear. The visible transcript remains untouched and canonical: this only drops
+ * things that a speech engine would otherwise pronounce literally (URLs,
+ * backticks, heading marks, and fenced source code).
+ */
+export function speechText(text: string, max: number): string {
+	return clipExact(
+		text
+			.replace(/```[\s\S]*?```/g, '…')
+			.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+			.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+			.replace(/`([^`\n]+)`/g, '$1')
+			.replace(/https?:\/\/\S+/g, 'link')
+			.replace(/^\s{0,3}(?:#{1,6}|>|[-*+])\s+/gm, '')
+			.replace(/<[^>]+>/g, ' ')
+			.replace(/[ \t]+/g, ' ')
+			.replace(/\n{3,}/g, '\n\n')
+			.trim(),
+		max
+	)
+}

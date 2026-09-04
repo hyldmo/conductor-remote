@@ -16,6 +16,8 @@
 	--color-accent-soft: light-dark(#ebe9ff, #2a2650);
 	--color-on-solid: light-dark(#ffffff, #101116);
 	--color-provider-openai: light-dark(#17191f, #ffffff);
+	--color-voice: light-dark(#14799d, #54c8f1);
+	--color-voice-soft: light-dark(#dcf3fb, #102d38);
 
 	--color-working: light-dark(#a65f00, #f5a623);
 	--color-idle: light-dark(#167a52, #3ecf8e);

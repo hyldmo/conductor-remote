@@ -14,6 +14,7 @@ import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import type { AgentEffort, CachedModelGroup, DelegatedRole, RolesConfig } from '../lib/types.ts'
 import { EffortBars, ProviderMark } from './AgentIcons.tsx'
+import { BetaBadge } from './BetaBadge.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import { Spinner } from './ui.tsx'
 
@@ -288,7 +289,10 @@ export function RolesSettings({ onClose }: { onClose: () => void }) {
 		<div className="fixed inset-0 z-50 flex flex-col bg-bg" role="dialog" aria-modal="true" aria-label="Roles settings">
 			<header className="pt-safe flex items-center gap-2 border-b border-border-soft px-3 pb-2.5">
 				<div className="min-w-0 flex-1">
-					<h2 className="text-[15px] font-semibold">Roles</h2>
+					<div className="flex items-center gap-1.5">
+						<h2 className="text-[15px] font-semibold">Roles</h2>
+						<BetaBadge />
+					</div>
 					<p className="text-[11px] text-faint">Cross-provider delegated chats</p>
 				</div>
 				<button

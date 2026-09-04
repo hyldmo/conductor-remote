@@ -15,12 +15,15 @@
  * proxying, so the public URL and the local one differ by a segment, and picking one spelling
  * would 404 whichever caller happened to use the other.
  */
+
+import type http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createVoiceServer, routeName, type VoiceRoutes } from '../src/voice/server.ts'
 
 const TOKEN = 'scoped-voice-token'
 const seen: { webhook: string[]; twiml: string[]; rpc: unknown[] } = { webhook: [], twiml: [], rpc: [] }
+let lastRpcHeaders: http.IncomingHttpHeaders = {}
 
 const routes: VoiceRoutes = {
 	async webhook(body) {
@@ -31,8 +34,9 @@ const routes: VoiceRoutes = {
 		seen.twiml.push(body)
 		return { status: 200, body: '<Response/>', contentType: 'text/xml' }
 	},
-	async rpc(message) {
+	async rpc(message, headers) {
 		seen.rpc.push(message)
+		lastRpcHeaders = headers
 		const id = (message as { id?: unknown }).id
 		return id === undefined ? null : { jsonrpc: '2.0', id, result: { ok: true } }
 	}
@@ -57,6 +61,8 @@ const withToken = (token: string) => ({ authorization: `Bearer ${token}` })
 
 describe('routeName', () => {
 	it('accepts both the public and the stripped spelling', () => {
+		expect(routeName('/')).toBe('webhook')
+		expect(routeName('/voice')).toBe('webhook')
 		expect(routeName('/webhook')).toBe('webhook')
 		expect(routeName('/voice/webhook')).toBe('webhook')
 		expect(routeName('/voice/mcp')).toBe('mcp')
@@ -64,7 +70,7 @@ describe('routeName', () => {
 	})
 
 	it('knows nothing else, including the relay it sits beside', () => {
-		for (const p of ['/', '/voice', '/api/state', '/mcp/extra', '/voicex/webhook', '/webhookk', '/index.html']) {
+		for (const p of ['/api/state', '/mcp/extra', '/voicex/webhook', '/webhookk', '/index.html']) {
 			expect(routeName(p)).toBeNull()
 		}
 	})
@@ -72,7 +78,13 @@ describe('routeName', () => {
 
 describe('the listener', () => {
 	it('404s anything that is not one of its three routes', async () => {
-		for (const p of ['/api/state', '/', '/voice']) expect((await post(p)).status).toBe(404)
+		for (const p of ['/api/state', '/not-voice']) expect((await post(p)).status).toBe(404)
+	})
+
+	it('accepts the root path Funnel produces for the configured public /voice webhook', async () => {
+		const res = await post('/', { body: '{"type":"realtime.call.incoming"}' })
+		expect(res.status).toBe(200)
+		expect(seen.webhook.at(-1)).toBe('{"type":"realtime.call.incoming"}')
 	})
 
 	it('answers POST only', async () => {
@@ -105,10 +117,11 @@ describe('the listener', () => {
 	it('serves JSON-RPC to a caller holding the scoped token', async () => {
 		const res = await post('/mcp', {
 			body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/list' }),
-			headers: { ...withToken(TOKEN), 'content-type': 'application/json' }
+			headers: { ...withToken(TOKEN), 'content-type': 'application/json', 'x-voice-call-id': 'rtc_7' }
 		})
 		expect(res.status).toBe(200)
 		expect(await res.json()).toEqual({ jsonrpc: '2.0', id: 7, result: { ok: true } })
+		expect(lastRpcHeaders['x-voice-call-id']).toBe('rtc_7')
 	})
 
 	it('answers a batch of nothing but notifications with 202 and no body', async () => {

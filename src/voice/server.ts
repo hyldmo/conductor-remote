@@ -39,7 +39,7 @@ export interface VoiceRoutes {
 	/** Twilio's call webhook; answers TwiML. Verifies `X-Twilio-Signature` itself. */
 	twiml(body: string, headers: http.IncomingHttpHeaders): Promise<VoiceReply>
 	/** One JSON-RPC message for the voice MCP endpoint. Null for a notification, which takes no reply. */
-	rpc(message: unknown): Promise<unknown | null>
+	rpc(message: unknown, headers: http.IncomingHttpHeaders): Promise<unknown | null>
 }
 
 export interface VoiceServerDeps {
@@ -68,6 +68,9 @@ function bearer(req: http.IncomingMessage): string | null {
  */
 export function routeName(pathname: string): 'webhook' | 'twiml' | 'mcp' | null {
 	const trimmed = pathname.replace(/\/+$/, '') || '/'
+	// The OpenAI dashboard is already configured to the mount itself (`…/voice`). Funnel
+	// strips that mount and the listener sees `/`; a direct loopback check sees `/voice`.
+	if (trimmed === '/' || trimmed === '/voice') return 'webhook'
 	const local = trimmed.startsWith('/voice/') ? trimmed.slice('/voice'.length) : trimmed
 	if (local === '/webhook') return 'webhook'
 	if (local === '/twiml') return 'twiml'
@@ -136,7 +139,7 @@ export async function handleVoiceRequest(
 		return send(res, { status: 400, body: RPC_PARSE_ERROR, contentType: 'application/json' })
 	}
 	const batch = Array.isArray(parsed) ? parsed : [parsed]
-	const settled = await Promise.all(batch.map(m => deps.routes.rpc(m)))
+	const settled = await Promise.all(batch.map(m => deps.routes.rpc(m, req.headers)))
 	const answers = settled.filter(a => a !== null)
 	// A payload of nothing but notifications takes no reply at all.
 	if (!answers.length) return send(res, { status: 202 })

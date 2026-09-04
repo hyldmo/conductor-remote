@@ -30,7 +30,8 @@
 	"files": [
 		"bin",
 		"dist",
-		"dist-node"
+		"dist-node",
+		"docs/voice-setup.md"
 	],
 	"publishConfig": {
 		"access": "public",

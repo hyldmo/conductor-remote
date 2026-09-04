@@ -131,11 +131,20 @@ export function twimlGatherPin(action: string, digits: number): string {
 }
 
 /**
+ * The short-lived address used by both Twilio and the native app. Keep it in one
+ * function so neither path can accidentally normalise the case-sensitive project id
+ * or omit TLS/the relay marker.
+ */
+export function sipTicketUri(projectId: string, marker: string, host = 'sip.api.openai.com'): string {
+	return `sip:${projectId}@${host};transport=tls?X-Relay-Call=${marker}`
+}
+
+/**
  * Bridge to OpenAI. The project id is **case-sensitive** in the SIP user part (P3: Linphone
  * lowercasing it is what demoted the softphone path), so it is interpolated exactly as configured
  * and never normalised here.
  */
 export function twimlDialSip(projectId: string, marker: string, host = 'sip.api.openai.com'): string {
-	const uri = `sip:${projectId}@${host};transport=tls?X-Relay-Call=${marker}`
+	const uri = sipTicketUri(projectId, marker, host)
 	return doc(`<Dial answerOnBridge="true"><Sip>${xmlEscape(uri)}</Sip></Dial>`)
 }

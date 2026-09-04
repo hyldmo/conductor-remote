@@ -99,6 +99,11 @@ export class ReplayGuard {
 		this.seen.set(id, nowMs)
 		return true
 	}
+
+	/** Let OpenAI retry a delivery whose handler failed before it could accept or reject the call. */
+	forget(id: string): void {
+		this.seen.delete(id)
+	}
 }
 
 /** The event body, or null when it is not an incoming call we can act on. */
