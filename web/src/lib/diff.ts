@@ -34,6 +34,9 @@ interface MutableDiffFileTreeFolder {
 const treeNameOrder = (a: { name: string }, b: { name: string }) =>
 	a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) || a.name.localeCompare(b.name)
 
+const filePathOrder = (a: DiffFile, b: DiffFile) =>
+	a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }) || a.path.localeCompare(b.path)
+
 /** Build the repository-shaped hierarchy shared by Changed and All files. */
 export function buildDiffFileTree(files: readonly DiffFile[]): DiffFileTreeNode[] {
 	const root: MutableDiffFileTreeFolder = {
@@ -104,6 +107,11 @@ export function filesInTreeOrder(files: readonly DiffFile[]): DiffFile[] {
 	}
 	visit(buildDiffFileTree(files))
 	return ordered
+}
+
+/** Files as one ungrouped list, with full paths sorted naturally. */
+export function filesInFlatOrder(files: readonly DiffFile[]): DiffFile[] {
+	return [...files].sort(filePathOrder)
 }
 
 /** The rail entries for one scope. All-files rows retain diff counts when they have them. */

@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { FileDiff, Hourglass, LoaderCircle, Plus, Workflow, X } from 'lucide-react'
+import { FileDiff, FolderTree, Hourglass, LoaderCircle, Plus, Workflow, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import {
@@ -84,6 +84,8 @@ export function SessionView() {
 	const markRead = useApp(s => s.markRead)
 	const setDraft = useApp(s => s.setDraft)
 	const online = useApp(s => s.online)
+	const showFolders = useApp(s => s.view.showFolders)
+	const setView = useApp(s => s.setView)
 
 	const ws = liveWorkspace
 	const actuator = data?.actuator
@@ -408,6 +410,7 @@ export function SessionView() {
 								review={diffReview}
 								filePath={selectedDiffFile}
 								scope={diffFileScope}
+								showFolders={showFolders}
 								onSelectFile={selectDiffFile}
 								onShowFiles={() => setDiffNavigatorOpen(true)}
 								onClose={closeDiffFile}
@@ -434,6 +437,8 @@ export function SessionView() {
 								sessionId={sessionId}
 								scope={diffFileScope}
 								onScopeChange={changeDiffFileScope}
+								showFolders={showFolders}
+								onShowFoldersChange={value => setView({ showFolders: value })}
 								selectedFile={selectedDiffFile}
 								onSelectFile={selectDiffFile}
 								onClose={closeDiff}
@@ -473,6 +478,8 @@ export function SessionView() {
 						sessionId={sessionId}
 						scope={diffFileScope}
 						onScopeChange={changeDiffFileScope}
+						showFolders={showFolders}
+						onShowFoldersChange={value => setView({ showFolders: value })}
 						selectedFile={selectedDiffFile}
 						onSelectFile={selectDiffFile}
 						onClose={closeDiff}
@@ -725,12 +732,39 @@ export function DiffFileScopeToggle({
 	)
 }
 
+/** One persisted switch shared by the desktop rail and mobile file navigator. */
+export function DiffFolderToggle({
+	showFolders,
+	onChange
+}: {
+	showFolders: boolean
+	onChange: (showFolders: boolean) => void
+}) {
+	return (
+		<button
+			type="button"
+			onClick={() => onChange(!showFolders)}
+			aria-label="Group files into folders"
+			aria-pressed={showFolders}
+			title="Group files into folders"
+			className={cn(
+				'flex size-8 shrink-0 items-center justify-center rounded-full text-faint transition active:bg-surface-2',
+				showFolders && 'bg-surface-2 text-text'
+			)}
+		>
+			<FolderTree size={16} />
+		</button>
+	)
+}
+
 /** Workspace files stay as the right rail on lg+. */
 function DiffPanel({
 	review,
 	sessionId,
 	scope,
 	onScopeChange,
+	showFolders,
+	onShowFoldersChange,
 	selectedFile,
 	onSelectFile,
 	onClose
@@ -739,6 +773,8 @@ function DiffPanel({
 	sessionId: string | null
 	scope: DiffFileScope
 	onScopeChange: (scope: DiffFileScope) => void
+	showFolders: boolean
+	onShowFoldersChange: (showFolders: boolean) => void
 	selectedFile: string | null
 	onSelectFile: (path: string) => void
 	onClose: () => void
@@ -748,6 +784,7 @@ function DiffPanel({
 			<header className="flex items-center gap-2 border-b border-border-soft px-3 py-2.5">
 				<span className="flex-1 text-[15px] font-semibold">Files</span>
 				<DiffFileScopeToggle scope={scope} onChange={onScopeChange} />
+				<DiffFolderToggle showFolders={showFolders} onChange={onShowFoldersChange} />
 				<button
 					type="button"
 					onClick={onClose}
@@ -761,6 +798,7 @@ function DiffPanel({
 				review={review}
 				sessionId={sessionId}
 				scope={scope}
+				showFolders={showFolders}
 				selectedFile={selectedFile}
 				onSelectFile={onSelectFile}
 			/>
@@ -774,6 +812,8 @@ function MobileDiffNavigator({
 	sessionId,
 	scope,
 	onScopeChange,
+	showFolders,
+	onShowFoldersChange,
 	selectedFile,
 	onSelectFile,
 	onClose
@@ -782,6 +822,8 @@ function MobileDiffNavigator({
 	sessionId: string | null
 	scope: DiffFileScope
 	onScopeChange: (scope: DiffFileScope) => void
+	showFolders: boolean
+	onShowFoldersChange: (showFolders: boolean) => void
 	selectedFile: string | null
 	onSelectFile: (path: string) => void
 	onClose: () => void
@@ -791,6 +833,7 @@ function MobileDiffNavigator({
 			<header className="flex shrink-0 items-center gap-2 border-b border-border-soft px-3 py-2.5">
 				<span className="flex-1 text-[15px] font-semibold">Files</span>
 				<DiffFileScopeToggle scope={scope} onChange={onScopeChange} />
+				<DiffFolderToggle showFolders={showFolders} onChange={onShowFoldersChange} />
 				<button
 					type="button"
 					onClick={onClose}
@@ -804,6 +847,7 @@ function MobileDiffNavigator({
 				review={review}
 				sessionId={sessionId}
 				scope={scope}
+				showFolders={showFolders}
 				selectedFile={selectedFile}
 				onSelectFile={onSelectFile}
 			/>

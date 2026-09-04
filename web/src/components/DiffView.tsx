@@ -1,10 +1,11 @@
-import { ChevronLeft, ChevronRight, File, Folder, FolderOpen, List } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Folder, FolderOpen, List } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useFilePreview } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import type { DiffFileScope, DiffFileTreeNode } from '../lib/diff.ts'
-import { buildDiffFileTree, filesForScope, filesInTreeOrder, patchForFile } from '../lib/diff.ts'
+import { buildDiffFileTree, filesForScope, filesInFlatOrder, filesInTreeOrder, patchForFile } from '../lib/diff.ts'
 import type { DiffFile, Workspace, WorkspaceDiff, WorkspaceFileDiff, WorkspaceFilesResponse } from '../lib/types.ts'
+import { FileIcon } from './FileIcon.tsx'
 import { MergeBanner } from './MergeBanner.tsx'
 import { Patch } from './Patch.tsx'
 import { SourceLines } from './SourceLines.tsx'
@@ -26,17 +27,60 @@ export interface DiffReviewState {
 	fileQuery: ReviewQuery<WorkspaceFileDiff>
 }
 
+function DiffFileRow({
+	file,
+	label,
+	inset,
+	alignWithFolders,
+	selected,
+	onSelectFile
+}: {
+	file: DiffFile
+	label: string
+	inset: number
+	alignWithFolders?: boolean
+	selected: boolean
+	onSelectFile: (path: string) => void
+}) {
+	return (
+		<li>
+			<button
+				type="button"
+				title={file.path}
+				aria-label={file.path}
+				onClick={() => onSelectFile(file.path)}
+				aria-pressed={selected}
+				className={cn(
+					'grid min-h-8 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 rounded-md pr-2 text-left transition hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent active:bg-surface-2',
+					selected && 'bg-accent-soft'
+				)}
+				style={{ paddingLeft: inset }}
+			>
+				<span className="flex min-w-0 items-center gap-1.5">
+					{alignWithFolders ? <span className="size-3.5 shrink-0" aria-hidden="true" /> : null}
+					<FileIcon path={file.path} />
+					<span className={cn('truncate', selected ? 'text-text' : 'text-muted')}>{label}</span>
+				</span>
+				<span className="min-w-8 text-right text-add">{file.added ? `+${file.added}` : null}</span>
+				<span className="min-w-8 text-right text-del">{file.removed ? `−${file.removed}` : null}</span>
+			</button>
+		</li>
+	)
+}
+
 /** The right review rail: actions and workspace files, never the patch itself. */
 export function DiffView({
 	review,
 	sessionId,
 	scope,
+	showFolders,
 	selectedFile,
 	onSelectFile
 }: {
 	review: DiffReviewState
 	sessionId?: string | null
 	scope: DiffFileScope
+	showFolders: boolean
 	selectedFile: string | null
 	onSelectFile: (path: string) => void
 }) {
@@ -85,7 +129,13 @@ export function DiffView({
 							</>
 						)}
 					</div>
-					<DiffFileList files={files} scope={scope} selectedFile={selectedFile} onSelectFile={onSelectFile} />
+					<DiffFileList
+						files={files}
+						scope={scope}
+						showFolders={showFolders}
+						selectedFile={selectedFile}
+						onSelectFile={onSelectFile}
+					/>
 				</>
 			) : null}
 		</div>
@@ -95,15 +145,20 @@ export function DiffView({
 export function DiffFileList({
 	files,
 	scope,
+	showFolders,
 	selectedFile,
 	onSelectFile
 }: {
 	files: readonly DiffFile[]
 	scope: DiffFileScope
+	showFolders: boolean
 	selectedFile: string | null
 	onSelectFile: (path: string) => void
 }) {
-	const tree = useMemo(() => buildDiffFileTree(files), [files])
+	// All-files can hold thousands of entries. Build only the representation on
+	// screen rather than sorting both the tree and flat list after every refresh.
+	const tree = useMemo(() => (showFolders ? buildDiffFileTree(files) : []), [files, showFolders])
+	const flatFiles = useMemo(() => (showFolders ? [] : filesInFlatOrder(files)), [files, showFolders])
 	const selectedFolders = useMemo(() => {
 		if (!selectedFile) return []
 		const parts = selectedFile.split('/')
@@ -173,30 +228,36 @@ export function DiffFileList({
 			)
 		}
 
-		const selected = node.path === selectedFile
 		return (
-			<li key={node.path}>
-				<button
-					type="button"
-					title={node.path}
-					aria-label={node.path}
-					onClick={() => onSelectFile(node.path)}
-					aria-pressed={selected}
-					className={cn(
-						'grid min-h-8 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 rounded-md pr-2 text-left transition hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent active:bg-surface-2',
-						selected && 'bg-accent-soft'
-					)}
-					style={{ paddingLeft: inset }}
-				>
-					<span className="flex min-w-0 items-center gap-1.5">
-						<span className="size-3.5 shrink-0" aria-hidden="true" />
-						<File size={15} className={cn('shrink-0', selected ? 'text-accent' : 'text-faint')} />
-						<span className={cn('truncate', selected ? 'text-text' : 'text-muted')}>{node.name}</span>
-					</span>
-					<span className="min-w-8 text-right text-add">{node.file.added ? `+${node.file.added}` : null}</span>
-					<span className="min-w-8 text-right text-del">{node.file.removed ? `−${node.file.removed}` : null}</span>
-				</button>
-			</li>
+			<DiffFileRow
+				key={node.path}
+				file={node.file}
+				label={node.name}
+				inset={inset}
+				alignWithFolders
+				selected={node.path === selectedFile}
+				onSelectFile={onSelectFile}
+			/>
+		)
+	}
+
+	if (!showFolders) {
+		return (
+			<ul
+				aria-label={`${scope === 'changed' ? 'Changed' : 'All'} files`}
+				className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2 font-mono text-[12px]"
+			>
+				{flatFiles.map(file => (
+					<DiffFileRow
+						key={file.path}
+						file={file}
+						label={file.path}
+						inset={8}
+						selected={file.path === selectedFile}
+						onSelectFile={onSelectFile}
+					/>
+				))}
+			</ul>
 		)
 	}
 
@@ -215,6 +276,7 @@ export function DiffFileViewer({
 	review,
 	filePath,
 	scope,
+	showFolders,
 	onSelectFile,
 	onShowFiles,
 	onClose
@@ -222,16 +284,17 @@ export function DiffFileViewer({
 	review: DiffReviewState
 	filePath: string
 	scope: DiffFileScope
+	showFolders: boolean
 	onSelectFile: (path: string) => void
 	onShowFiles: () => void
 	onClose: () => void
 }) {
 	const { workspace, query, filesQuery, fileQuery } = review
 	const { data, isLoading, isError, error } = query
-	const files = useMemo(
-		() => filesInTreeOrder(filesForScope(scope, data?.files ?? [], filesQuery.data?.files ?? [])),
-		[scope, data?.files, filesQuery.data?.files]
-	)
+	const files = useMemo(() => {
+		const scoped = filesForScope(scope, data?.files ?? [], filesQuery.data?.files ?? [])
+		return showFolders ? filesInTreeOrder(scoped) : filesInFlatOrder(scoped)
+	}, [scope, showFolders, data?.files, filesQuery.data?.files])
 	const fileIndex = files.findIndex(file => file.path === filePath)
 	const file = fileIndex >= 0 ? files[fileIndex] : undefined
 	const aggregatePatch = useMemo(

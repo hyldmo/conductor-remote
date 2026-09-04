@@ -6,6 +6,7 @@ import { Patch } from '../web/src/components/Patch.tsx'
 import {
 	buildDiffFileTree,
 	filesForScope,
+	filesInFlatOrder,
 	filesInTreeOrder,
 	patchForFile,
 	preparePatch,
@@ -70,7 +71,7 @@ const review = {
 const renderReview = (scope: 'changed' | 'all') =>
 	renderToStaticMarkup(
 		<QueryClientProvider client={new QueryClient()}>
-			<DiffView review={review} scope={scope} selectedFile={null} onSelectFile={vi.fn()} />
+			<DiffView review={review} scope={scope} showFolders selectedFile={null} onSelectFile={vi.fn()} />
 		</QueryClientProvider>
 	)
 
@@ -127,12 +128,13 @@ describe('diff file navigation', () => {
 		]
 		const renderTree = (scope: 'changed' | 'all', selectedFile: string | null = null) =>
 			renderToStaticMarkup(
-				<DiffFileList files={nested} scope={scope} selectedFile={selectedFile} onSelectFile={vi.fn()} />
+				<DiffFileList files={nested} scope={scope} showFolders selectedFile={selectedFile} onSelectFile={vi.fn()} />
 			)
 
 		const changed = renderTree('changed')
 		expect(changed).toContain('aria-label="Collapse src, 2 files"')
 		expect(changed).toContain('aria-label="src/index.ts"')
+		expect(changed).toContain('data-file-icon="typescript"')
 
 		const all = renderTree('all')
 		expect(all).toContain('aria-label="Expand src, 2 files"')
@@ -143,6 +145,24 @@ describe('diff file navigation', () => {
 		expect(selected).toContain('aria-label="Collapse src, 2 files"')
 		expect(selected).toContain('aria-label="Collapse src/lib, 1 file"')
 		expect(selected).toContain('aria-label="src/lib/format.ts"')
+	})
+
+	it('can show the same files as a flat, full-path list', () => {
+		const nested: DiffFile[] = [
+			{ path: 'src/file10.ts', added: 0, removed: 3 },
+			{ path: 'README.md', added: 0, removed: 0 },
+			{ path: 'src/file2.ts', added: 2, removed: 0 }
+		]
+		const html = renderToStaticMarkup(
+			<DiffFileList files={nested} scope="changed" showFolders={false} selectedFile={null} onSelectFile={vi.fn()} />
+		)
+
+		expect(filesInFlatOrder(nested).map(file => file.path)).toEqual(['README.md', 'src/file2.ts', 'src/file10.ts'])
+		expect(html).toContain('aria-label="Changed files"')
+		expect(html).not.toContain('Collapse src')
+		expect(html).toContain('data-file-icon="typescript"')
+		expect(html).toContain('>src/file2.ts<')
+		expect(html).toContain('>src/file10.ts<')
 	})
 
 	it('splits a workspace patch into independently viewable files', () => {
@@ -177,6 +197,7 @@ describe('diff file navigation', () => {
 					review={truncatedReview}
 					filePath="two.ts"
 					scope="changed"
+					showFolders
 					onSelectFile={vi.fn()}
 					onShowFiles={vi.fn()}
 					onClose={vi.fn()}
