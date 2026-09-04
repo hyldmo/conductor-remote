@@ -2457,6 +2457,14 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, 200, reads.getMessages(messagesOf, Number.isFinite(after) ? after : 0))
 			}
 
+			// GET /api/sessions/:id/context — expensive enough to stay off the session poll.
+			const contextOf = routeParam(routes.context, req.method, pathname)
+			if (contextOf) {
+				const breakdown = reads.getContextBreakdown(contextOf)
+				if (!breakdown) return json(req, res, 404, { error: 'chat not found' })
+				return json(req, res, 200, breakdown)
+			}
+
 			// GET /api/sessions/:id/models?workspaceId= — labels from Conductor's live picker
 			const modelsOf = routeParam(routes.models, req.method, pathname)
 			if (modelsOf) {

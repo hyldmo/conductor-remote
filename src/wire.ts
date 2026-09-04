@@ -23,6 +23,7 @@
 
 import type { UpdateStatus } from './autoupdate.ts'
 import type { DefaultEfforts } from './conductor-settings.ts'
+import type { ContextBreakdown } from './context-breakdown.ts'
 import type { DevServerForward, DevServerResult, DevServerState } from './dev-server.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import type { LogEntry, LogFileInfo } from './logbuf.ts'
@@ -347,6 +348,9 @@ export interface MessagesResponse {
 	queued?: TranscriptEntry[]
 	cursor: number
 }
+
+/** GET /api/sessions/:id/context — exact total plus estimated composition and fork sizes. */
+export type ContextBreakdownResponse = ContextBreakdown
 
 /**
  * POST /api/sessions/:id/split — the source chat, written into a new destination's attachments.

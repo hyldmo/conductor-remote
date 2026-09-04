@@ -17,6 +17,24 @@ import type { Workspace } from './types.ts'
 
 export { modelLabel, queryTokens, shortModel, type Titled, timestampMs, workspaceTitle }
 
+function trimDecimal(value: string): string {
+	return value.endsWith('.0') ? value.slice(0, -2) : value
+}
+
+/** Compact token counts without throwing away the useful first decimal below 100k. */
+export function formatContextTokens(tokens: number): string {
+	if (tokens >= 1_000_000) return `${trimDecimal((tokens / 1_000_000).toFixed(tokens < 10_000_000 ? 1 : 0))}M`
+	if (tokens >= 1_000) return `${trimDecimal((tokens / 1_000).toFixed(tokens < 100_000 ? 1 : 0))}k`
+	return String(tokens)
+}
+
+/** A nonzero context sliver should never be presented as zero percent. */
+export function formatContextShare(tokens: number, total: number): string {
+	if (tokens <= 0 || total <= 0) return '0%'
+	const percent = (tokens / total) * 100
+	return percent < 1 ? '<1%' : `${Math.round(percent)}%`
+}
+
 /**
  * Split a relay snippet into plain and highlighted runs. The markers are control
  * characters, so they must never reach the DOM: an unsplit snippet renders as

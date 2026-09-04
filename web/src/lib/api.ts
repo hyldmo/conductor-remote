@@ -8,6 +8,7 @@ import type {
 	AgentResult,
 	ArchiveResult,
 	CloseChatResult,
+	ContextBreakdownResponse,
 	ContinueWorkspaceResult,
 	CreateWorkspaceRequest,
 	CreateWorkspaceResult,
@@ -267,6 +268,8 @@ export const client = {
 		api<MessagesResponse>(`${routes.messages.path(sessionId)}?after=${after}`, {
 			headers: readingAs ? { [VIEWING_HEADER]: readingAs } : {}
 		}),
+	/** Exact last-turn context total plus estimated categories and fork payload sizes. */
+	contextBreakdown: (sessionId: string) => api<ContextBreakdownResponse>(routes.context.path(sessionId)),
 	/** Stage one phone file in the selected workspace, then add its returned token to a prompt. */
 	uploadAttachment: (sessionId: string, workspaceId: string, file: File) =>
 		upload<UploadAttachmentResult>(

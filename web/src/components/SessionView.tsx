@@ -21,6 +21,7 @@ import type { DiffStats, Session, SessionRoleAssignment } from '../lib/types.ts'
 import { useApp, WORKING_HINT_MS } from '../store.ts'
 import { ArchivedChat } from './ArchivedChat.tsx'
 import { Composer } from './Composer.tsx'
+import { ContextBreakdownSheet } from './ContextBreakdownSheet.tsx'
 import { DelegationPipeline } from './DelegationPipeline.tsx'
 import { DevServerControls } from './DevServerControls.tsx'
 import { DiffFileViewer, type DiffReviewState, DiffView } from './DiffView.tsx'
@@ -52,6 +53,11 @@ export function SessionView() {
 	const [confirmingClose, setConfirmingClose] = useState<string | null>(null)
 	const [closeError, setCloseError] = useState<string | null>(null)
 	const [focusComposerFor, setFocusComposerFor] = useState<string | null>(null)
+	const [contextSession, setContextSession] = useState<{
+		workspaceId: string
+		id: string
+		title: string | null
+	} | null>(null)
 	const queryClient = useQueryClient()
 	const navigate = useNavigate()
 	const { data, isLoading } = useWorkspaces()
@@ -320,6 +326,7 @@ export function SessionView() {
 							roles={sessionRoles}
 							subtabSessionIds={delegationSubtabSessionIds}
 							onSelect={pickSession}
+							onContext={session => setContextSession({ workspaceId: ws.id, id: session.id, title: session.title })}
 							onNewChat={createChat}
 							onClose={id => void closeChat(id)}
 							creating={creatingChat}
@@ -408,6 +415,16 @@ export function SessionView() {
 						working={working}
 						actuator={actuator}
 						onFork={prompt => forkChat({ thinking: true, tools: false }, prompt)}
+						onContext={
+							activeSession
+								? () =>
+										setContextSession({
+											workspaceId: ws.id,
+											id: activeSession.id,
+											title: activeSession.title
+										})
+								: undefined
+						}
 						workflowStarted={
 							!!(sessionId && sessionRoles[sessionId]) || !!(ws.pending_prompt && sessionId === ws.active_session_id)
 						}
@@ -426,6 +443,14 @@ export function SessionView() {
 					/>
 				) : null}
 				{rolesOpen ? <RolesSettings onClose={() => setRolesOpen(false)} /> : null}
+				{contextSession && contextSession.workspaceId === workspaceId ? (
+					<ContextBreakdownSheet
+						sessionId={contextSession.id}
+						title={contextSession.title}
+						revision={sessions.find(session => session.id === contextSession.id)?.updated_at}
+						onClose={() => setContextSession(null)}
+					/>
+				) : null}
 			</div>
 		</MentionResolverProvider>
 	)
@@ -471,6 +496,7 @@ export function SessionTabs({
 	roles = {},
 	subtabSessionIds,
 	onSelect,
+	onContext,
 	onNewChat,
 	onClose,
 	creating,
@@ -485,6 +511,7 @@ export function SessionTabs({
 	/** Live delegated children not yet present in the durable role snapshot. */
 	subtabSessionIds?: ReadonlySet<string>
 	onSelect: (id: string) => void
+	onContext: (session: Session) => void
 	onNewChat: () => void
 	onClose: (id: string) => void
 	creating: boolean
@@ -510,6 +537,7 @@ export function SessionTabs({
 			<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
 				{primarySessions.map(s => {
 					const promptState = promptStates[s.id]
+					const hasContext = typeof s.context_used_percent === 'number' && s.context_used_percent > 0
 					return (
 						<div
 							key={s.id}
@@ -524,7 +552,7 @@ export function SessionTabs({
 								onClick={() => onSelect(s.id)}
 								className={cn(
 									'flex min-w-0 items-center gap-1.5 py-1.5 pl-3.5',
-									sessions.length > 1 ? 'pr-1' : 'pr-3.5'
+									sessions.length > 1 || hasContext ? 'pr-1' : 'pr-3.5'
 								)}
 							>
 								{promptState ? (
@@ -536,10 +564,10 @@ export function SessionTabs({
 								) : null}
 								<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
 								{roles[s.id] ? <RoleChip name={roles[s.id].role} /> : null}
-								<ContextPercent used={s.context_used_percent} />
 								{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
 								{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}
 							</button>
+							<ContextButton session={s} onOpen={() => onContext(s)} />
 							{sessions.length > 1 ? (
 								<button
 									type="button"
@@ -613,12 +641,22 @@ function TabCloseNotice({
  * as the workspace's: one workspace here runs four tabs at 28 / 85 / 49 / 29 at once.
  * Amber from 80 on, where compaction is close enough to be worth reading.
  */
-function ContextPercent({ used }: { used: number | null }) {
+function ContextButton({ session, onOpen }: { session: Session; onOpen: () => void }) {
+	const used = session.context_used_percent
 	if (typeof used !== 'number' || used <= 0) return null
 	return (
-		<span className={cn('shrink-0 text-[11px] tabular-nums', used >= 80 ? 'text-working' : 'text-faint')}>
+		<button
+			type="button"
+			onClick={onOpen}
+			aria-label={`Context for ${session.title || 'Untitled'}: ${Math.round(used)}% used`}
+			aria-haspopup="dialog"
+			className={cn(
+				'mr-1 flex h-7 min-w-10 shrink-0 items-center justify-center rounded-full px-2 text-[11px] tabular-nums transition active:bg-bg/70',
+				used >= 80 ? 'text-working' : 'text-faint'
+			)}
+		>
 			{Math.round(used)}%
-		</span>
+		</button>
 	)
 }
 

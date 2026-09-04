@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { agentProcessStarts, type BackgroundTask, openBackgroundTasks, TASK_FRAME_FILTER } from './background-tasks.ts'
+import { type ContextBreakdown, estimateContextCategories, estimateTextTokens } from './context-breakdown.ts'
 import type { ConductorDb } from './db.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import type { DiffStats } from './git.ts'
@@ -12,6 +13,7 @@ import {
 	type OutboxMessageRow,
 	parseMessage,
 	parseOutboxMessage,
+	renderTranscript,
 	type TranscriptEntry,
 	toolImageAt
 } from './transcript.ts'
@@ -979,5 +981,60 @@ export class Reads {
 		afterRowid = 0
 	): { entries: TranscriptEntry[]; queued: TranscriptEntry[]; cursor: number } {
 		return { ...this.durableMessages(sessionId, afterRowid), queued: this.outboxMessages(sessionId, true) }
+	}
+
+	/**
+	 * The exact context total Conductor persisted, split into provider-neutral estimates.
+	 *
+	 * This is intentionally an on-demand read rather than another field on the two-second
+	 * session poll: sizing the fork choices needs the full durable transcript, which can be
+	 * tens of megabytes on a long-running chat. One query feeds both calculations so opening
+	 * the sheet never walks that history twice.
+	 */
+	getContextBreakdown(sessionId: string): ContextBreakdown | null {
+		const session = this.db.query<{ context_token_count: number | null; context_used_percent: number | null }>(
+			`SELECT context_token_count, context_used_percent
+			 FROM sessions
+			 WHERE id = ? AND COALESCE(is_hidden, 0) = 0
+			 LIMIT 1`,
+			[sessionId]
+		)[0]
+		if (!session) return null
+
+		const rows = this.db.query<{
+			rowid: number
+			id: string
+			role: string | null
+			content: string | null
+			full_message: string | null
+			created_at: string
+			sent_at: string | null
+			queue_order: number | null
+		}>(
+			`SELECT rowid, id, role, content, full_message, created_at, sent_at, queue_order
+			 FROM session_messages
+			 WHERE session_id = ?
+			 ORDER BY rowid ASC`,
+			[sessionId]
+		)
+		const totalTokens = Math.max(0, Math.round(session.context_token_count ?? 0))
+		const current = estimateContextCategories(rows, totalTokens)
+		const worktree = this.sessionWorktree(sessionId)
+		const entries = rows.flatMap(row => parseMessage(row, worktree))
+		const forkTokens = {
+			concise: estimateTextTokens(renderTranscript(entries, { thinking: false, tools: false }).text),
+			reasoning: estimateTextTokens(renderTranscript(entries, { thinking: true, tools: false }).text),
+			full: estimateTextTokens(renderTranscript(entries, { thinking: true, tools: true }).text)
+		}
+		return {
+			totalTokens,
+			usedPercent:
+				typeof session.context_used_percent === 'number' && Number.isFinite(session.context_used_percent)
+					? session.context_used_percent
+					: null,
+			compacted: current.compacted,
+			categories: current.categories,
+			forkTokens
+		}
 	}
 }
