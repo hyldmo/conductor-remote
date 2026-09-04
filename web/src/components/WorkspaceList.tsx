@@ -20,7 +20,7 @@ import {
 import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { unreadCount } from '../lib/read.ts'
 import type { CachedModelGroup, Workspace } from '../lib/types.ts'
-import { workspaceFilterSummary } from '../lib/workspace-filter.ts'
+import { type RepoSelection, selectedRepos, workspaceFilterSummary } from '../lib/workspace-filter.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs, WORKING_HINT_MS } from '../store.ts'
 import { ChangeStats } from './ChangeStats.tsx'
 import { ConnectSheet } from './ConnectSheet.tsx'
@@ -130,14 +130,16 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	}, [])
 
 	const repoIcons = new Map(workspaces.map(w => [w.repo_name, w.icon] as const))
+	const selectedRepoNames = selectedRepos(view.repoSelection)
 	const repos: RepoChoice[] = [
-		...new Set([...workspaces.map(w => w.repo_name).filter((r): r is string => !!r), ...view.repos])
+		...new Set([...workspaces.map(w => w.repo_name).filter((r): r is string => !!r), ...selectedRepoNames])
 	]
 		.sort()
 		.map(name => ({ name, icon: repoIcons.get(name) ?? null }))
-	const inRepo = view.repos.length
-		? workspaces.filter(w => !!w.repo_name && view.repos.includes(w.repo_name))
-		: workspaces
+	const inRepo =
+		view.repoSelection.mode === 'all'
+			? workspaces
+			: workspaces.filter(w => !!w.repo_name && selectedRepoNames.includes(w.repo_name))
 	// The workspace you're *in* is never hidden: the list is the way back to the chat on
 	// screen, and a filter that swallows it reads as the app having lost your place.
 	const shown = inRepo.filter(
@@ -160,13 +162,14 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	// filter actually took something out, or "Hide merged" with nothing merged would
 	// read as "40 of 40". Keep repo scope out of this summary: the picker directly below
 	// already says which repos are selected.
-	const filtered = view.repos.length > 0 || view.hideMerged || view.hideDone
-	const repoLabel = repoFilterLabel(view.repos)
+	const repoFiltered = view.repoSelection.mode === 'selected'
+	const filtered = repoFiltered || view.hideMerged || view.hideDone
+	const repoLabel = repoFilterLabel(view.repoSelection)
 	const filterSummary = workspaceFilterSummary({
 		total: workspaces.length,
 		shown: shown.length,
 		hidden,
-		repoFiltered: view.repos.length > 0
+		repoFiltered
 	})
 
 	return (
@@ -264,7 +267,11 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 					<Empty>No active workspaces. Start one in Conductor and it’ll appear here.</Empty>
 				) : shown.length === 0 ? (
 					<Empty>
-						{view.repos.length ? `No workspaces in ${repoLabel}` : 'No workspaces'}
+						{repoFiltered
+							? selectedRepoNames.length
+								? `No workspaces in ${repoLabel}`
+								: 'No repos selected'
+							: 'No workspaces'}
 						{hidden ? ` — ${hidden} ${hidden === 1 ? 'one is' : 'ones are'} hidden.` : '.'}
 					</Empty>
 				) : (
@@ -412,7 +419,11 @@ function ViewControls({
 						]}
 					/>
 				</ControlRow>
-				<RepoFilter repos={repos} selected={view.repos} onChange={repos => setView({ repos })} />
+				<RepoFilter
+					repos={repos}
+					selected={view.repoSelection}
+					onChange={repoSelection => setView({ repoSelection })}
+				/>
 				<ControlRow id="view-sort" label="Sort by">
 					<ViewSelect
 						id="view-sort"
@@ -455,8 +466,8 @@ function RepoFilter({
 	onChange
 }: {
 	repos: RepoChoice[]
-	selected: string[]
-	onChange: (repos: string[]) => void
+	selected: RepoSelection
+	onChange: (selection: RepoSelection) => void
 }) {
 	const [open, setOpen] = useState(false)
 

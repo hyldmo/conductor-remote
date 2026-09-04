@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useRepos } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import type { Workspace } from '../lib/types.ts'
+import { ALL_REPOS, type RepoSelection, selectedRepos } from '../lib/workspace-filter.ts'
 import { type RepoChoice, RepoOptions, repoFilterLabel } from './RepoFilter.tsx'
 import { SearchPane } from './SearchPane.tsx'
 import { Empty } from './ui.tsx'
@@ -40,7 +41,7 @@ export function SearchSheet({
 	onClose: () => void
 }) {
 	const [query, setQuery] = useState('')
-	const [repos, setRepos] = useState<string[]>([])
+	const [repoSelection, setRepoSelection] = useState<RepoSelection>(ALL_REPOS)
 	const [includeArchived, setIncludeArchived] = useState(true)
 	const [pickerOpen, setPickerOpen] = useState(false)
 	const inputRef = useRef<HTMLInputElement>(null)
@@ -68,7 +69,8 @@ export function SearchSheet({
 		return () => window.removeEventListener('keydown', onKey)
 	}, [onClose, pickerOpen])
 
-	const filtered = repos.length > 0
+	const repos = selectedRepos(repoSelection)
+	const filtered = repoSelection.mode === 'selected'
 
 	// Portalled to <body> for the same reason as the other sheets: the drawer <aside> it
 	// opens from carries a `transform`, which would make `fixed` mean "the drawer".
@@ -133,7 +135,7 @@ export function SearchSheet({
 					<button
 						type="button"
 						onClick={() => setPickerOpen(o => !o)}
-						aria-label={filtered ? `Repo filter: ${repoFilterLabel(repos)}` : 'Filter by repo'}
+						aria-label={filtered ? `Repo filter: ${repoFilterLabel(repoSelection)}` : 'Filter by repo'}
 						aria-haspopup="menu"
 						aria-expanded={pickerOpen}
 						className={cn(
@@ -144,7 +146,7 @@ export function SearchSheet({
 						<Filter size={filtered ? 14 : 18} className="shrink-0" />
 						{filtered ? (
 							<>
-								<span className="min-w-0 truncate">{repoFilterLabel(repos)}</span>
+								<span className="min-w-0 truncate">{repoFilterLabel(repoSelection)}</span>
 								<ChevronDown
 									size={14}
 									className={cn('shrink-0 text-faint transition-transform', pickerOpen && 'rotate-180')}
@@ -168,7 +170,7 @@ export function SearchSheet({
 								aria-label="Repos to search"
 								className="fade-in absolute right-3 top-full z-20 mt-1 flex max-h-72 w-64 flex-col overflow-y-auto rounded-2xl border border-border bg-surface py-1 shadow-xl"
 							>
-								<RepoOptions repos={choices} selected={repos} onChange={setRepos} />
+								<RepoOptions repos={choices} selected={repoSelection} onChange={setRepoSelection} />
 							</div>
 						</>
 					) : null}
@@ -177,7 +179,7 @@ export function SearchSheet({
 					{query.trim() ? (
 						<SearchPane
 							query={query}
-							repos={repos}
+							repoSelection={repoSelection}
 							includeArchived={includeArchived}
 							live={live}
 							selectedId={selectedId}
@@ -185,7 +187,11 @@ export function SearchSheet({
 						/>
 					) : (
 						<Empty>
-							{filtered ? `Workspaces and chats in ${repoFilterLabel(repos)}` : 'Every workspace on this Mac'}
+							{filtered
+								? repos.length
+									? `Workspaces and chats in ${repoFilterLabel(repoSelection)}`
+									: 'No repos selected'
+								: 'Every workspace on this Mac'}
 							{includeArchived ? ', archived included' : ', excluding archived'} — by name, or by something said in the
 							chat. Quote a “phrase” to require it word for word.
 						</Empty>

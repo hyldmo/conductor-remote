@@ -1,6 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test, vi } from 'vitest'
-import { toggleRepoFilter, workspaceFilterSummary } from '../web/src/lib/workspace-filter.ts'
+import {
+	ALL_REPOS,
+	clearRepoFilter,
+	parseRepoSelection,
+	selectedRepos,
+	toggleRepoFilter,
+	workspaceFilterSummary
+} from '../web/src/lib/workspace-filter.ts'
 
 Object.defineProperty(globalThis, 'location', { configurable: true, value: { hash: '', pathname: '/', search: '' } })
 Object.defineProperty(globalThis, 'localStorage', {
@@ -13,25 +20,48 @@ const { RepoOptions } = await import('../web/src/components/RepoFilter.tsx')
 const repos = ['alpha', 'bravo', 'charlie'].map(name => ({ name, icon: null }))
 
 describe('repo filter bulk selection', () => {
-	test('keeps one-tap narrowing and normalises the final repo back to showing all', () => {
-		expect(toggleRepoFilter(['alpha', 'bravo', 'charlie'], [], 'alpha')).toEqual(['alpha'])
-		expect(toggleRepoFilter(['alpha', 'bravo', 'charlie'], ['alpha', 'bravo'], 'charlie')).toEqual([])
+	test('deselects one repo from all in one tap', () => {
+		expect(toggleRepoFilter(['alpha', 'bravo', 'charlie'], ALL_REPOS, 'alpha')).toEqual({
+			mode: 'selected',
+			repos: ['bravo', 'charlie']
+		})
 	})
 
-	test('names the unrestricted state without adding a contradictory master checkbox', () => {
-		const html = renderToStaticMarkup(<RepoOptions repos={repos} selected={[]} onChange={vi.fn()} />)
-
-		expect(html).toContain('All 3 repos')
-		expect(html).toContain('Showing all')
-		expect(html.match(/type="checkbox"/g)).toHaveLength(repos.length)
-		expect(html).not.toContain('Show all repos')
+	test('clears all before selecting only one repo', () => {
+		const cleared = clearRepoFilter()
+		expect(selectedRepos(cleared)).toEqual([])
+		expect(toggleRepoFilter(['alpha', 'bravo', 'charlie'], cleared, 'alpha')).toEqual({
+			mode: 'selected',
+			repos: ['alpha']
+		})
 	})
 
-	test('keeps a full-width show-all action above a narrowed selection', () => {
-		const html = renderToStaticMarkup(<RepoOptions repos={repos} selected={['alpha']} onChange={vi.fn()} />)
+	test('normalises an exact full set back to all', () => {
+		expect(
+			toggleRepoFilter(['alpha', 'bravo', 'charlie'], { mode: 'selected', repos: ['alpha', 'bravo'] }, 'charlie')
+		).toEqual(ALL_REPOS)
+	})
 
-		expect(html).toContain('1 of 3 repos')
-		expect(html).toContain('aria-label="Show all repos"')
+	test('migrates the old empty-is-all shape without losing the new cleared state', () => {
+		expect(parseRepoSelection(undefined, [])).toEqual(ALL_REPOS)
+		expect(parseRepoSelection(undefined, ['alpha'])).toEqual({ mode: 'selected', repos: ['alpha'] })
+		expect(parseRepoSelection({ mode: 'selected', repos: [] })).toEqual({ mode: 'selected', repos: [] })
+	})
+
+	test('renders one checked master and checked repo rows when all are selected', () => {
+		const html = renderToStaticMarkup(<RepoOptions repos={repos} selected={ALL_REPOS} onChange={vi.fn()} />)
+
+		expect(html).toContain('All repos')
+		expect(html.match(/type="checkbox"/g)).toHaveLength(repos.length + 1)
+		expect(html.match(/checked=""/g)).toHaveLength(repos.length + 1)
+	})
+
+	test('renders a mixed master checkbox for a partial selection', () => {
+		const html = renderToStaticMarkup(
+			<RepoOptions repos={repos} selected={{ mode: 'selected', repos: ['alpha'] }} onChange={vi.fn()} />
+		)
+
+		expect(html).toContain('aria-checked="mixed"')
 		expect(html).toContain('sticky top-0')
 	})
 })
