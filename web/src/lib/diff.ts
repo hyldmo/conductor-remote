@@ -2,6 +2,110 @@ import type { DiffFile } from './types.ts'
 
 export type DiffFileScope = 'changed' | 'all'
 
+export interface DiffFileTreeFile {
+	kind: 'file'
+	name: string
+	path: string
+	file: DiffFile
+}
+
+export interface DiffFileTreeFolder {
+	kind: 'folder'
+	name: string
+	path: string
+	fileCount: number
+	added: number
+	removed: number
+	children: DiffFileTreeNode[]
+}
+
+export type DiffFileTreeNode = DiffFileTreeFile | DiffFileTreeFolder
+
+interface MutableDiffFileTreeFolder {
+	name: string
+	path: string
+	fileCount: number
+	added: number
+	removed: number
+	folders: Map<string, MutableDiffFileTreeFolder>
+	files: DiffFileTreeFile[]
+}
+
+const treeNameOrder = (a: { name: string }, b: { name: string }) =>
+	a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) || a.name.localeCompare(b.name)
+
+/** Build the repository-shaped hierarchy shared by Changed and All files. */
+export function buildDiffFileTree(files: readonly DiffFile[]): DiffFileTreeNode[] {
+	const root: MutableDiffFileTreeFolder = {
+		name: '',
+		path: '',
+		fileCount: 0,
+		added: 0,
+		removed: 0,
+		folders: new Map(),
+		files: []
+	}
+
+	for (const file of files) {
+		const parts = file.path.split('/')
+		const name = parts.pop() ?? file.path
+		let parent = root
+
+		for (const part of parts) {
+			const path = parent.path ? `${parent.path}/${part}` : part
+			let folder = parent.folders.get(part)
+			if (!folder) {
+				folder = {
+					name: part,
+					path,
+					fileCount: 0,
+					added: 0,
+					removed: 0,
+					folders: new Map(),
+					files: []
+				}
+				parent.folders.set(part, folder)
+			}
+			folder.fileCount += 1
+			folder.added += file.added
+			folder.removed += file.removed
+			parent = folder
+		}
+
+		parent.files.push({ kind: 'file', name, path: file.path, file })
+	}
+
+	const finish = (folder: MutableDiffFileTreeFolder): DiffFileTreeNode[] => [
+		...[...folder.folders.values()].sort(treeNameOrder).map(
+			(child): DiffFileTreeFolder => ({
+				kind: 'folder',
+				name: child.name,
+				path: child.path,
+				fileCount: child.fileCount,
+				added: child.added,
+				removed: child.removed,
+				children: finish(child)
+			})
+		),
+		...folder.files.sort(treeNameOrder)
+	]
+
+	return finish(root)
+}
+
+/** File order as it appears while every folder in the tree is expanded. */
+export function filesInTreeOrder(files: readonly DiffFile[]): DiffFile[] {
+	const ordered: DiffFile[] = []
+	const visit = (nodes: readonly DiffFileTreeNode[]) => {
+		for (const node of nodes) {
+			if (node.kind === 'folder') visit(node.children)
+			else ordered.push(node.file)
+		}
+	}
+	visit(buildDiffFileTree(files))
+	return ordered
+}
+
 /** The rail entries for one scope. All-files rows retain diff counts when they have them. */
 export function filesForScope(
 	scope: DiffFileScope,
