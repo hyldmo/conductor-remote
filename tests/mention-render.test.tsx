@@ -98,3 +98,21 @@ describe('a local image in Markdown', () => {
 		expect(html).toContain('title="Open image .context/qa/wide.png"')
 	})
 })
+
+describe('an attachment in a message', () => {
+	it('renders a text attachment as a control for the source viewer', () => {
+		const path = '.context/attachments/abc123/notes.md'
+		const html = render(`Read @⟦notes.md⟧(${encodeURIComponent(path)}) first`)
+
+		expect(html).toContain(`<button type="button" title="Open ${WORKTREE}/${path}"`)
+		expect(html).toContain('notes.md')
+	})
+
+	it('renders an image attachment as a control for the image viewer', () => {
+		const path = '.context/attachments/def456/wide shot.png'
+		const html = render(`Look at @⟦wide shot.png⟧(${encodeURIComponent(path)})`)
+
+		expect(html).toContain(`<button type="button" title="Open image ${WORKTREE}/${path}"`)
+		expect(html).toContain('wide shot.png')
+	})
+})

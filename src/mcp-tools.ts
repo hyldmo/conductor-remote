@@ -39,6 +39,8 @@ import type {
 	DefaultModelResult,
 	DelegateTaskResult,
 	DelegationsResponse,
+	DevServerResult,
+	DevServerState,
 	DismissDelegationResult,
 	LogsResponse,
 	MessagesResponse,
@@ -75,7 +77,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 export const SERVER_INFO = { name: 'conductor-remote', version: '1' }
 
 export const INSTRUCTIONS =
-	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. delegate_task later drives the real Mac UI and launches another agent through a persisted cross-provider queue; use it only when the user explicitly asked for delegation. It never uses Conductor Plan mode. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. Its workflow option is itself an explicit delegation request: the configured planning role owns the root chat and may use delegate_task, still in ordinary chat mode and never Plan mode. plan_usage, dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
+	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. delegate_task later drives the real Mac UI and launches another agent through a persisted cross-provider queue; use it only when the user explicitly asked for delegation. It never uses Conductor Plan mode. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. Its workflow option is itself an explicit delegation request: the configured planning role owns the root chat and may use delegate_task, still in ordinary chat mode and never Plan mode. plan_usage, dev_server status, dismiss_prompt, keep_awake and relay_logs touch no UI. Use dev_server instead of launching a long-lived development server from a shell: its start/stop actions use Conductor’s configured Run task, drive the real Mac UI and steal focus for a few seconds. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace also drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat or workspace they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
 
 /** Reads are quick; a UI write is measured in tens of seconds (writes.ts ▸ SEND_ATTEMPT_MS). */
 export const READ_TIMEOUT_MS = 10_000
@@ -144,6 +146,33 @@ function relative(at: number): string {
 	const mins = Math.round((at - Date.now()) / 60_000)
 	if (mins > 0) return `in ${mins}m`
 	return mins < 0 ? `${-mins}m ago` : 'now'
+}
+
+/** Human-readable state that retains every exact Run-config ID and preview URL. */
+function formatDevServer(state: DevServerState, headline = state.running ? 'running' : 'stopped'): string {
+	const summary = [headline]
+	if (state.task) summary.push(`task ${state.task}`)
+	if (state.port !== null) summary.push(`port ${state.port}`)
+	if (state.forwarded) summary.push(state.url ? `forwarded ${state.url}` : 'forwarded')
+	else if (state.running) summary.push('not forwarded')
+
+	const lines = [summary.join(' · ')]
+	if (state.error) lines.push(`! ${state.error}`)
+	if (state.runConfigs.length) {
+		lines.push(`run configs: ${state.runConfigs.map(config => `${config.id} (${config.name})`).join(', ')}`)
+	}
+	if (state.forwards.length) {
+		lines.push('previews:')
+		for (const forward of state.forwards) {
+			const details = [
+				`${forward.name}: port ${forward.port}`,
+				forward.running ? 'running' : 'stopped',
+				forward.forwarded ? (forward.url ? `forwarded ${forward.url}` : 'forwarded') : 'not forwarded'
+			]
+			lines.push(`- ${details.join(' · ')}`)
+		}
+	}
+	return lines.join('\n')
 }
 
 // ── tools ───────────────────────────────────────────────────────────────────────
@@ -1003,6 +1032,58 @@ export function createTools(call: RelayCall): Tool[] {
 				})
 				if (!data.ok) throw new Error(data.error ?? 'the status change did not land')
 				return `status set to ${status}`
+			}
+		},
+		{
+			name: 'dev_server',
+			description:
+				'Inspect, start or stop a workspace’s configured Conductor Run task and tailnet preview. Use this instead of launching a long-lived development server from a shell: Conductor supplies the workspace ports, enforces run-mode rules and owns process cleanup, while the relay avoids duplicate starts. Status is the default and touches no UI. Start and stop DRIVE THE REAL UI and can steal focus for a few seconds; confirm before controlling a workspace the user did not name. Starting requires Tailscale and, when status lists multiple Run configs, an exact run_config_id.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					workspace_id: { type: 'string', description: 'The live local workspace to control.' },
+					action: {
+						type: 'string',
+						enum: ['status', 'start', 'stop'],
+						description: 'Default status. Start and stop use Conductor’s managed Run task.'
+					},
+					run_config_id: {
+						type: 'string',
+						description: 'Exact ID printed by status. Only valid for start; required when more than one is listed.'
+					}
+				},
+				required: ['workspace_id']
+			},
+			run: async args => {
+				const id = need(args, 'workspace_id')
+				const action = str(args.action) ?? 'status'
+				if (action !== 'status' && action !== 'start' && action !== 'stop') throw new Error('action is invalid')
+				const runConfigId = str(args.run_config_id)
+				if (args.run_config_id !== undefined && !runConfigId)
+					throw new Error('run_config_id must be a non-empty string')
+				if (runConfigId && action !== 'start') throw new Error('run_config_id is only valid with action start')
+
+				if (action === 'status') {
+					const state = await call<DevServerState>(routes.devServer.path(id))
+					return formatDevServer(state)
+				}
+
+				const route = action === 'start' ? routes.startDevServer : routes.stopDevServer
+				const result = await call<DevServerResult>(route.path(id), {
+					method: route.method,
+					...(action === 'start' && runConfigId ? { body: { runConfigId } } : {}),
+					timeoutMs: WRITE_TIMEOUT_MS
+				})
+				if (!result.ok) throw new Error(result.error ?? `could not ${action} the dev server`)
+				const headline =
+					action === 'start'
+						? result.changed === false
+							? 'already running'
+							: 'started'
+						: result.changed === false
+							? 'already stopped'
+							: 'stopped'
+				return formatDevServer(result, headline)
 			}
 		},
 		{

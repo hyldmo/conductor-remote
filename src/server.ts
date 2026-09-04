@@ -130,8 +130,9 @@ if (cfg.devWebPort !== undefined && process.env.CONDUCTOR_WORKSPACE_ID) {
 	const preview = new URL(`http://localhost:${cfg.devWebPort}/`)
 	preview.hash = new URLSearchParams({ token: cfg.token }).toString()
 	// `yarn dev` is itself one application behind Conductor's Run button. Publish
-	// the same canonical URL printed below; DevServerController treats it exactly
-	// like any other full preview URL and has no knowledge of relay authentication.
+	// the same canonical URL printed below. The private live advertisement crosses
+	// into the installed relay that normally serves the phone; its forwarding code
+	// still treats this exactly like any full URL and knows nothing about the token.
 	devServers.advertisePreviewUrls(process.env.CONDUCTOR_WORKSPACE_ID, [{ name: 'Conductor Remote', url: preview.href }])
 }
 const STAGED_ATTACHMENTS_DIR = path.join(stateDir(), 'attachment-staging')

@@ -38,7 +38,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   relay's matching regex, so the two cannot drift
   shared.ts       what both sides must compute identically (workspaceTitle, query tokens,
                   the locked-Mac phrase) — the one module web/ may import as a *value*
-  mcp-tools.ts    the 25 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
+  mcp-tools.ts    the 26 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
                   the relay through an injected `call`, so both transports share one path
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively
@@ -82,7 +82,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   firstprompt.ts  persisted queue that tags a workflow root, applies its frozen settings, and
                   delivers a new workspace's first prompt, from setup on
   parked.ts       persisted queue for prompts that hit the lock screen — delivers on unlock, pushes the receipt
-  dev-server.ts   URL-first Conductor Run previews + per-port tailnet-only HTTPS forwards
+  dev-server.ts   URL-first Conductor Run previews + live cross-process advertisements +
+                  per-port tailnet-only HTTPS forwards
   notify.ts       status-transition watcher subscribed to SessionPoller + subscription store
                   (~/…/conductor-remote/push.json, 0600)
   webpush.ts      Web Push protocol: VAPID (ES256) + aes128gcm payloads, node:crypto only
@@ -119,8 +120,8 @@ web/              React PWA (Vite root)
                   identity intact), transcript-actions (where a Fork control may sit), highlight
                   (eleven languages, registered one at a time), fileMentions (turns `src/git.ts`
                   in a message into a source link, worktree file list as the existence check;
-                  explicit raster links also resolve ignored project-relative files, while
-                  absolute and ~ paths pass through for the relay to allow), clipboard (copyText,
+                  explicit raster links and attachment pills also resolve ignored project-relative
+                  files, while absolute and ~ paths pass through for the relay to allow), clipboard (copyText,
                   behind the Copy on a response and on every fenced block)
   src/components/ Header, WorkspaceList, SessionView, Transcript, Markdown + Code, DiffView,
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
