@@ -63,17 +63,18 @@ describe('agent controls', () => {
 		expect(controls(agentType, model)).toContain('aria-label="Fast mode')
 	})
 
-	test('puts Workflow before the disabled agent settings and leaves it reversible', () => {
+	test('puts Workflow before frozen role settings while leaving generic Plan independent', () => {
 		const html = renderToStaticMarkup(
 			<AgentControls
-				model="Fable 5.1"
-				providerModel="Fable 5.1"
-				agentType="claude"
-				models={['Fable 5.1']}
+				model="5.6 Sol"
+				providerModel="5.6 Sol"
+				agentType="codex"
+				models={['5.6 Sol']}
 				fast={false}
 				effort="max"
-				disabled
-				hidePlan
+				plan
+				planAvailable
+				freezeAgent
 				beforeModel={<WorkflowModePill active onChange={vi.fn()} />}
 				onModelChange={vi.fn()}
 				onFastChange={vi.fn()}
@@ -86,7 +87,7 @@ describe('agent controls', () => {
 		expect(buttons.find(button => button.includes('Fast mode'))).toContain('disabled')
 		expect(buttons.find(button => button.includes('Reasoning effort'))).toContain('disabled')
 		expect(buttons.find(button => button.includes('Workflow mode'))).not.toContain('disabled')
-		expect(html).not.toContain('aria-label="Plan mode')
+		expect(buttons.find(button => button.includes('Plan mode'))).not.toMatch(/\sdisabled(?:=|\s|>)/)
 		expect(html.indexOf('aria-label="Workflow mode')).toBeLessThan(html.indexOf('aria-label="Change model'))
 		expect(html.indexOf('aria-label="Workflow mode')).toBeLessThan(html.indexOf('aria-label="Fast mode'))
 	})

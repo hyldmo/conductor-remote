@@ -23,9 +23,6 @@ export interface Titled {
 	directory_name: string | null
 }
 
-/** Stable delimiter around the user-authored part of a server-expanded Workflow prompt. */
-export const WORKFLOW_OBJECTIVE_HEADING = '## Workflow objective'
-
 /**
  * Parse the duration grammar accepted by `conductor-remote nosleep`: `90m`,
  * `2h`, `30s`, or bare seconds. Kept here so the CLI and phone cannot drift.
@@ -37,6 +34,76 @@ export function parseDurationSeconds(raw: string): number | null {
 	const unit = match[2] ?? 's'
 	const seconds = amount * (unit === 'h' ? 3600 : unit === 'm' ? 60 : 1)
 	return Number.isSafeInteger(seconds) ? seconds : null
+}
+
+/** Stable delimiter around the user-authored part of a server-expanded Workflow prompt. */
+export const WORKFLOW_OBJECTIVE_HEADING = '## Workflow objective'
+
+/**
+ * Private orchestration metadata is deliberately recognizable at every relay read
+ * boundary. The model needs this block in its original Conductor context, while the
+ * phone, search index, transcript attachments, logs, and MCP reads must never repeat
+ * it. Keep one versioned marker rather than teaching each consumer about individual
+ * fields as the state machine grows.
+ */
+export const WORKFLOW_PRIVATE_ENVELOPE_VERSION = 1 as const
+export const WORKFLOW_PRIVATE_ENVELOPE_OPEN = `<conductor-remote-workflow-private version="${WORKFLOW_PRIVATE_ENVELOPE_VERSION}">`
+export const WORKFLOW_PRIVATE_ENVELOPE_CLOSE = '</conductor-remote-workflow-private>'
+export const WORKFLOW_PRIVATE_REDACTION = '[Workflow orchestration metadata hidden]'
+
+/** Prefix on the random 256-bit bearer values issued by the Workflow coordinator. */
+export const WORKFLOW_CAPABILITY_PREFIX = `crwf_v${WORKFLOW_PRIVATE_ENVELOPE_VERSION}_`
+
+export interface WorkflowPrivateEnvelope {
+	workflowId: string
+	phaseCapability: string
+	cycle: number
+	revision: number
+	allowedRoles: readonly string[]
+}
+
+/**
+ * Add a non-secret version prefix to 32 bytes of base64url entropy. Besides making
+ * accidental disclosure recognizable, the prefix lets a future protocol rotate its
+ * scrub rule without treating arbitrary long identifiers as capabilities.
+ */
+export function workflowCapabilityToken(base64urlEntropy: string): string {
+	if (!/^[A-Za-z0-9_-]{43}$/.test(base64urlEntropy)) {
+		throw new Error('Workflow capability entropy must be 32 bytes encoded as base64url.')
+	}
+	return `${WORKFLOW_CAPABILITY_PREFIX}${base64urlEntropy}`
+}
+
+/** The opaque, machine-readable block delivered only into the root model's context. */
+export function workflowPrivateEnvelope(value: WorkflowPrivateEnvelope): string {
+	return [
+		WORKFLOW_PRIVATE_ENVELOPE_OPEN,
+		JSON.stringify({
+			workflow_id: value.workflowId,
+			phase_capability: value.phaseCapability,
+			cycle: value.cycle,
+			revision: value.revision,
+			allowed_roles: [...value.allowedRoles]
+		}),
+		WORKFLOW_PRIVATE_ENVELOPE_CLOSE
+	].join('\n')
+}
+
+/**
+ * Remove Workflow bearer material from anything leaving the relay's private
+ * orchestration boundary. An unterminated opening marker consumes the rest of the
+ * string: losing display text is safer than exposing a capability after a truncated
+ * database row or error. The loose-token pass also covers rendered tool arguments,
+ * where the model necessarily repeats the capability outside its original envelope.
+ */
+export function scrubWorkflowSecrets(text: string): string {
+	return text
+		.replace(
+			/<conductor-remote-workflow-private\b[^>]*>[\s\S]*?<\/conductor-remote-workflow-private>/gi,
+			WORKFLOW_PRIVATE_REDACTION
+		)
+		.replace(/<conductor-remote-workflow-private\b[^>]*>[\s\S]*$/gi, WORKFLOW_PRIVATE_REDACTION)
+		.replace(/(^|[^A-Za-z0-9_-])crwf_v\d+_[A-Za-z0-9_-]{16,}(?![A-Za-z0-9_-])/g, '$1[Workflow capability hidden]')
 }
 
 /**
@@ -221,6 +288,25 @@ export function agentTypeCanExposeFastMode(agentType: string | null | undefined)
 export function modelCatalogIncludes(model: string, groups: readonly { models: readonly string[] }[]): boolean {
 	const wanted = modelPickerLabel(model)
 	return groups.some(group => group.models.some(candidate => modelPickerLabel(candidate) === wanted))
+}
+
+/**
+ * Complete picker reads are whole-menu observations, not provider slices. Ignore
+ * groups learned only from a successful single-model selection, then use the
+ * newest complete observation to describe what Conductor can select.
+ */
+export function newestModelSnapshot<
+	T extends { models: readonly string[]; updatedAt: number; snapshotAt?: number | null }
+>(groups: readonly T[]): T | null {
+	let newest: T | null = null
+	for (const group of groups) {
+		if (!group.models.some(model => modelPickerLabel(model).trim())) continue
+		if (group.snapshotAt === null) continue
+		const observedAt = group.snapshotAt ?? group.updatedAt
+		const newestObservedAt = newest ? (newest.snapshotAt ?? newest.updatedAt) : -1
+		if (!newest || observedAt >= newestObservedAt) newest = group
+	}
+	return newest
 }
 
 /** Stable, case-insensitive grouping shared by every model selector. */
@@ -455,6 +541,14 @@ export function isLockedError(error: string | null | undefined): boolean {
  */
 export function withoutWindowEvidence(error: string): string {
 	return error.replace(/\s*\[window server:.*$/s, '').trim()
+}
+
+/**
+ * Only diagnostic-bearing wire fields lose the AX/window-server tail. Relay log
+ * entries use `text`, so they retain the evidence the phone's log viewer needs.
+ */
+export function withoutClientWindowEvidence(value: string, field?: string): string {
+	return field === 'error' || field === 'message' || field === 'reason' ? withoutWindowEvidence(value) : value
 }
 
 /**

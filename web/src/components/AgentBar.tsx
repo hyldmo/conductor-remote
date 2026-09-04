@@ -6,7 +6,7 @@ import { nextEffort, supportsEffortControl, supportsFastMode, supportsPlanMode }
 import { client } from '../lib/api.ts'
 import { modelLabel } from '../lib/format.ts'
 import { isLockedError } from '../lib/lock.ts'
-import type { AgentPatch, DelegatedRole, Session } from '../lib/types.ts'
+import type { AgentPatch, DelegatedRole, PublicFrozenRole, Session, WorkflowRoleName } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentControls } from './AgentControls.tsx'
 import { UnlockLink } from './ui.tsx'
@@ -43,14 +43,23 @@ export interface WorkflowAgentBar {
 	onChange: (active: boolean) => void
 }
 
+export interface FrozenWorkflowAgentBar {
+	name: WorkflowRoleName
+	role: PublicFrozenRole
+}
+
 export function AgentBar({
 	session,
 	workspaceId,
-	workflow
+	workflow,
+	frozenWorkflow
 }: {
 	session: Session
 	workspaceId: string
+	/** Optional start switch on a pristine, unowned chat. */
 	workflow?: WorkflowAgentBar
+	/** Explicit role ownership from WorkflowRunWire + this session's assignment. */
+	frozenWorkflow?: FrozenWorkflowAgentBar
 }) {
 	const [picking, setPicking] = useState(false)
 	const [settingDefault, setSettingDefault] = useState<string>()
@@ -67,7 +76,11 @@ export function AgentBar({
 	// Caches written before default-model support have labels but no starred row;
 	// refresh those once instead of drawing a picker full of unstarred choices.
 	const cacheFresh = !!cachedGroup?.defaultModel && Date.now() - cachedGroup.updatedAt < MODEL_CATALOG_STALE_MS
-	const liveModels = useModels(session, workspaceId, picking && !workflow?.active && !cacheFresh)
+	const workflowRole = frozenWorkflow?.role ?? (workflow?.active ? workflow.role : undefined)
+	const roleFrozen = !!workflowRole
+	const workflowAgentType =
+		frozenWorkflow?.role.agentType ?? (workflowRole ? modelAgentType(workflowRole.model) : undefined)
+	const liveModels = useModels(session, workspaceId, picking && !roleFrozen && !cacheFresh)
 	const models = liveModels.data?.models ?? cachedGroup?.models ?? []
 	const defaultModel = liveModels.data?.defaultModel ?? modelCatalog.data?.defaultModel ?? cachedGroup?.defaultModel
 
@@ -88,21 +101,39 @@ export function AgentBar({
 	const planAvailable = supportsPlanMode(session.agent_type, providerModel)
 	const effortAvailable = supportsEffortControl(session.agent_type, providerModel)
 	const fastAvailable = supportsFastMode(session.agent_type, providerModel)
-	const workflowModel = workflow?.role?.model ?? 'Planning role'
+	const workflowModel = workflowRole?.model ?? 'Planning role'
+
+	// Ownership can arrive from another phone while this picker is open. Closing it
+	// makes the frozen tuple effective immediately instead of leaving selectable rows
+	// behind a newly disabled trigger.
+	useEffect(() => {
+		if (roleFrozen) setPicking(false)
+	}, [roleFrozen])
 
 	// A Plan choice can survive in synced/local drafts after switching away from
 	// Claude. Drop it as soon as the effective model no longer has Conductor's
 	// control, or the invisible patch would make the next send fail in AppleScript.
 	useEffect(() => {
+		if (roleFrozen) return
 		if (!planAvailable && staged.plan !== undefined) stageAgent(session.id, { plan: undefined })
-	}, [planAvailable, session.id, staged.plan, stageAgent])
+	}, [roleFrozen, planAvailable, session.id, staged.plan, stageAgent])
 
 	// Provider switches can leave an invisible staged setting behind. Cursor and
 	// OpenCode have no matching controls, so never carry those settings into send.
 	useEffect(() => {
+		if (roleFrozen) return
 		if (!effortAvailable && staged.effort !== undefined) stageAgent(session.id, { effort: undefined })
 		if (!fastAvailable && staged.fast !== undefined) stageAgent(session.id, { fast: undefined })
-	}, [effortAvailable, fastAvailable, session.id, staged.effort, staged.fast, stageAgent])
+	}, [roleFrozen, effortAvailable, fastAvailable, session.id, staged.effort, staged.fast, stageAgent])
+
+	// Once the coordinator owns this session, stale phone choices cannot ride a
+	// later prompt and fight the frozen role. Plan is intentionally independent.
+	useEffect(() => {
+		if (!frozenWorkflow) return
+		if (staged.model !== undefined) stageAgent(session.id, { model: undefined })
+		if (staged.effort !== undefined) stageAgent(session.id, { effort: undefined })
+		if (staged.fast !== undefined) stageAgent(session.id, { fast: undefined })
+	}, [frozenWorkflow, session.id, staged.model, staged.effort, staged.fast, stageAgent])
 
 	const makeDefault = async (model: string) => {
 		if (settingDefault) return
@@ -128,9 +159,9 @@ export function AgentBar({
 
 	return (
 		<AgentControls
-			model={workflow?.active ? workflowModel : displayedModel}
-			providerModel={workflow?.active ? (workflow.role?.model ?? null) : providerModel}
-			agentType={workflow?.active && workflow.role ? (modelAgentType(workflow.role.model) ?? null) : session.agent_type}
+			model={roleFrozen ? workflowModel : displayedModel}
+			providerModel={roleFrozen ? (workflowRole?.model ?? null) : providerModel}
+			agentType={roleFrozen ? (workflowAgentType ?? null) : session.agent_type}
 			models={models}
 			modelPickerOpen={picking}
 			onModelPickerOpenChange={setPicking}
@@ -139,20 +170,20 @@ export function AgentBar({
 			defaultModel={defaultModel}
 			onSetDefaultModel={model => void makeDefault(model)}
 			settingDefaultModel={settingDefault}
-			fast={workflow?.active ? workflow.role?.fast : fastOn}
-			effort={workflow?.active ? workflow.role?.effort : effort}
-			plan={workflow?.active ? undefined : planOn}
-			showEmptyEffort={workflow?.active}
-			modelStaged={!workflow?.active && staged.model !== undefined}
-			fastStaged={!workflow?.active && staged.fast !== undefined}
-			effortStaged={!workflow?.active && staged.effort !== undefined}
-			planStaged={!workflow?.active && staged.plan !== undefined}
+			fast={roleFrozen ? workflowRole?.fast : fastOn}
+			effort={roleFrozen ? workflowRole?.effort : effort}
+			plan={planOn}
+			planAvailable={planAvailable}
+			showEmptyEffort={roleFrozen}
+			modelStaged={!roleFrozen && staged.model !== undefined}
+			fastStaged={!roleFrozen && staged.fast !== undefined}
+			effortStaged={!roleFrozen && staged.effort !== undefined}
+			planStaged={staged.plan !== undefined}
 			onModelChange={model => stage({ model: change(model, staged.model) })}
 			onFastChange={() => stage({ fast: change(!fastOn, dbFast) })}
 			onEffortChange={() => stage({ effort: change(nextEffort(effort), dbEffort) })}
 			onPlanChange={() => stage({ plan: change(!planOn, dbPlan) })}
-			disabled={workflow?.active}
-			hidePlan={workflow?.active}
+			freezeAgent={roleFrozen}
 			beforeModel={
 				workflow ? (
 					<WorkflowModePill
@@ -165,13 +196,15 @@ export function AgentBar({
 				) : undefined
 			}
 			status={
-				workflow?.active ? (
+				frozenWorkflow ? (
+					`${frozenWorkflow.name} role frozen by Workflow`
+				) : workflow?.active ? (
 					workflow.problem ? (
 						<span className="text-del">{workflow.problem}</span>
 					) : workflow.loading ? (
-						'Loading the planning role…'
+						'Loading Workflow roles…'
 					) : (
-						'Planning root · starts tracked sibling-chat delegation'
+						'Planning root · one explorer is guaranteed after acceptance'
 					)
 				) : defaultError ? (
 					<span className="text-del">

@@ -23,8 +23,10 @@
  * by the time the transcript has painted, because its text is in the chat.
  */
 import { WORKFLOW_OBJECTIVE_HEADING } from '../../../src/shared.ts'
+import type { StartWorkflowRequest } from './types.ts'
 
 const KEY = 'conductor-remote-pending'
+const WORKFLOW_ATTEMPTS_KEY = 'conductor-remote-workflow-attempts'
 
 /** A backstop, not a policy — a bubble is per chat and every failed one is dismissible. */
 const LIMIT = 20
@@ -56,6 +58,62 @@ export interface PendingMessage {
 	/** Restored from storage as a send nobody is awaiting any more — see the header. */
 	interrupted?: boolean
 	createdAt: number
+}
+
+/**
+ * The PWA's durable identity for one canonical Workflow mutation. A timeout does
+ * not say whether the relay accepted the transaction, so a retry (including one
+ * after iOS discarded the page) must reuse this client id until either the request
+ * is accepted or its target/action changes.
+ */
+export interface WorkflowClientAttempt {
+	key: string
+	fingerprint: string
+	clientId: string
+	createdAt: number
+}
+
+/** Stable, field-order-independent for the tagged start union we own. */
+export function workflowStartFingerprint(objective: string, target: StartWorkflowRequest['target']): string {
+	return target.kind === 'new_workspace'
+		? JSON.stringify(['new_workspace', target.repo, target.sendImmediately, objective])
+		: JSON.stringify(['existing_session', target.workspaceId, target.sessionId, objective])
+}
+
+function isWorkflowClientAttempt(value: unknown): value is WorkflowClientAttempt {
+	const attempt = value as Partial<WorkflowClientAttempt> | null
+	return (
+		!!attempt &&
+		typeof attempt.key === 'string' &&
+		typeof attempt.fingerprint === 'string' &&
+		typeof attempt.clientId === 'string' &&
+		typeof attempt.createdAt === 'number'
+	)
+}
+
+export function loadWorkflowClientAttempts(): Record<string, WorkflowClientAttempt> {
+	try {
+		const raw: unknown = JSON.parse(localStorage.getItem(WORKFLOW_ATTEMPTS_KEY) ?? '[]')
+		if (!Array.isArray(raw)) return {}
+		return Object.fromEntries(
+			raw
+				.filter(isWorkflowClientAttempt)
+				.slice(-LIMIT)
+				.map(attempt => [attempt.key, attempt])
+		)
+	} catch {
+		return {}
+	}
+}
+
+export function writeWorkflowClientAttempts(attempts: Record<string, WorkflowClientAttempt>): void {
+	try {
+		const kept = Object.values(attempts)
+			.sort((a, b) => a.createdAt - b.createdAt)
+			.slice(-LIMIT)
+		if (kept.length) localStorage.setItem(WORKFLOW_ATTEMPTS_KEY, JSON.stringify(kept))
+		else localStorage.removeItem(WORKFLOW_ATTEMPTS_KEY)
+	} catch {}
 }
 
 /**

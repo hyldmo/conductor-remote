@@ -21,6 +21,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import util from 'node:util'
+import { scrubWorkflowSecrets } from './shared.ts'
 
 export type LogLevel = 'info' | 'warn' | 'error'
 
@@ -82,7 +83,7 @@ export function installLogCapture(): void {
 	const wrap = (level: LogLevel, original: (...args: unknown[]) => void) => {
 		return (...args: unknown[]): void => {
 			const at = new Date()
-			const text = util.format(...args)
+			const text = scrubWorkflowSecrets(util.format(...args))
 			push(level, text, at.getTime())
 			original(prefixed(text, level, at))
 		}
@@ -167,8 +168,10 @@ export function tailLogFile(name: string, limit: number): LogEntry[] {
  */
 export function redactSecrets(text: string, token: string): string {
 	const masked = token ? text.split(token).join('<token>') : text
-	return masked
-		.replace(/\bsk-[A-Za-z0-9_-]{8,}/g, '<openai-key>')
-		.replace(/\bwhsec_[A-Za-z0-9+/=_-]{8,}/g, '<webhook-secret>')
-		.replace(/(token=)[^\s&"'`]+/gi, '$1<token>')
+	return scrubWorkflowSecrets(
+		masked
+			.replace(/\bsk-[A-Za-z0-9_-]{8,}/g, '<openai-key>')
+			.replace(/\bwhsec_[A-Za-z0-9+/=_-]{8,}/g, '<webhook-secret>')
+			.replace(/(token=)[^\s&"'`]+/gi, '$1<token>')
+	)
 }

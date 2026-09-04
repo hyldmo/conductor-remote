@@ -16,6 +16,12 @@ export interface CachedModelGroup {
 	models: string[]
 	/** The user-wide picker row Conductor last showed with its star selected. */
 	defaultModel?: string
+	/**
+	 * Time of the complete picker observation backing this entry. `null` means
+	 * the entry contains only models learned from successful selections. Older
+	 * cache files omit this field and are treated as complete snapshots.
+	 */
+	snapshotAt?: number | null
 	updatedAt: number
 }
 
@@ -59,13 +65,15 @@ export class ModelCache {
 		if (!next.length) return
 		const key = group(agentType ?? '')
 		const selectedDefault = clean(defaultModel ? [defaultModel] : [])[0] ?? this.defaultModel()
+		const now = Date.now()
 		const entry: CachedModelGroup = {
 			agentType: key,
 			// A live menu is authoritative. Replacing its group drops a model Conductor
 			// stopped offering instead of leaving a stale choice in a later workspace.
 			models: next,
 			defaultModel: selectedDefault,
-			updatedAt: Date.now()
+			snapshotAt: now,
+			updatedAt: now
 		}
 		this.entries = [...this.entries.filter(existing => existing.agentType !== key), entry]
 			.map(existing => ({ ...existing, defaultModel: selectedDefault ?? existing.defaultModel }))
@@ -82,6 +90,9 @@ export class ModelCache {
 			agentType: key,
 			models: clean([...(current?.models ?? []), model]),
 			defaultModel: current?.defaultModel ?? this.defaultModel(),
+			// Selecting one row proves that row, not the rest of the picker. Preserve
+			// an existing whole-menu observation but mark a brand-new group partial.
+			snapshotAt: current ? (current.snapshotAt === undefined ? current.updatedAt : current.snapshotAt) : null,
 			updatedAt: Date.now()
 		}
 		this.entries = [...this.entries.filter(existing => existing.agentType !== key), entry].sort((a, b) =>
@@ -104,13 +115,23 @@ export class ModelCache {
 			if (!Array.isArray(parsed)) return []
 			return parsed
 				.filter(entry => typeof entry?.agentType === 'string' && Array.isArray(entry.models))
-				.map(entry => ({
-					agentType: group(entry.agentType),
-					models: clean(entry.models.filter((model): model is string => typeof model === 'string')),
-					defaultModel:
-						typeof entry.defaultModel === 'string' ? clean([entry.defaultModel])[0] || undefined : undefined,
-					updatedAt: Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0
-				}))
+				.map(entry => {
+					const snapshotAt = Object.hasOwn(entry, 'snapshotAt')
+						? entry.snapshotAt === null
+							? null
+							: Number.isFinite(entry.snapshotAt)
+								? Number(entry.snapshotAt)
+								: null
+						: undefined
+					return {
+						agentType: group(entry.agentType),
+						models: clean(entry.models.filter((model): model is string => typeof model === 'string')),
+						defaultModel:
+							typeof entry.defaultModel === 'string' ? clean([entry.defaultModel])[0] || undefined : undefined,
+						...(snapshotAt === undefined ? {} : { snapshotAt }),
+						updatedAt: Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0
+					}
+				})
 				.filter(entry => entry.models.length)
 		} catch {
 			return []

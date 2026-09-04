@@ -26,14 +26,14 @@ describe('new workspace create availability', () => {
 		[{ uploading: true }, 'Wait for attachments to finish uploading.'],
 		[{ attachmentError: true }, 'Remove failed attachments to continue.'],
 		[{ workflowMode: true, workflowReady: true }, 'Describe what the workflow should accomplish.'],
-		[{ workflowMode: true, hasInitialPrompt: true, workflowLoading: true }, 'Loading the planning role…'],
+		[{ workflowMode: true, hasInitialPrompt: true, workflowLoading: true }, 'Loading Workflow roles…'],
 		[
 			{
 				workflowMode: true,
 				hasInitialPrompt: true,
-				workflowProblem: 'Workflow mode needs a configured planning role.'
+				workflowProblem: 'Workflow needs a configured exploration role.'
 			},
-			'Workflow mode needs a configured planning role.'
+			'Workflow needs a configured exploration role.'
 		]
 	] as const)('names the blocker for %j', (patch, reason) => {
 		expect(newWorkspaceDisabledReason({ ...ready, ...patch })).toBe(reason)

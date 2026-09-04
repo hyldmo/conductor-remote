@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { ContextBreakdownResponse, Session } from '../src/wire.ts'
+import type { ContextBreakdownResponse, Session, WorkflowRunWire } from '../src/wire.ts'
 
 class MemoryStorage {
 	private readonly values = new Map<string, string>()
@@ -79,6 +79,26 @@ const pristineSession: Session = {
 	background_tasks: []
 }
 
+const workflow: WorkflowRunWire = {
+	id: 'workflow-1',
+	workspaceId: 'workspace',
+	rootSessionId: 'chat',
+	phase: 'exploring',
+	objectiveExcerpt: 'Build it',
+	roles: {
+		planning: { model: 'Fable 5.1', agentType: 'claude' },
+		exploration: { model: '5.6 Terra', agentType: 'codex' },
+		implementation: { model: '5.6 Sol', agentType: 'codex' }
+	},
+	jobs: {
+		exploration: { requested: 1, running: 1, returned: 0, failed: 0 },
+		implementation: { requested: 0, running: 0, returned: 0, failed: 0 }
+	},
+	actions: { canRetry: false, canAdopt: false, canReplayAmbiguous: false, canCancel: true, canComplete: false },
+	createdAt: 1,
+	updatedAt: 2
+}
+
 function renderComposer(
 	session: Session,
 	workflowStarted = false,
@@ -98,6 +118,7 @@ function renderComposer(
 				working={false}
 				workflowStarted={workflowStarted}
 				onContext={onContext}
+				workflow={workflowStarted ? workflow : undefined}
 			/>
 		</QueryClientProvider>
 	)

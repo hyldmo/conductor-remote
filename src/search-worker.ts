@@ -17,7 +17,9 @@ import {
 import { parseMessage } from './transcript.ts'
 
 /** Bump when extraction or an invariant such as one-chunk-per-source changes stored rows. */
-const SCHEMA_VERSION = 2
+// v3 rebuilds every chunk through WorkflowSecretScrubber so a capability indexed by
+// an older relay cannot survive after the private-envelope boundary is introduced.
+const SCHEMA_VERSION = 3
 
 /**
  * Source rows advanced per tick. The cursor moves by *scanned* rowid rather than

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { withoutWindowEvidence } from '../src/shared.ts'
+import { withoutClientWindowEvidence, withoutWindowEvidence } from '../src/shared.ts'
 import { lockBlocked, retryWontHelp, sendNeverStarted, uiBusy } from '../src/writes.ts'
 
 /**
@@ -78,6 +78,14 @@ describe('send failure predicates', () => {
 		expect(withoutWindowEvidence(raw)).toBe(LOCK_ERRORS[0])
 		for (const [name, error] of Object.entries(ERRORS)) expect(withoutWindowEvidence(error), name).toBe(error)
 		expect(withoutWindowEvidence(composerHeld)).toBe(composerHeld)
+	})
+
+	test('cuts Workflow message and quarantine reason fields without stripping relay log text', () => {
+		const raw = `${LOCK_ERRORS[0]} [window server: 6; screen: locked] [processes: conductor=0]`
+		for (const field of ['error', 'message', 'reason']) {
+			expect(withoutClientWindowEvidence(raw, field)).toBe(LOCK_ERRORS[0])
+		}
+		expect(withoutClientWindowEvidence(raw, 'text')).toBe(raw)
 	})
 
 	test('only refusals a retry cannot fix stop the loop', () => {

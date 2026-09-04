@@ -8,6 +8,8 @@ import type {
 	AgentResult,
 	ArchiveResult,
 	CloseChatResult,
+	ConfirmUiStableRequest,
+	ConfirmUiStableResponse,
 	ContextBreakdownResponse,
 	ContinueWorkspaceResult,
 	CreateWorkspaceRequest,
@@ -47,6 +49,8 @@ import type {
 	SettingsResponse,
 	SplitChatResult,
 	StageAttachmentResult,
+	StartWorkflowRequest,
+	StartWorkflowResponse,
 	StateResponse,
 	StatusResult,
 	StopResult,
@@ -55,6 +59,12 @@ import type {
 	VoiceCallResponse,
 	VoiceLanguage,
 	VoiceTicketResponse,
+	WorkflowAdoptRequest,
+	WorkflowCancelRequest,
+	WorkflowCompleteRequest,
+	WorkflowMutationResponse,
+	WorkflowReplayRequest,
+	WorkflowRetryRequest,
 	WorkspaceDiff,
 	WorkspaceFilesResponse,
 	WorkspaceResponse
@@ -135,7 +145,12 @@ const DEV_SERVER_TIMEOUT_MS = 75000
 // with room for the UI lock holding the run behind a send already in flight.
 const RESTART_TIMEOUT_MS = 75000
 
-async function api<T>(path: string, opts: RequestInit = {}, timeoutMs = POLL_TIMEOUT_MS): Promise<T> {
+async function api<T>(
+	path: string,
+	opts: RequestInit = {},
+	timeoutMs = POLL_TIMEOUT_MS,
+	expectedStatus?: number
+): Promise<T> {
 	const token = getToken()
 	let res: Response
 	try {
@@ -164,6 +179,9 @@ async function api<T>(path: string, opts: RequestInit = {}, timeoutMs = POLL_TIM
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as { error?: unknown }
 		throw new ApiError(responseErrorMessage(body.error, `HTTP ${res.status}`), res.status)
+	}
+	if (expectedStatus !== undefined && res.status !== expectedStatus) {
+		throw new ApiError(`Expected HTTP ${expectedStatus}, received ${res.status}`, res.status)
 	}
 	return res.json() as Promise<T>
 }
@@ -283,8 +301,8 @@ export const client = {
 	 * The relay retries a failed send itself (and confirms each try against the
 	 * transcript), hence the long budget. `agent` is the staged settings patch,
 	 * riding in the same request so the relay applies it first and the prompt only
-	 * goes if it stuck — and so a locked Mac parks the two together. `workflow`
-	 * replaces that patch with the configured planning role on a pristine chat.
+	 * goes if it stuck — and so a locked Mac parks the two together. Workflow
+	 * intake has its own UI-only endpoint below; this ordinary send cannot start one.
 	 */
 	/**
 	 * `clientId` is the pending bubble's own id, and it is what stops Retry doubling a
@@ -298,16 +316,67 @@ export const client = {
 		workspaceId: string,
 		agent?: AgentPatch,
 		clientId?: string,
-		queue?: boolean,
-		workflow?: boolean
+		queue?: boolean
 	) =>
 		api<SendResult>(
 			routes.sendPrompt.path(sessionId),
 			{
 				method: routes.sendPrompt.method,
-				body: JSON.stringify({ text, workspaceId, agent, clientId, queue, workflow } satisfies SendPromptRequest)
+				body: JSON.stringify({ text, workspaceId, agent, clientId, queue } satisfies SendPromptRequest)
 			},
 			SEND_TIMEOUT_MS
+		),
+	/**
+	 * Authorize and durably accept a managed Workflow before any Conductor UI
+	 * effect. This endpoint is deliberately PWA-only and distinct from ordinary
+	 * prompt/workspace creation.
+	 */
+	startWorkflow: (request: StartWorkflowRequest) =>
+		api<StartWorkflowResponse>(
+			routes.workflows.path(),
+			{ method: routes.workflows.method, body: JSON.stringify(request) },
+			ACTION_TIMEOUT_MS,
+			202
+		),
+	retryWorkflow: (workflowId: string, request: WorkflowRetryRequest) =>
+		api<WorkflowMutationResponse>(
+			routes.workflowRetry.path(workflowId),
+			{ method: routes.workflowRetry.method, body: JSON.stringify(request) },
+			ACTION_TIMEOUT_MS
+		),
+	adoptWorkflow: (workflowId: string, request: WorkflowAdoptRequest) =>
+		api<WorkflowMutationResponse>(
+			routes.workflowAdopt.path(workflowId),
+			{ method: routes.workflowAdopt.method, body: JSON.stringify(request) },
+			ACTION_TIMEOUT_MS
+		),
+	replayWorkflow: (workflowId: string, request: WorkflowReplayRequest) =>
+		api<WorkflowMutationResponse>(
+			routes.workflowReplay.path(workflowId),
+			{ method: routes.workflowReplay.method, body: JSON.stringify(request) },
+			ACTION_TIMEOUT_MS
+		),
+	completeWorkflow: (workflowId: string, request: WorkflowCompleteRequest) =>
+		api<WorkflowMutationResponse>(
+			routes.workflowComplete.path(workflowId),
+			{ method: routes.workflowComplete.method, body: JSON.stringify(request) },
+			ACTION_TIMEOUT_MS
+		),
+	/** Cancellation is non-destructive; its idempotency key travels in the query. */
+	cancelWorkflow: (workflowId: string, request: WorkflowCancelRequest) => {
+		const params = new URLSearchParams({ clientId: request.clientId })
+		return api<WorkflowMutationResponse>(
+			`${routes.workflow.path(workflowId)}?${params}`,
+			{ method: routes.workflow.method },
+			ACTION_TIMEOUT_MS
+		)
+	},
+	/** Clear the global UI hold only after the phone user explicitly inspected Conductor. */
+	confirmUiStable: (request: ConfirmUiStableRequest) =>
+		api<ConfirmUiStableResponse>(
+			routes.confirmUiStable.path(),
+			{ method: routes.confirmUiStable.method, body: JSON.stringify(request) },
+			ACTION_TIMEOUT_MS
 		),
 	/**
 	 * Stop the answer this chat is streaming — Conductor's own "Cancel agent".

@@ -3,19 +3,20 @@ import { modelLabel } from '../lib/format.ts'
 import type { CachedModelGroup, Workspace } from '../lib/types.ts'
 import { ProviderMark } from './AgentIcons.tsx'
 
-type WorkspaceRun = Pick<Workspace, 'agent_type' | 'delegations' | 'model' | 'pending_prompt' | 'session_roles'>
+type WorkspaceRun = Pick<Workspace, 'agent_type' | 'model' | 'workflow'>
 
 /**
- * A workflow belongs to the whole workspace, not whichever chat happens to be active.
- * Role identity survives successful jobs; the other two sources cover active work and
- * the creation window before the planning role can be written into the worktree.
+ * A Workflow belongs to the whole workspace and is identified only by the
+ * coordinator's explicit projection. Legacy delegation jobs and role chips do not
+ * silently turn an ordinary workspace into a Workflow.
  */
 export function workspaceHasWorkflow(workspace: WorkspaceRun): boolean {
-	return Boolean(
-		workspace.pending_prompt?.sessionRole ||
-			workspace.delegations?.length ||
-			Object.keys(workspace.session_roles ?? {}).length
-	)
+	return !!workspace.workflow
+}
+
+const phaseLabel = (phase: NonNullable<WorkspaceRun['workflow']>['phase']): string => {
+	if (phase === 'creating_workspace' || phase === 'binding_root' || phase === 'pending_root') return 'Accepted'
+	return phase[0].toUpperCase() + phase.slice(1)
 }
 
 /**
@@ -39,10 +40,14 @@ export function WorkspaceRunLabel({
 	modelGroups: CachedModelGroup[] | undefined
 }) {
 	if (workspaceHasWorkflow(workspace)) {
+		const phase = workspace.workflow ? phaseLabel(workspace.workflow.phase) : 'Workflow'
 		return (
-			<span title="Delegated workflow" className="ml-auto flex min-w-0 items-center gap-1 text-[11px] text-accent">
+			<span
+				title={`Managed Workflow · ${phase}`}
+				className="ml-auto flex min-w-0 items-center gap-1 text-[11px] text-accent"
+			>
 				<Workflow size={13} aria-hidden="true" />
-				<span className="truncate">Workflow</span>
+				<span className="truncate">Workflow · {phase}</span>
 			</span>
 		)
 	}

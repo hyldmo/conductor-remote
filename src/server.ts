@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { applyAgentConfig } from './agent-config.ts'
-import { attachmentPrompt, writeAttachment } from './attachments.ts'
+import { ATTACHMENT_DIR, attachmentName, attachmentPrompt, attachmentToken, writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { attachChangeStats } from './change-stats.ts'
 import { isDefaultEffortLevel, readDefaultEfforts, writeDefaultEfforts } from './conductor-settings.ts'
@@ -53,12 +53,35 @@ import {
 	subscribeDevice,
 	unsubscribeDevice
 } from './notify.ts'
+import {
+	type FrozenWorkflowRole,
+	IdempotencyConflictError,
+	ORCHESTRATION_PROTOCOL_VERSION,
+	OrchestrationDb,
+	type RelayIdentity,
+	UiLeaseUnavailableError,
+	type WorkflowRunRecord,
+	WorkflowTransitionError
+} from './orchestration-db.ts'
 import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './parked.ts'
 import { PlanUsageService } from './plan-usage.ts'
 import { attachPrStatus } from './pr.ts'
 import { readPrefs, writePrefs } from './prefs.ts'
-import { type DeliveryCursor, Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
-import { decodeRoles, RoleStore, resolveRole, roleModelIssues } from './roles.ts'
+import {
+	type DeliveryCursor,
+	type DeliveryReceipt,
+	Reads,
+	type SearchWorkspace,
+	type SessionRow,
+	type Workspace
+} from './reads.ts'
+import {
+	currentProcessStartIdentity,
+	incompatibleRelayProcesses,
+	listUiCapableRelayProcesses,
+	processIdentityAlive
+} from './relay-processes.ts'
+import { decodeRoles, RoleStore, roleModelIssues } from './roles.ts'
 import { isRoute, routeParam, routes } from './routes.ts'
 import { attachRunActivity } from './run-activity.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
@@ -66,14 +89,20 @@ import { SendOnce } from './sendonce.ts'
 import { SessionPoller } from './session-poller.ts'
 import { readSettings, writeSettings } from './settings.ts'
 import {
+	attachmentTokens,
 	isOpenAIRealtimeVoice,
 	isVoiceLanguage,
+	modelLabel,
 	OPENAI_REALTIME_VOICES,
 	type OpenAIRealtimeVoice,
 	responseErrorMessage,
+	scrubWorkflowSecrets,
+	timestampMs,
 	VIEWING_HEADER,
 	type VoiceLanguage,
-	withoutWindowEvidence
+	withoutClientWindowEvidence,
+	withoutWindowEvidence,
+	workspaceTitle
 } from './shared.ts'
 import {
 	discardStagedAttachment,
@@ -84,6 +113,7 @@ import {
 } from './staged-attachments.ts'
 import { driftWarningLines, readExposeMode, tailscaleBin } from './tailscale.ts'
 import { renderTranscript, transcriptMessage, transcriptThrough } from './transcript.ts'
+import { recoverExpiredUiLease } from './ui-lease-watchdog.ts'
 import { VoiceBriefBoard } from './voice/brief.ts'
 import { VoiceBroker } from './voice/broker.ts'
 import { openAIOriginForSipHost, readVoiceConfig, voicePort } from './voice/config.ts'
@@ -97,18 +127,39 @@ import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks }
 import type {
 	Attachment,
 	CreateWorkspaceRequest,
-	DelegateTaskRequest,
 	DelegateTaskResult,
 	DelegationError,
 	DelegationProjection,
 	RolesConfig,
-	SendPromptRequest
+	SendPromptRequest,
+	UiQuarantineWire,
+	Workspace as WireWorkspace,
+	WorkflowRunWire
 } from './wire.ts'
-import { prepareWorkflowRoot, WORKFLOW_ROOT_ROLE, type WorkflowRootResult } from './workflow.ts'
+import {
+	WorkflowCoordinator,
+	WorkflowCoordinatorError,
+	type WorkflowDeliveryCursor,
+	type WorkflowEffectCall,
+	type WorkflowRootInspection
+} from './workflow-coordinator.ts'
+import {
+	parseConfirmUiStableRequest,
+	parseStartWorkflowRequest,
+	parseWorkflowAdoptRequest,
+	parseWorkflowCompleteRequest,
+	parseWorkflowDelegateRequest,
+	parseWorkflowReplayRequest,
+	parseWorkflowRetryRequest,
+	WorkflowRequestError,
+	workflowClientIsMcp
+} from './workflow-http.ts'
+import { WorkflowGuardError } from './workflow-machine.ts'
 import {
 	archiveWorkspace,
 	type ChatTab,
 	closeChat,
+	configureSharedUiLeaseProvider,
 	continueWorkspace,
 	createWorkspace,
 	describeActuator,
@@ -130,7 +181,9 @@ import {
 	UiBusyError,
 	uiBusy,
 	uiQueueDepth,
+	uiTurn,
 	WORKSPACE_STATUS_LABELS,
+	withGatedUiCommand,
 	withUiPriority
 } from './writes.ts'
 
@@ -154,12 +207,55 @@ if (cfg.devWebPort !== undefined && process.env.CONDUCTOR_WORKSPACE_ID) {
 	devServers.advertisePreviewUrls(process.env.CONDUCTOR_WORKSPACE_ID, [{ name: 'Conductor Remote', url: preview.href }])
 }
 const STAGED_ATTACHMENTS_DIR = path.join(stateDir(), 'attachment-staging')
+
+/** Attachment IDs are already encoded in the immutable objective's Conductor tokens. */
+function stagedAttachmentIdsInObjective(objective: string): string[] {
+	return [
+		...new Set(
+			attachmentTokens(objective).flatMap(token => {
+				const match = /^\.context\/attachments\/([A-Za-z0-9]{6})\//.exec(token.path)
+				return match ? [match[1]] : []
+			})
+		)
+	]
+}
+
 // Picker labels cannot be reconstructed from `sessions.model`, so they belong to
 // relay state alongside the prompt queues. This lets a brand-new workspace choose
 // from a list before Conductor has created its first chat.
 const modelCache = new ModelCache(path.join(stateDir(), 'model-cache.json'))
 const planUsage = new PlanUsageService()
 const roleStore = new RoleStore(path.join(stateDir(), 'roles.json'))
+const orchestration = new OrchestrationDb(path.join(stateDir(), 'orchestration.db'), {
+	processProbe: processIdentityAlive
+})
+const relayIdentity: RelayIdentity = {
+	instanceId: crypto.randomUUID(),
+	pid: process.pid,
+	processStartedAt: currentProcessStartIdentity(),
+	protocolVersion: ORCHESTRATION_PROTOCOL_VERSION
+}
+
+function orchestrationUnavailableReason(): string {
+	return orchestration.schemaWarning ?? `orchestration schema ${orchestration.schemaVersion} is unsupported`
+}
+
+if (orchestration.writable) {
+	orchestration.registerRelayInstance({ ...relayIdentity, canDriveUi: true })
+	const sharedUiLeases = orchestration.createSharedUiLeaseProvider(relayIdentity, { leaseMs: 2 * 60_000 })
+	configureSharedUiLeaseProvider({
+		acquire: async request => {
+			try {
+				return await sharedUiLeases.acquire(request)
+			} catch (error) {
+				if (error instanceof UiLeaseUnavailableError) throw new UiBusyError(0)
+				throw error
+			}
+		}
+	})
+} else {
+	console.warn(`[relay] ${orchestrationUnavailableReason()}; Workflow is disabled until this relay is upgraded`)
+}
 
 /** One store object per live worktree, so the queue never registers a path twice. */
 const delegationStores = new Map<string, { worktree: string; store: DelegationStore }>()
@@ -180,7 +276,7 @@ function liveDelegationStores(): DelegationStore[] {
 	})
 }
 
-/** Tag a pristine workflow root without ever touching Conductor's Plan control. */
+/** Preserve role identity for already-persisted pre-coordinator Workflow prompts. */
 function assignWorkflowRoot(
 	ws: Workspace,
 	sessionId: string,
@@ -194,12 +290,6 @@ function assignWorkflowRoot(
 	}
 	const session = reads.getSession(sessionId)
 	if (!session) return { ok: false, error: 'the workflow root chat is unavailable' }
-	if (session.permission_mode === 'plan') {
-		return {
-			ok: false,
-			error: 'the workflow root inherited Plan mode; switch it to ordinary chat mode and retry'
-		}
-	}
 	const assignments = store.sessionRoles()
 	if (assignments.warning) return { ok: false, error: `cannot assign the workflow root: ${assignments.warning}` }
 	const existing = assignments.sessions[sessionId]
@@ -343,6 +433,55 @@ setRestartGuard(() => !reads.listWorkspaces().some(w => w.session_status === 'wo
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
+let uiLeaseRecoveryRunning = false
+
+/**
+ * A dead relay can leave its detached, already-authorized GUI helper behind. Keep
+ * the old mutex until that exact process group is gone, allow its external event
+ * to settle, then let the database CAS create the persistent safety hold.
+ */
+async function recoverUiLease(): Promise<void> {
+	if (!orchestration.writable || uiLeaseRecoveryRunning) return
+	uiLeaseRecoveryRunning = true
+	try {
+		const result = await recoverExpiredUiLease(orchestration, relayIdentity)
+		if (result.status === 'external_process_alive') {
+			console.warn(
+				`[workflow] expired UI helper ${result.owner.externalProcess?.pid ?? 'unknown'} could not be proven dead; retaining its mutex`
+			)
+		} else if (result.status === 'owned_external_terminated') {
+			console.warn(`[workflow] terminated overdue UI helper ${result.owner.externalProcess?.pid ?? 'unknown'}`)
+		} else if (result.status === 'reclaimed') {
+			console.warn(
+				`[workflow] reclaimed expired UI action ${result.owner.actionId}${result.quarantined ? ' into persistent quarantine' : ''}`
+			)
+		}
+	} catch (error) {
+		console.error('[workflow] expired UI lease recovery failed:', error)
+	} finally {
+		uiLeaseRecoveryRunning = false
+	}
+}
+
+/** Fail closed if another UI-capable relay cannot prove it speaks this protocol. */
+async function workflowCompatibilityError(): Promise<string | null> {
+	if (!orchestration.writable) {
+		return `Workflow is disabled because ${orchestrationUnavailableReason()}.`
+	}
+	try {
+		const processes = await listUiCapableRelayProcesses()
+		const incompatible = incompatibleRelayProcesses(
+			processes,
+			orchestration.listRelayInstances(),
+			ORCHESTRATION_PROTOCOL_VERSION
+		)
+		if (!incompatible.length) return null
+		return `Workflow needs every live conductor-remote UI relay on protocol ${ORCHESTRATION_PROTOCOL_VERSION}. Stop incompatible PID${incompatible.length === 1 ? '' : 's'} ${incompatible.map(process => process.pid).join(', ')} and try again.`
+	} catch (error) {
+		return `Workflow could not verify the live relay processes: ${error instanceof Error ? error.message : String(error)}`
+	}
+}
+
 /**
  * A deep link has no request id to correlate with the workspace row it creates. Keep
  * relay-originated creations single-flight until that row appears, or two simultaneous
@@ -354,7 +493,8 @@ let workspaceCreationTail = Promise.resolve()
 async function createWorkspaceAndRead(
 	prompt: string,
 	repoPath: string | null,
-	repoName?: string
+	repoName?: string,
+	strictUnique = false
 ): Promise<{ result: SendResult; created?: Workspace }> {
 	const previous = workspaceCreationTail
 	let release: () => void = () => {}
@@ -370,10 +510,11 @@ async function createWorkspaceAndRead(
 		// Creating a worktree takes a beat longer than opening a chat does.
 		for (let attempt = 0; attempt < 40; attempt++) {
 			await sleep(500)
-			const created = reads
+			const candidates = reads
 				.listWorkspaces()
-				.find(workspace => !before.has(workspace.id) && (!repoName || workspace.repo_name === repoName))
-			if (created) return { result, created }
+				.filter(workspace => !before.has(workspace.id) && (!repoName || workspace.repo_name === repoName))
+			if (strictUnique && candidates.length > 1) return { result }
+			if (candidates[0]) return { result, created: candidates[0] }
 		}
 		return { result }
 	} finally {
@@ -694,6 +835,13 @@ function referencedStagedAttachments(): Set<string> {
 	for (const prompt of firstPrompts.list()) {
 		for (const stageId of prompt.attachmentIds ?? []) referenced.add(stageId)
 	}
+	if (orchestration.writable) {
+		for (const projection of orchestration.listWorkflowProjections()) {
+			const run = orchestration.getWorkflowRun(projection.id)
+			if (run?.target.kind !== 'new_workspace') continue
+			for (const stageId of stagedAttachmentIdsInObjective(run.objective)) referenced.add(stageId)
+		}
+	}
 	return referenced
 }
 
@@ -814,15 +962,6 @@ async function configureDelegation(job: PersistedDelegation) {
 	if (!job.childSessionId) return delegationError('state_invalid', 'the delegated child id is missing', false)
 	const before = reads.getSession(job.childSessionId)
 	if (!before) return delegationError('session_not_found', 'the delegated child chat is gone', false)
-	// Never touch the buggy Plan control for orchestration. A child that somehow
-	// inherited Plan is refused before its task is sent instead of relying on it.
-	if (before.permission_mode === 'plan') {
-		return delegationError(
-			'configuration_failed',
-			'the child inherited Plan mode; delegated roles require default mode',
-			false
-		)
-	}
 	const applied = await withUiPriority('background', () =>
 		applyAgentPatch(ws, job.childSessionId as string, {
 			model: job.resolvedRole.model,
@@ -833,13 +972,6 @@ async function configureDelegation(job: PersistedDelegation) {
 	if (!applied.ok) return delegationError('configuration_failed', applied.error ?? 'agent configuration did not stick')
 	const after = reads.getSession(job.childSessionId)
 	if (!after) return delegationError('session_not_found', 'the configured child chat disappeared', false)
-	if (after.permission_mode === 'plan') {
-		return delegationError(
-			'configuration_failed',
-			'the child entered Plan mode; delegated roles require default mode',
-			false
-		)
-	}
 	if (after.agent_type !== job.resolvedRole.agentType) {
 		return delegationError(
 			'configuration_failed',
@@ -1056,90 +1188,172 @@ function attachDelegationState(workspaces: Workspace[]): void {
 	}
 }
 
-function delegationHttpStatus(error: DelegationError): number {
-	if (
-		error.code === 'workspace_not_found' ||
-		error.code === 'session_not_found' ||
-		error.code === 'role_not_found' ||
-		error.code === 'delegation_not_found'
-	) {
-		return 404
+/** Keep process identity and raw recovery evidence private; the phone only needs the hold and its cause. */
+function wireUiQuarantine(): UiQuarantineWire | undefined {
+	if (!orchestration.writable) return undefined
+	const quarantine = orchestration.getUiQuarantine()
+	if (!quarantine.active) return undefined
+	const bounded = (value: string, maximum: number) =>
+		withoutWindowEvidence(scrubWorkflowSecrets(value)).slice(0, maximum)
+	return {
+		active: true,
+		reason: bounded(
+			quarantine.reason ??
+				'A previous automated Conductor UI action may have completed without a confirmed receipt. Inspect Conductor before continuing.',
+			500
+		),
+		createdAt: quarantine.createdAt ?? 0,
+		...(quarantine.actionId ? { actionId: bounded(quarantine.actionId, 256) } : {}),
+		...(quarantine.effectId ? { effectId: bounded(quarantine.effectId, 256) } : {})
 	}
-	if (error.code === 'invalid_request') return 400
-	if (error.code === 'state_invalid') return 500
-	return 409
+}
+
+function workflowJobStatus(state: ReturnType<typeof orchestration.listWorkflowJobs>[number]['state']) {
+	if (state === 'owned') return 'opening' as const
+	if (state === 'dormant') return 'queued' as const
+	if (state === 'cancelled') return 'failed' as const
+	return state
+}
+
+function projectWorkflowDelegation(
+	workflow: WorkflowRunWire,
+	job: ReturnType<typeof orchestration.listWorkflowJobs>[number]
+): DelegationProjection | null {
+	if (!workflow.workspaceId || job.state === 'cancelled') return null
+	return {
+		id: job.id,
+		workflowId: workflow.id,
+		logicalKey: job.logicalKey,
+		bootstrap: job.logicalKey === 'explore:0',
+		workspaceId: workflow.workspaceId,
+		parentSessionId: workflow.rootSessionId ?? '',
+		...(job.childSessionId ? { childSessionId: job.childSessionId } : {}),
+		role: job.role,
+		// The immutable preamble remains coordinator-private. Only the public picker
+		// settings are useful for role chips and list_delegations.
+		resolvedRole: {
+			agentType: job.resolvedRole.agentType,
+			model: job.resolvedRole.model,
+			...(job.resolvedRole.effort ? { effort: job.resolvedRole.effort } : {}),
+			...(job.resolvedRole.fast === undefined ? {} : { fast: job.resolvedRole.fast })
+		},
+		prompt: scrubWorkflowSecrets(job.prompt).slice(0, 500),
+		returnMode: 'queue',
+		status: workflowJobStatus(job.state),
+		attempts: job.attemptCount,
+		createdAt: job.createdAt,
+		updatedAt: job.updatedAt,
+		...(job.state === 'failed'
+			? {
+					failure: {
+						code: 'workflow_blocked' as const,
+						message: workflow.error?.message ?? 'Workflow job failed.',
+						retryable: workflow.actions.canRetry
+					}
+				}
+			: {})
+	}
+}
+
+/** Attach only bounded, scrubbed navigation state; capabilities and internal effect evidence stay in SQLite. */
+type WorkflowAttachedWorkspace = Workspace &
+	Pick<WireWorkspace, 'delegations' | 'session_roles' | 'workflow' | 'delegation_warning'>
+
+function attachWorkflowState(workspaces: WorkflowAttachedWorkspace[]): WorkflowRunWire[] {
+	if (!orchestration.writable) return []
+	const projections = orchestration.listWorkflowProjections()
+	const byWorkspace = new Map(workspaces.map(workspace => [workspace.id, workspace]))
+	for (const workflow of projections) {
+		if (!workflow.workspaceId) continue
+		const workspace = byWorkspace.get(workflow.workspaceId)
+		if (!workspace) continue
+		const run = orchestration.getWorkflowRun(workflow.id)
+		if (!run) continue
+		const jobs = orchestration
+			.listWorkflowJobs(workflow.id)
+			.flatMap(job => projectWorkflowDelegation(workflow, job) ?? [])
+		workspace.delegations = [...(workspace.delegations ?? []), ...jobs]
+		workspace.session_roles = { ...(workspace.session_roles ?? {}) }
+		if (workflow.rootSessionId) {
+			workspace.session_roles[workflow.rootSessionId] = {
+				role: 'planning',
+				workflowId: workflow.id,
+				assignedAt: workflow.createdAt
+			}
+		}
+		for (const job of orchestration.listWorkflowJobs(workflow.id)) {
+			if (!job.childSessionId) continue
+			workspace.session_roles[job.childSessionId] = {
+				role: job.role,
+				delegationId: job.id,
+				workflowId: workflow.id,
+				assignedAt: job.createdAt
+			}
+		}
+		// Compatibility for cached clients that only understand one workspace-level run.
+		if (!workspace.workflow || workflow.rootSessionId === workspace.active_session_id) workspace.workflow = workflow
+	}
+	return projections
+}
+
+function workflowOwningSession(sessionId: string) {
+	if (!orchestration.writable) return null
+	for (const projection of orchestration.listWorkflowProjections()) {
+		if (projection.rootSessionId === sessionId) return projection
+		if (orchestration.listWorkflowJobs(projection.id).some(job => job.childSessionId === sessionId)) return projection
+	}
+	return null
+}
+
+function workflowFrozenError(sessionId: string): { error: { code: string; message: string; retryable: false } } | null {
+	const workflow = workflowOwningSession(sessionId)
+	if (!workflow) return null
+	return {
+		error: {
+			code: 'workflow_role_frozen',
+			message: `Workflow ${workflow.id} froze this chat's model, effort, and Fast setting at Start.`,
+			retryable: false
+		}
+	}
 }
 
 function intakeError(code: DelegationError['code'], message: string, retryable = false): DelegateTaskResult {
 	return { ok: false, error: { code, message, retryable } }
 }
 
-/** Validate and persist one job; no UI work is awaited by the caller. */
-function acceptDelegation(parentSessionId: string, body: DelegateTaskRequest): DelegateTaskResult {
-	const roleName = typeof body.role === 'string' ? body.role.trim() : ''
-	const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : ''
-	if (!roleName || !prompt) return intakeError('invalid_request', 'role and prompt are required')
-	if (body.returnMode !== undefined && body.returnMode !== 'queue' && body.returnMode !== 'steer') {
-		return intakeError('invalid_request', 'returnMode must be queue or steer')
+function workflowHttpError(
+	error: unknown
+): { status: number; error: { code: string; message: string; retryable: boolean } } | null {
+	if (error instanceof WorkflowRequestError || error instanceof WorkflowGuardError) {
+		return { status: error.status, error: { code: error.code, message: error.message, retryable: false } }
 	}
-	if (body.throughRowid !== undefined && (!Number.isSafeInteger(body.throughRowid) || body.throughRowid < 1)) {
-		return intakeError('invalid_request', 'throughRowid must be a positive integer')
-	}
-	if (body.includeThinking !== undefined && typeof body.includeThinking !== 'boolean') {
-		return intakeError('invalid_request', 'includeThinking must be a boolean')
-	}
-
-	const actualWorkspaceId = reads.sessionWorkspaceId(parentSessionId)
-	if (!actualWorkspaceId) return intakeError('session_not_found', 'parent chat not found')
-	if (body.workspaceId && body.workspaceId !== actualWorkspaceId) {
-		return intakeError('invalid_request', 'parent chat is not in that workspace')
-	}
-	const ws = reads.getWorkspace(actualWorkspaceId)
-	if (!ws) return intakeError('workspace_not_found', 'workspace for parent chat not found')
-	if (!ws.worktree) return intakeError('worktree_unavailable', 'worktree path unresolved')
-	const parent = reads.getSession(parentSessionId)
-	if (!parent) return intakeError('session_not_found', 'parent chat not found in that workspace')
-	if (!parent.agent_type) return intakeError('provider_unknown', 'the parent chat provider is unknown')
-
-	const storedRoles = roleStore.read()
-	if (storedRoles.warning) return intakeError('state_invalid', storedRoles.warning)
-	const resolved = resolveRole(storedRoles.config, roleName, modelCache.list())
-	if (!resolved.ok) return { ok: false, error: resolved.error }
-	if (resolved.role.agentType === parent.agent_type) {
-		return intakeError('same_provider', `Role ${roleName} uses the parent's ${parent.agent_type} provider.`)
-	}
-	if (body.throughRowid !== undefined) {
-		const { entries } = reads.getMessages(parentSessionId)
-		if (!transcriptThrough(entries, body.throughRowid)) {
-			return intakeError('invalid_request', 'throughRowid is not in the parent chat')
+	if (error instanceof WorkflowCoordinatorError) {
+		return {
+			status: error.status,
+			error: { code: error.code, message: error.message, retryable: error.retryable }
 		}
 	}
+	if (error instanceof IdempotencyConflictError) {
+		return {
+			status: 409,
+			error: { code: 'idempotency_conflict', message: error.message, retryable: false }
+		}
+	}
+	if (error instanceof WorkflowTransitionError) {
+		return {
+			status: 409,
+			error: { code: 'workflow_phase_invalid', message: error.message, retryable: false }
+		}
+	}
+	return null
+}
 
-	const now = Date.now()
-	const job: PersistedDelegation = {
-		version: 1,
-		id: crypto.randomUUID(),
-		workspaceId: ws.id,
-		parentSessionId,
-		role: roleName,
-		resolvedRole: resolved.role,
-		prompt,
-		returnMode: body.returnMode ?? 'queue',
-		includeThinking: body.includeThinking !== false,
-		...(body.throughRowid === undefined ? {} : { throughRowid: body.throughRowid }),
-		status: 'queued',
-		attempts: 0,
-		createdAt: now,
-		updatedAt: now
-	}
+async function workflowRequestBody(req: http.IncomingMessage): Promise<unknown> {
 	try {
-		const store = delegationStore(ws)
-		if (!store) return intakeError('worktree_unavailable', 'worktree path unresolved')
-		delegationQueue.enqueue(store, job)
-	} catch (err) {
-		return intakeError('state_invalid', err instanceof Error ? err.message : String(err))
+		return JSON.parse((await readBody(req)) || '{}') as unknown
+	} catch {
+		throw new WorkflowRequestError('Workflow request body must be valid JSON.')
 	}
-	return { ok: true, delegationId: job.id, role: roleName, model: resolved.role.model }
 }
 
 /**
@@ -1194,6 +1408,595 @@ const parkedPrompts = new ParkedPromptQueue(path.join(stateDir(), 'parked-prompt
 		})
 	}
 })
+
+interface WorkflowWorkspaceBaseline {
+	kind: 'workspace_ids'
+	repo: string
+	workspaceIds: string[]
+}
+
+interface WorkflowSessionBaseline {
+	kind: 'session_ids'
+	workspaceId: string
+	sessionIds: string[]
+}
+
+function workflowDeliveryCursor(sessionId: string): WorkflowDeliveryCursor {
+	const cursor = reads.deliveryCursor(sessionId)
+	return { rowid: cursor.rowid, outboxIds: [...cursor.outboxIds].sort() }
+}
+
+function readsDeliveryCursor(value: unknown): DeliveryCursor | null {
+	if (!value || typeof value !== 'object') return null
+	const cursor = value as { rowid?: unknown; outboxIds?: unknown }
+	if (!Number.isSafeInteger(cursor.rowid) || !Array.isArray(cursor.outboxIds)) return null
+	if (cursor.outboxIds.some(id => typeof id !== 'string')) return null
+	return { rowid: cursor.rowid as number, outboxIds: new Set(cursor.outboxIds as string[]) }
+}
+
+function workspaceBaseline(value: unknown): WorkflowWorkspaceBaseline | null {
+	if (!value || typeof value !== 'object') return null
+	const baseline = value as Partial<WorkflowWorkspaceBaseline>
+	return baseline.kind === 'workspace_ids' &&
+		typeof baseline.repo === 'string' &&
+		Array.isArray(baseline.workspaceIds) &&
+		baseline.workspaceIds.every(id => typeof id === 'string')
+		? (baseline as WorkflowWorkspaceBaseline)
+		: null
+}
+
+function sessionBaseline(value: unknown): WorkflowSessionBaseline | null {
+	if (!value || typeof value !== 'object') return null
+	const baseline = value as Partial<WorkflowSessionBaseline>
+	return baseline.kind === 'session_ids' &&
+		typeof baseline.workspaceId === 'string' &&
+		Array.isArray(baseline.sessionIds) &&
+		baseline.sessionIds.every(id => typeof id === 'string')
+		? (baseline as WorkflowSessionBaseline)
+		: null
+}
+
+function workflowRootInspection(ws: Workspace, session: SessionRow): WorkflowRootInspection {
+	const cursor = workflowDeliveryCursor(session.id)
+	const userRows = reads.getMessages(session.id).entries.filter(entry => entry.role === 'user')
+	const firstPrompt = firstPrompts.list().some(entry => entry.workspaceId === ws.id)
+	const parked = parkedPrompts.list().some(entry => entry.sessionId === session.id)
+	const reasons = [
+		session.status !== 'idle' ? `the chat status is ${session.status ?? 'unknown'}, not idle` : '',
+		session.background_tasks.length ? 'the chat is waiting on a background task' : '',
+		session.last_user_message_at ? 'the chat already has a user message timestamp' : '',
+		userRows.length ? 'the chat already has a user message' : '',
+		cursor.outboxIds.length ? 'the chat already has a queued prompt' : '',
+		firstPrompt ? 'the workspace already has a pending first prompt' : '',
+		parked ? 'the chat already has a parked prompt' : ''
+	].filter(Boolean)
+	return {
+		workspaceId: ws.id,
+		rootSessionId: session.id,
+		pristine: reasons.length === 0,
+		pristineEvidence: {
+			status: session.status,
+			backgroundTasks: session.background_tasks.length,
+			lastUserMessageAt: session.last_user_message_at,
+			userRows: userRows.length,
+			outboxRows: cursor.outboxIds.length,
+			firstPrompt,
+			parked
+		},
+		deliveryCursor: cursor,
+		...(reasons.length ? { reason: `Workflow requires a pristine root: ${reasons.join('; ')}.` } : {})
+	}
+}
+
+function assertWorkflowRootStillPristine(run: WorkflowRunRecord, expectedSessionId: string): void {
+	const ws = run.workspaceId ? reads.getWorkspace(run.workspaceId) : null
+	const session = reads.getSession(expectedSessionId)
+	if (
+		!ws ||
+		!run.rootSessionId ||
+		run.rootSessionId !== expectedSessionId ||
+		!session ||
+		reads.sessionWorkspaceId(expectedSessionId) !== ws.id
+	) {
+		throw new WorkflowCoordinatorError(
+			'workflow_root_not_pristine',
+			'The exact Workflow root binding changed before its first prompt could be dispatched.'
+		)
+	}
+	const inspection = workflowRootInspection(ws, session)
+	if (!inspection.pristine) {
+		throw new WorkflowCoordinatorError(
+			'workflow_root_not_pristine',
+			inspection.reason ?? 'Workflow requires a pristine root chat.'
+		)
+	}
+}
+
+function sessionMatchesWorkflowRole(session: SessionRow, role: FrozenWorkflowRole): boolean {
+	const selected = modelLabel(session.model, [role.model]).toLowerCase()
+	const wanted = role.model.toLowerCase()
+	return (
+		session.agent_type === role.agentType &&
+		(selected === wanted || selected.startsWith(wanted)) &&
+		(role.effort === undefined || session.claude_effort_level === role.effort) &&
+		(role.fast === undefined || Boolean(session.fast_mode) === role.fast)
+	)
+}
+
+function stableWorkflowAttachment(worktree: string, jobId: string, name: string, body: string): string {
+	// Conductor requires six alphanumerics. Preserve all six characters' entropy
+	// instead of truncating a hex digest to only 24 bits for a long-lived stable path.
+	const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+	const digest = crypto.createHash('sha256').update(`workflow-handoff:${jobId}`).digest()
+	const id = Array.from(digest.subarray(0, 6), byte => alphabet[byte % alphabet.length]).join('')
+	const safeName = attachmentName(name)
+	const directory = path.join(worktree, ATTACHMENT_DIR, id)
+	const destination = path.join(directory, safeName)
+	fs.mkdirSync(directory, { recursive: true })
+	try {
+		fs.writeFileSync(destination, body, { flag: 'wx' })
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+		if (fs.readFileSync(destination, 'utf8') !== body) {
+			throw new Error(`the stable Workflow handoff path ${path.join(ATTACHMENT_DIR, id, safeName)} is occupied`)
+		}
+	}
+	return attachmentToken(safeName, path.join(ATTACHMENT_DIR, id, safeName))
+}
+
+function workflowWorkspaceCandidate(ws: Workspace) {
+	return {
+		id: ws.id,
+		title: workspaceTitle(ws),
+		repo: ws.repo_name ?? '',
+		createdAt: timestampMs(ws.created_at),
+		kind: 'workspace' as const
+	}
+}
+
+function workflowSessionCandidate(ws: Workspace, session: SessionRow) {
+	return {
+		id: session.id,
+		title: session.title?.trim() || '(untitled chat)',
+		repo: ws.repo_name ?? '',
+		createdAt: timestampMs(session.created_at),
+		kind: 'session' as const
+	}
+}
+
+function workflowSessionId(effect: WorkflowEffectCall['effect']): string | null {
+	if (!effect.target || typeof effect.target !== 'object') return null
+	const id = (effect.target as { sessionId?: unknown }).sessionId
+	return typeof id === 'string' ? id : null
+}
+
+function workflowEffectPrompt(effect: WorkflowEffectCall['effect']): string | null {
+	if (!effect.inputs || typeof effect.inputs !== 'object') return null
+	const prompt = (effect.inputs as { prompt?: unknown }).prompt
+	return typeof prompt === 'string' ? prompt : null
+}
+
+function workflowEffectMarker(effect: WorkflowEffectCall['effect']): string | null {
+	if (!effect.inputs || typeof effect.inputs !== 'object') return null
+	const marker = (effect.inputs as { correlationMarker?: unknown }).correlationMarker
+	return typeof marker === 'string' ? marker : null
+}
+
+function withWorkflowEffectGate<T>(call: WorkflowEffectCall, operation: () => Promise<T>): Promise<T> {
+	return call.dispatch.mode === 'gated_child'
+		? withGatedUiCommand(call.dispatch.gatedProcessReady, () => uiTurn(operation))
+		: uiTurn(operation)
+}
+
+async function sendWorkflowPrompt(
+	call: WorkflowEffectCall & { sessionId: string; text: string },
+	queue: boolean
+): Promise<DeliveryReceipt> {
+	const ws = call.run.workspaceId ? reads.getWorkspace(call.run.workspaceId) : null
+	if (!ws || reads.sessionWorkspaceId(call.sessionId) !== ws.id) {
+		throw new WorkflowCoordinatorError('workflow_not_found', 'The Workflow destination chat is unavailable.', {
+			status: 404
+		})
+	}
+	const before = readsDeliveryCursor(call.effect.cursor) ?? reads.deliveryCursor(call.sessionId)
+	const result = await withWorkflowEffectGate(call, async () => {
+		if (actuator.name !== 'sidecar') return deliverPrompt(ws, call.sessionId, call.text, SEND_BUDGET_MS, queue)
+		const located = locateChat(ws, call.sessionId)
+		if ('error' in located) return { ok: false, strategy: actuator.name, attempts: 0, error: located.error }
+		const sent = await actuator.send({ workspace: ws, sessionId: call.sessionId, tab: located.tab }, call.text, {
+			queue
+		})
+		if (!sent.ok) return { ...sent, attempts: 1 }
+		const landed = await confirmDelivery(call.sessionId, call.text, before, Date.now() + CONFIRM_WINDOW_MS)
+		return landed
+			? { ...sent, attempts: 1 }
+			: {
+					ok: false,
+					strategy: sent.strategy,
+					attempts: 1,
+					error: 'Conductor did not record the sidecar Workflow prompt; automatic replay is disabled.'
+				}
+	})
+	const receipt = reads.deliveryReceiptSince(call.sessionId, call.text, before)
+	if (receipt) return receipt
+	throw new WorkflowCoordinatorError(
+		'workflow_effect_failed',
+		result.error ?? 'Conductor did not record an accepted Workflow prompt.',
+		{ retryable: !retryWontHelp(result.error) }
+	)
+}
+
+const workflowCoordinator = orchestration.writable
+	? new WorkflowCoordinator(orchestration, relayIdentity, {
+			captureWorkspaceBaseline: async repoName => {
+				const repo = reads.listRepos().find(candidate => candidate.name === repoName)
+				if (!repo) {
+					throw new WorkflowCoordinatorError('workflow_not_found', `Unknown repo ${repoName}.`, { status: 404 })
+				}
+				if (!repo.root_path) {
+					throw new WorkflowCoordinatorError('invalid_request', `${repo.name} has no checkout path.`)
+				}
+				return {
+					kind: 'workspace_ids',
+					repo: repo.name,
+					workspaceIds: reads
+						.listWorkspaces()
+						.filter(workspace => workspace.repo_name === repo.name)
+						.map(workspace => workspace.id)
+						.sort()
+				} satisfies WorkflowWorkspaceBaseline
+			},
+			inspectExistingRoot: async target => {
+				const ws = reads.getWorkspace(target.workspaceId)
+				if (!ws || reads.sessionWorkspaceId(target.sessionId) !== ws.id) return null
+				const session = reads.getSession(target.sessionId)
+				return session ? workflowRootInspection(ws, session) : null
+			},
+			bindCreatedRoot: async ({ run, workspaceId }) => {
+				const ws = reads.getWorkspace(workspaceId)
+				if (!ws) return null
+				if (run.target.kind !== 'new_workspace') return null
+				if (!run.target.sendImmediately && ws.state !== 'ready') return null
+				const sessions = reads.listSessions(workspaceId)
+				if (!sessions.length) return null
+				const session = sessions.find(candidate => candidate.id === ws.active_session_id) ?? sessions[0]
+				if (sessions.length !== 1) {
+					const inspection = workflowRootInspection(ws, session)
+					return { ...inspection, pristine: false, reason: 'The created workspace has more than one root candidate.' }
+				}
+				const stageIds = stagedAttachmentIdsInObjective(run.objective)
+				if (stageIds.length) {
+					if (!ws.worktree) return null
+					try {
+						materializeStagedAttachments(STAGED_ATTACHMENTS_DIR, ws.worktree, stageIds)
+					} catch (error) {
+						const inspection = workflowRootInspection(ws, session)
+						return {
+							...inspection,
+							pristine: false,
+							reason: error instanceof Error ? error.message : 'The Workflow attachments could not be materialized.'
+						}
+					}
+				}
+				return workflowRootInspection(ws, session)
+			},
+			createWorkspace: call =>
+				withWorkflowEffectGate(call, async () => {
+					const { target } = call
+					const repo = reads.listRepos().find(candidate => candidate.name === target.repo)
+					if (!repo) {
+						throw new WorkflowCoordinatorError('workflow_not_found', `Unknown repo ${target.repo}.`, { status: 404 })
+					}
+					if (!repo.root_path)
+						throw new WorkflowCoordinatorError('invalid_request', `${repo.name} has no checkout path.`)
+					const { result, created } = await createWorkspaceAndRead('', repo.root_path, repo.name, true)
+					if (!result.ok) {
+						throw new WorkflowCoordinatorError('workflow_effect_failed', result.error ?? 'Workspace creation failed.', {
+							retryable: !retryWontHelp(result.error)
+						})
+					}
+					if (!created) {
+						throw new WorkflowCoordinatorError(
+							'workflow_effect_failed',
+							'Conductor accepted the workspace link but no exact workspace row appeared.',
+							{ retryable: true }
+						)
+					}
+					return { workspaceId: created.id }
+				}),
+			configureSession: call =>
+				withWorkflowEffectGate(call, async () => {
+					const { run, sessionId, role } = call
+					const ws = run.workspaceId ? reads.getWorkspace(run.workspaceId) : null
+					if (!ws || reads.sessionWorkspaceId(sessionId) !== ws.id) {
+						throw new WorkflowCoordinatorError('workflow_not_found', 'The Workflow chat is unavailable.', {
+							status: 404
+						})
+					}
+					const applied = await applyAgentPatch(ws, sessionId, {
+						model: role.model,
+						...(role.effort === undefined ? {} : { effort: role.effort }),
+						...(role.fast === undefined ? {} : { fast: role.fast })
+					})
+					if (!applied.ok) {
+						throw new WorkflowCoordinatorError(
+							'workflow_effect_failed',
+							applied.error ?? 'Conductor rejected the frozen role settings.'
+						)
+					}
+					const session = reads.getSession(sessionId)
+					if (!session || !sessionMatchesWorkflowRole(session, role)) {
+						throw new WorkflowCoordinatorError(
+							'workflow_effect_failed',
+							'Conductor no longer matches every frozen role setting; no fallback was selected.'
+						)
+					}
+					return {
+						sessionId,
+						agentType: session.agent_type,
+						model: role.model,
+						effort: session.claude_effort_level,
+						fast: Boolean(session.fast_mode)
+					}
+				}),
+			openChild: async call => {
+				const { run } = call
+				const ws = run.workspaceId ? reads.getWorkspace(run.workspaceId) : null
+				if (!ws)
+					throw new WorkflowCoordinatorError('workflow_not_found', 'The Workflow workspace is unavailable.', {
+						status: 404
+					})
+				// A lock probe is read-only and happens before the durable dispatch boundary.
+				// Otherwise a locked Mac would quarantine an effect whose child tab was never attempted.
+				if ((await screenLocked()) === true) {
+					throw new WorkflowCoordinatorError(
+						'workflow_effect_failed',
+						'The Mac is locked — unlock it and retry Workflow.'
+					)
+				}
+				return withWorkflowEffectGate(call, async () => {
+					const opened = await openChat(ws)
+					if ('error' in opened) {
+						throw new WorkflowCoordinatorError(
+							'workflow_effect_failed',
+							opened.result.error ?? 'Conductor did not open a tracked child chat.',
+							{ retryable: opened.retryable !== false }
+						)
+					}
+					if (!opened.sessionId) {
+						throw new WorkflowCoordinatorError(
+							'workflow_effect_failed',
+							'Conductor opened a child tab but did not record its exact session ID.'
+						)
+					}
+					return { sessionId: opened.sessionId }
+				})
+			},
+			captureSessionBaseline: async workspaceId => {
+				const ws = reads.getWorkspace(workspaceId)
+				if (!ws) {
+					throw new WorkflowCoordinatorError('workflow_not_found', 'The Workflow workspace is unavailable.', {
+						status: 404
+					})
+				}
+				return {
+					kind: 'session_ids',
+					workspaceId,
+					sessionIds: reads
+						.listSessions(workspaceId)
+						.map(session => session.id)
+						.sort()
+				} satisfies WorkflowSessionBaseline
+			},
+			captureDeliveryCursor: async sessionId => workflowDeliveryCursor(sessionId),
+			captureTranscriptCursor: async sessionId => ({ rowid: reads.getMessages(sessionId).cursor }),
+			materializeHandoff: async ({ run, job }) => {
+				const ws = run.workspaceId ? reads.getWorkspace(run.workspaceId) : null
+				if (!ws?.worktree || !run.rootSessionId) return undefined
+				const cursor =
+					job.transcriptCursor && typeof job.transcriptCursor === 'object'
+						? (job.transcriptCursor as { rowid?: unknown }).rowid
+						: undefined
+				const entries = reads
+					.getMessages(run.rootSessionId)
+					.entries.filter(entry => typeof cursor !== 'number' || entry.rowid <= cursor)
+				const rendered = renderTranscript(entries, { thinking: true, tools: false })
+				if (!rendered.kept) return undefined
+				const body = [
+					`# Workflow handoff for ${job.logicalKey}`,
+					'',
+					`Workflow: ${run.id}`,
+					`Workflow job: ${job.id}`,
+					`Root chat: ${run.rootSessionId}`,
+					'',
+					rendered.text
+				].join('\n')
+				return stableWorkflowAttachment(ws.worktree, job.id, `Workflow ${job.role} handoff.md`, body)
+			},
+			sendPrompt: call => sendWorkflowPrompt(call, false),
+			returnBaton: call => sendWorkflowPrompt(call, true),
+			resolveDeliveryReceipt: async ({ sessionId, receipt }) => {
+				const current = reads.deliveryReceiptForId(sessionId, receipt.id)
+				if (current?.kind === 'message') return { status: 'delivered' as const, receipt: current }
+				if (current?.kind === 'outbox') return { status: 'pending' as const }
+				return { status: 'lost' as const, evidence: { receiptId: receipt.id, priorKind: receipt.kind } }
+			},
+			readChildOutcome: async ({ job }) => {
+				if (!job.childSessionId || !job.taskReceipt || typeof job.taskReceipt !== 'object') return null
+				const receipt = job.taskReceipt as Partial<DeliveryReceipt>
+				if (receipt.kind !== 'message' || !Number.isSafeInteger(receipt.rowid)) return null
+				const child = reads.getSession(job.childSessionId)
+				if (!child) {
+					return {
+						kind: 'failure' as const,
+						code: 'session_not_found',
+						message: 'The tracked child chat disappeared.',
+						retryClass: 'deterministic' as const
+					}
+				}
+				const messages =
+					typeof receipt.turnId === 'string'
+						? reads.getMessagesForTurn(job.childSessionId, receipt.turnId, receipt.rowid as number)
+						: reads.getMessages(job.childSessionId, receipt.rowid as number)
+				const assistants = messages.entries.filter(entry => entry.role === 'assistant' && entry.text.trim())
+				const last = assistants.at(-1)
+				if (child.status === 'error') {
+					return {
+						kind: 'failure' as const,
+						code: 'completion_failed',
+						message: last?.text.trim() || 'The tracked child agent stopped with an error.',
+						retryClass: 'deterministic' as const,
+						evidence: { assistantRowid: last?.rowid }
+					}
+				}
+				if (child.status !== 'idle' || child.background_tasks.length || !last) return null
+				return {
+					kind: 'success' as const,
+					baton: batonText(last.text),
+					evidence: { assistantRowid: last.rowid }
+				}
+			},
+			validateBeforeDispatch: async ({ run, effect }) => {
+				if (effect.kind !== 'configure_root' && effect.kind !== 'send_root') return
+				const sessionId = workflowSessionId(effect)
+				if (!sessionId) {
+					throw new WorkflowCoordinatorError(
+						'workflow_root_not_pristine',
+						'The Workflow root effect lost its exact session binding before dispatch.'
+					)
+				}
+				assertWorkflowRootStillPristine(run, sessionId)
+			},
+			reconcileEffect: async ({ run, effect }) => {
+				const sessionId = workflowSessionId(effect)
+				if (effect.receipt && sessionId && typeof effect.receipt === 'object') {
+					const receipt = effect.receipt as Partial<DeliveryReceipt>
+					if (typeof receipt.id === 'string') {
+						const current = reads.deliveryReceiptForId(sessionId, receipt.id)
+						if (current) return { status: 'committed' as const, receipt: current }
+						return { status: 'ambiguous' as const, evidence: { receiptId: receipt.id, state: 'missing' } }
+					}
+				}
+				if (effect.kind === 'configure_root' || effect.kind === 'configure_child') {
+					const role =
+						effect.inputs && typeof effect.inputs === 'object'
+							? (effect.inputs as { role?: FrozenWorkflowRole }).role
+							: undefined
+					const session = sessionId ? reads.getSession(sessionId) : null
+					if (effect.kind === 'configure_root') {
+						const ws = run.workspaceId ? reads.getWorkspace(run.workspaceId) : null
+						if (
+							!ws ||
+							!session ||
+							run.rootSessionId !== sessionId ||
+							reads.sessionWorkspaceId(session.id) !== ws.id ||
+							!workflowRootInspection(ws, session).pristine
+						) {
+							return { status: 'pending' as const }
+						}
+					}
+					if (role && session && sessionMatchesWorkflowRole(session, role)) {
+						return { status: 'committed' as const, receipt: { sessionId, matched: true } }
+					}
+				}
+				if (effect.kind === 'create_workspace') {
+					const baseline = workspaceBaseline(effect.baseline)
+					if (!baseline) return { status: 'ambiguous' as const, evidence: { baseline: 'invalid' } }
+					const prior = new Set(baseline.workspaceIds)
+					const candidates = reads
+						.listWorkspaces()
+						.filter(workspace => workspace.repo_name === baseline.repo && !prior.has(workspace.id))
+						.map(workflowWorkspaceCandidate)
+					return { status: 'ambiguous' as const, candidates, evidence: { candidateCount: candidates.length } }
+				}
+				if (effect.kind === 'open_child') {
+					const baseline = sessionBaseline(effect.baseline)
+					const ws = baseline ? reads.getWorkspace(baseline.workspaceId) : null
+					if (!baseline || !ws) return { status: 'ambiguous' as const, evidence: { baseline: 'invalid' } }
+					const prior = new Set(baseline.sessionIds)
+					const candidates = reads
+						.listSessions(ws.id)
+						.filter(session => !prior.has(session.id) && workflowRootInspection(ws, session).pristine)
+						.map(session => workflowSessionCandidate(ws, session))
+					return { status: 'ambiguous' as const, candidates, evidence: { candidateCount: candidates.length } }
+				}
+				const prompt = workflowEffectPrompt(effect)
+				const cursor = readsDeliveryCursor(effect.cursor)
+				if (sessionId && cursor) {
+					const marker = workflowEffectMarker(effect)
+					const receipt = marker
+						? reads.deliveryReceiptContainingSince(sessionId, marker, cursor)
+						: prompt
+							? reads.deliveryReceiptSince(sessionId, prompt, cursor)
+							: null
+					if (receipt) return { status: 'committed' as const, receipt }
+				}
+				return { status: 'pending' as const }
+			},
+			validateAdoption: async ({ effect, candidate }) => {
+				if (candidate.kind === 'workspace' && effect.kind === 'create_workspace') {
+					const baseline = workspaceBaseline(effect.baseline)
+					const ws = reads.getWorkspace(candidate.id)
+					if (!baseline || !ws || baseline.workspaceIds.includes(ws.id) || ws.repo_name !== baseline.repo) return null
+					return { workspaceId: ws.id }
+				}
+				if (candidate.kind === 'session' && effect.kind === 'open_child') {
+					const baseline = sessionBaseline(effect.baseline)
+					const ws = baseline ? reads.getWorkspace(baseline.workspaceId) : null
+					const session = reads.getSession(candidate.id)
+					if (
+						!baseline ||
+						!ws ||
+						!session ||
+						baseline.sessionIds.includes(session.id) ||
+						reads.sessionWorkspaceId(session.id) !== ws.id ||
+						!workflowRootInspection(ws, session).pristine
+					) {
+						return null
+					}
+					return { sessionId: session.id }
+				}
+				return null
+			},
+			assertCompatibleRelays: async () => {
+				const error = await workflowCompatibilityError()
+				if (error) {
+					throw new WorkflowCoordinatorError('workflow_incompatible_relay', error, {
+						status: 409,
+						retryable: true
+					})
+				}
+			},
+			dispatchMode: effect =>
+				actuator.name === 'sidecar' &&
+				(effect.kind === 'send_root' ||
+					effect.kind === 'send_task' ||
+					effect.kind === 'return_baton' ||
+					effect.kind === 'authorize_phase')
+					? 'in_process'
+					: 'gated_child'
+		})
+	: null
+
+const WORKFLOW_RECOVERY_PHONE_ONLY = 'Workflow recovery is available only from the phone UI.'
+
+function requirePhoneWorkflowCoordinator(req: http.IncomingMessage, forbiddenMessage: string): WorkflowCoordinator {
+	if (workflowClientIsMcp(req.headers)) throw new WorkflowRequestError(forbiddenMessage, 403)
+	if (!workflowCoordinator)
+		throw new WorkflowCoordinatorError('workflow_incompatible_relay', 'Workflow is unavailable.')
+	return workflowCoordinator
+}
+
+function wakeWorkflows(): void {
+	if (!workflowCoordinator) return
+	for (const workflowId of workflowCoordinator.runIdsNeedingWake()) {
+		void workflowCoordinator.wake(workflowId).catch(error => {
+			console.error(`[workflow ${workflowId}] wake failed:`, error)
+		})
+	}
+}
+
+sessionPoller.subscribe(wakeWorkflows)
 
 const MIME: Record<string, string> = {
 	'.html': 'text/html; charset=utf-8',
@@ -1375,13 +2178,17 @@ class PayloadTooLargeError extends Error {}
  * in relay.log, which `/api/logs` serves to the same phone on request.
  */
 function forTheClient(body: unknown): unknown {
-	if (!body || typeof body !== 'object' || Array.isArray(body)) return body
-	const error = (body as { error?: unknown }).error
-	if (typeof error !== 'string') return body
-	const clean = withoutWindowEvidence(error)
-	if (clean === error) return body
-	console.warn(`[relay] ${error}`)
-	return { ...body, error: clean }
+	const scrub = (value: unknown, key?: string): unknown => {
+		if (typeof value === 'string') {
+			const withoutEvidence = withoutClientWindowEvidence(value, key)
+			if (withoutEvidence !== value) console.warn(`[relay] ${scrubWorkflowSecrets(value)}`)
+			return scrubWorkflowSecrets(withoutEvidence)
+		}
+		if (Array.isArray(value)) return value.map(item => scrub(item))
+		if (!value || typeof value !== 'object') return value
+		return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, scrub(child, childKey)]))
+	}
+	return scrub(body)
 }
 
 /**
@@ -1546,7 +2353,7 @@ async function handleMcpHttp(req: http.IncomingMessage, res: http.ServerResponse
 	// A payload of nothing but notifications takes no reply at all.
 	if (!answers.length) return void res.writeHead(202).end()
 	res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-	res.end(JSON.stringify(Array.isArray(parsed) ? answers : answers[0]))
+	res.end(JSON.stringify(forTheClient(Array.isArray(parsed) ? answers : answers[0])))
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1583,6 +2390,8 @@ const server = http.createServer(async (req, res) => {
 				attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
 				attachRunActivity(workspaces) // flags a live Run wrapper from a cached ps snapshot
 				attachDelegationState(workspaces)
+				const workflows = attachWorkflowState(workspaces)
+				const uiQuarantine = wireUiQuarantine()
 				// An undelivered first prompt rides along with its workspace: the phone renders it
 				// in that chat rather than tracking delivery itself (see src/firstprompt.ts).
 				// Prompts parked for the lock screen ride the same way, one list per workspace,
@@ -1595,6 +2404,11 @@ const server = http.createServer(async (req, res) => {
 				}
 				return json(req, res, 200, {
 					workspaces,
+					workflows,
+					...(uiQuarantine ? { uiQuarantine } : {}),
+					...(orchestration.writable
+						? {}
+						: { workflowWarning: scrubWorkflowSecrets(orchestrationUnavailableReason()).slice(0, 500) }),
 					actuator: await describeActuator(actuator),
 					version: update.current,
 					update
@@ -1740,11 +2554,206 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, 200, { ok: true, config: written.config })
 			}
 
+			// This is deliberately independent of a Workflow run: cancellation cannot
+			// make an ambiguous shared-window effect safe. Only a phone acknowledgement
+			// after inspecting Conductor clears the relay-wide hold.
+			if (isRoute(routes.confirmUiStable, req.method, pathname)) {
+				if (workflowClientIsMcp(req.headers)) {
+					throw new WorkflowRequestError('Only the phone UI can confirm that Conductor is stable.', 403)
+				}
+				if (!orchestration.writable) {
+					throw new WorkflowCoordinatorError(
+						'workflow_incompatible_relay',
+						`UI stability confirmation is disabled because ${orchestrationUnavailableReason()}.`,
+						{ status: 409 }
+					)
+				}
+				const request = parseConfirmUiStableRequest(await workflowRequestBody(req))
+				const confirmed = orchestration.idempotentMutation(
+					'confirm_ui_stable',
+					request.clientId,
+					{
+						confirmStable: true,
+						createdAt: request.createdAt,
+						...(request.actionId ? { actionId: request.actionId } : {}),
+						...(request.effectId ? { effectId: request.effectId } : {})
+					},
+					() => {
+						const current = orchestration.getUiQuarantine()
+						if (
+							current.active &&
+							(current.createdAt !== request.createdAt ||
+								current.actionId !== request.actionId ||
+								current.effectId !== request.effectId)
+						) {
+							throw new WorkflowCoordinatorError(
+								'workflow_recovery_invalid',
+								'The Conductor UI safety hold changed; inspect the current hold before confirming it.',
+								{ status: 409 }
+							)
+						}
+						orchestration.clearUiQuarantine(`phone:${request.clientId}`)
+						return { ok: true as const }
+					}
+				)
+				return json(req, res, 200, confirmed.result)
+			}
+
+			// POST /api/workflows — the only operation that authorizes a managed
+			// Workflow. Acceptance is durable and intentionally precedes every UI effect.
+			if (isRoute(routes.workflows, req.method, pathname)) {
+				if (workflowClientIsMcp(req.headers)) {
+					throw new WorkflowRequestError('MCP cannot start a Workflow; start it from the Conductor Remote UI.', 403)
+				}
+				if (!workflowCoordinator) {
+					throw new WorkflowCoordinatorError(
+						'workflow_incompatible_relay',
+						`Workflow is disabled because ${orchestrationUnavailableReason()}.`,
+						{ status: 409 }
+					)
+				}
+				const request = parseStartWorkflowRequest(await workflowRequestBody(req))
+				const replay = orchestration.getIdempotentMutation<{ runId: string }>('start_workflow', request.clientId, {
+					objective: request.objective,
+					target: request.target
+				})
+				if (!replay && request.target.kind === 'new_workspace') {
+					const stageIds = stagedAttachmentIdsInObjective(request.objective)
+					if (stageIds.length && !stagedAttachments(STAGED_ATTACHMENTS_DIR, stageIds)) {
+						throw new WorkflowCoordinatorError(
+							'invalid_request',
+							'One or more Workflow attachments are no longer staged; add them again.',
+							{ status: 409 }
+						)
+					}
+				}
+				const accepted = await workflowCoordinator.start({
+					clientId: request.clientId,
+					objective: request.objective,
+					target: request.target,
+					roles: roleStore.read(),
+					modelGroups: modelCache.list()
+				})
+				queueMicrotask(() => {
+					void workflowCoordinator.wake(accepted.workflow.id).catch(error => {
+						console.error(`[workflow ${accepted.workflow.id}] initial wake failed:`, error)
+					})
+				})
+				return json(req, res, 202, { workflow: accepted.workflow })
+			}
+
+			// POST /api/workflows/:id/delegations — the sole agent mutation. The
+			// capability, exact root, frozen role, and phase barrier are checked together.
+			const workflowDelegation = routeParam(routes.workflowDelegation, req.method, pathname)
+			if (workflowDelegation) {
+				if (!workflowCoordinator) {
+					throw new WorkflowCoordinatorError('workflow_incompatible_relay', 'Workflow is unavailable.', {
+						status: 409
+					})
+				}
+				const request = parseWorkflowDelegateRequest(await workflowRequestBody(req), workflowDelegation)
+				// The capability rotates after every accepted choice. Its hash therefore
+				// doubles as a stable retry identity without adding a field to the exact tool schema.
+				const clientId = crypto
+					.createHash('sha256')
+					.update(
+						JSON.stringify([
+							request.workflow_id,
+							request.phase_capability,
+							request.session_id,
+							request.role,
+							request.prompt
+						])
+					)
+					.digest('hex')
+				const accepted = await workflowCoordinator.delegate({
+					clientId,
+					workflowId: request.workflow_id,
+					sessionId: request.session_id,
+					phaseCapability: request.phase_capability,
+					role: request.role,
+					task: request.prompt,
+					...(request.role === 'implementation' ? { planningInterpretation: request.prompt } : {})
+				})
+				queueMicrotask(() => {
+					void workflowCoordinator.wake(accepted.workflow.id).catch(error => {
+						console.error(`[workflow ${accepted.workflow.id}] delegated wake failed:`, error)
+					})
+				})
+				return json(req, res, 202, {
+					ok: true,
+					workflowId: accepted.workflow.id,
+					delegationId: accepted.job.id,
+					role: accepted.job.role,
+					model: accepted.job.resolvedRole.model
+				} satisfies DelegateTaskResult)
+			}
+
+			const retryWorkflow = routeParam(routes.workflowRetry, req.method, pathname)
+			if (retryWorkflow) {
+				const coordinator = requirePhoneWorkflowCoordinator(req, WORKFLOW_RECOVERY_PHONE_ONLY)
+				const request = parseWorkflowRetryRequest(await workflowRequestBody(req))
+				const result = await coordinator.retry({
+					clientId: request.clientId,
+					workflowId: retryWorkflow
+				})
+				queueMicrotask(() => void coordinator.wake(result.workflow.id).catch(console.error))
+				return json(req, res, 200, { workflow: result.workflow })
+			}
+
+			const adoptWorkflow = routeParam(routes.workflowAdopt, req.method, pathname)
+			if (adoptWorkflow) {
+				const coordinator = requirePhoneWorkflowCoordinator(req, WORKFLOW_RECOVERY_PHONE_ONLY)
+				const request = parseWorkflowAdoptRequest(await workflowRequestBody(req))
+				const result = await coordinator.adopt({
+					clientId: request.clientId,
+					workflowId: adoptWorkflow,
+					actionId: request.actionId,
+					candidateId: request.workspaceId ?? request.sessionId
+				})
+				queueMicrotask(() => void coordinator.wake(result.workflow.id).catch(console.error))
+				return json(req, res, 200, { workflow: result.workflow })
+			}
+
+			const replayWorkflow = routeParam(routes.workflowReplay, req.method, pathname)
+			if (replayWorkflow) {
+				const coordinator = requirePhoneWorkflowCoordinator(req, WORKFLOW_RECOVERY_PHONE_ONLY)
+				const request = parseWorkflowReplayRequest(await workflowRequestBody(req))
+				const result = await coordinator.replay({
+					clientId: request.clientId,
+					workflowId: replayWorkflow,
+					actionId: request.actionId,
+					confirmDuplicateRisk: request.confirmDuplicateRisk
+				})
+				queueMicrotask(() => void coordinator.wake(result.workflow.id).catch(console.error))
+				return json(req, res, 200, { workflow: result.workflow })
+			}
+
+			const completeWorkflow = routeParam(routes.workflowComplete, req.method, pathname)
+			if (completeWorkflow) {
+				const coordinator = requirePhoneWorkflowCoordinator(req, 'Only the phone UI can mark a Workflow complete.')
+				const request = parseWorkflowCompleteRequest(await workflowRequestBody(req))
+				const result = await coordinator.complete({
+					clientId: request.clientId,
+					workflowId: completeWorkflow
+				})
+				return json(req, res, 200, { workflow: result.workflow })
+			}
+
+			const cancelWorkflow = routeParam(routes.workflow, req.method, pathname)
+			if (cancelWorkflow) {
+				const coordinator = requirePhoneWorkflowCoordinator(req, 'Only the phone UI can cancel a Workflow.')
+				const clientId = url.searchParams.get('clientId')
+				if (!clientId?.trim()) throw new WorkflowRequestError('clientId is required.')
+				const result = await coordinator.cancel({ clientId: clientId.trim(), workflowId: cancelWorkflow })
+				return json(req, res, 200, { workflow: result.workflow })
+			}
+
 			if (isRoute(routes.delegations, req.method, pathname)) {
 				const workspaceId = url.searchParams.get('workspaceId')
 				const workspaces = reads.listWorkspaces().filter(ws => !workspaceId || ws.id === workspaceId)
 				if (workspaceId && !workspaces.length) return json(req, res, 404, { error: 'workspace not found' })
-				const delegations = workspaces.flatMap(ws => {
+				const legacy = workspaces.flatMap(ws => {
 					const store = delegationStore(ws)
 					return store
 						? store
@@ -1753,7 +2762,17 @@ const server = http.createServer(async (req, res) => {
 								.map(projectDelegation)
 						: []
 				})
-				return json(req, res, 200, { delegations })
+				const allowedWorkspaces = new Set(workspaces.map(workspace => workspace.id))
+				const workflows = orchestration.writable
+					? orchestration.listWorkflowProjections().flatMap(workflow => {
+							if (!workflow.workspaceId || !allowedWorkspaces.has(workflow.workspaceId)) return []
+							return orchestration
+								.listWorkflowJobs(workflow.id)
+								.filter(job => job.state !== 'returned')
+								.flatMap(job => projectWorkflowDelegation(workflow, job) ?? [])
+						})
+					: []
+				return json(req, res, 200, { delegations: [...legacy, ...workflows] })
 			}
 
 			const dismissDelegation = routeParam(routes.dismissDelegation, req.method, pathname)
@@ -2081,13 +3100,12 @@ const server = http.createServer(async (req, res) => {
 					ok: true
 				})
 
-			// POST /api/workspaces { repo, prompt, workflow? | model?/effort?/plan?/fast?, send? }
+			// POST /api/workspaces { repo, prompt, model?/effort?/plan?/fast?, send? }
 			// — create a workspace via Conductor's deep link, then configure its first chat.
 			if (isRoute(routes.createWorkspace, req.method, pathname)) {
 				const body = JSON.parse((await readBody(req)) || '{}') as CreateWorkspaceRequest
 				const attachmentIds = body.attachmentIds ?? []
-				if (body.workflow !== undefined && typeof body.workflow !== 'boolean')
-					return json(req, res, 400, { error: 'workflow must be a boolean' })
+				if ('workflow' in body) return json(req, res, 400, { error: 'Workflow starts through POST /api/workflows.' })
 				if (body.model !== undefined && typeof body.model !== 'string')
 					return json(req, res, 400, { error: 'model must be a picker label' })
 				if (body.effort !== undefined && typeof body.effort !== 'string')
@@ -2105,10 +3123,6 @@ const server = http.createServer(async (req, res) => {
 					plan: body.plan,
 					fast: body.fast
 				}
-				const hasRequestedAgent = Object.values(requestedAgent).some(value => value !== undefined)
-				if (body.workflow && hasRequestedAgent) {
-					return json(req, res, 400, { error: 'workflow mode owns model settings; omit model, effort, plan, and fast' })
-				}
 				if (!Array.isArray(attachmentIds) || attachmentIds.some(id => typeof id !== 'string'))
 					return json(req, res, 400, { error: 'attachment ids must be a list of strings' })
 				const attachments = stagedAttachments(STAGED_ATTACHMENTS_DIR, attachmentIds)
@@ -2119,17 +3133,8 @@ const server = http.createServer(async (req, res) => {
 					.filter(Boolean)
 					.join('\n')
 				if (!objective && !body.repo) return json(req, res, 400, { error: 'need a repo or a prompt' })
-				let workflowRoot: Extract<WorkflowRootResult, { ok: true }> | undefined
-				if (body.workflow) {
-					const stored = roleStore.read()
-					if (stored.warning) return json(req, res, 500, { error: stored.warning })
-					const prepared = prepareWorkflowRoot(stored.config, modelCache.list(), objective)
-					if (!prepared.ok)
-						return json(req, res, delegationHttpStatus(prepared.error), { error: prepared.error.message })
-					workflowRoot = prepared
-				}
-				const prompt = workflowRoot?.prompt ?? objective
-				const agent = workflowRoot?.agent ?? requestedAgent
+				const prompt = objective
+				const agent = requestedAgent
 				const configureAgent = Object.values(agent).some(value => value !== undefined)
 				// Resolve the repo to a real path: an unmatched `path` would silently land
 				// the workspace in whichever repo Conductor happens to list first.
@@ -2158,8 +3163,7 @@ const server = http.createServer(async (req, res) => {
 								prompt,
 								body.sendImmediately !== false,
 								attachmentIds,
-								configureAgent ? agent : undefined,
-								workflowRoot?.role
+								configureAgent ? agent : undefined
 							)
 						: null
 				const failed = settled && body.send === true ? await settled : null
@@ -2170,7 +3174,6 @@ const server = http.createServer(async (req, res) => {
 					workspace: reads.getWorkspace(created.id) ?? created,
 					pendingPrompt: prompt || undefined,
 					model: agent.model,
-					workflow: workflowRoot ? { role: WORKFLOW_ROOT_ROLE, model: workflowRoot.resolvedRole.model } : undefined,
 					sent: body.send === true && !!prompt && !failed,
 					configured: body.send === true && configureAgent && !failed,
 					warning:
@@ -2237,9 +3240,12 @@ const server = http.createServer(async (req, res) => {
 				const ws = reads.getWorkspace(listSessionsIn)
 				const store = ws ? delegationStore(ws) : null
 				const roles = store?.sessionRoles()
+				const enriched = ws as WorkflowAttachedWorkspace | null
+				if (enriched) attachWorkflowState([enriched])
+				const sessionRoles = { ...(roles?.sessions ?? {}), ...(enriched?.session_roles ?? {}) }
 				return json(req, res, 200, {
 					sessions: reads.listSessions(listSessionsIn),
-					...(roles && Object.keys(roles.sessions).length ? { session_roles: roles.sessions } : {})
+					...(Object.keys(sessionRoles).length ? { session_roles: sessionRoles } : {})
 				})
 			}
 
@@ -2469,6 +3475,8 @@ const server = http.createServer(async (req, res) => {
 			const modelsOf = routeParam(routes.models, req.method, pathname)
 			if (modelsOf) {
 				const sessionId = modelsOf
+				const frozen = workflowFrozenError(sessionId)
+				if (frozen) return json(req, res, 409, frozen)
 				const ws = reads.getWorkspace(url.searchParams.get('workspaceId') ?? '')
 				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
 				const located = locateChat(ws, sessionId)
@@ -2486,6 +3494,8 @@ const server = http.createServer(async (req, res) => {
 			const defaultModelOf = routeParam(routes.defaultModel, req.method, pathname)
 			if (defaultModelOf) {
 				const sessionId = defaultModelOf
+				const frozen = workflowFrozenError(sessionId)
+				if (frozen) return json(req, res, 409, frozen)
 				const body = JSON.parse((await readBody(req)) || '{}') as { model?: unknown; workspaceId?: unknown }
 				if (typeof body.model !== 'string' || !body.model.trim()) {
 					return json(req, res, 400, { error: 'model must be a picker label' })
@@ -2521,6 +3531,10 @@ const server = http.createServer(async (req, res) => {
 				}
 				if (body.effort && !EFFORT_LABELS[body.effort]) {
 					return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
+				}
+				const frozen = workflowFrozenError(sessionId)
+				if (frozen && (body.model !== undefined || body.effort !== undefined || body.fast !== undefined)) {
+					return json(req, res, 409, frozen)
 				}
 				const ws = body.workspaceId
 					? reads.getWorkspace(body.workspaceId)
@@ -2685,27 +3699,22 @@ const server = http.createServer(async (req, res) => {
 
 			const delegateFrom = routeParam(routes.delegateTask, req.method, pathname)
 			if (delegateFrom) {
-				let body: DelegateTaskRequest
-				try {
-					const parsed = JSON.parse((await readBody(req)) || '{}') as unknown
-					if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object')
-					body = parsed as DelegateTaskRequest
-				} catch {
-					return json(req, res, 400, intakeError('invalid_request', 'could not read delegation request'))
-				}
-				const result = acceptDelegation(delegateFrom, body)
-				return json(req, res, result.ok ? 202 : delegationHttpStatus(result.error), result)
+				return json(
+					req,
+					res,
+					409,
+					intakeError('workflow_required', 'delegate_task is available only inside a UI-authorized Workflow.')
+				)
 			}
 
-			// POST /api/sessions/:id/prompt  { text, agent? | workflow? } — ordinary staged
-			// settings or the planning-root role are applied before the prompt so the two
-			// can't come apart (and so both park together when the Mac is locked).
+			// POST /api/sessions/:id/prompt { text, agent? } — ordinary staged settings
+			// are applied before the prompt so the two cannot come apart.
 			const promptTo = routeParam(routes.sendPrompt, req.method, pathname)
 			if (promptTo) {
 				const sessionId = promptTo
 				const body = JSON.parse((await readBody(req)) || '{}') as Partial<SendPromptRequest>
-				if (body.workflow !== undefined && typeof body.workflow !== 'boolean') {
-					return json(req, res, 400, { error: 'workflow must be a boolean' })
+				if ('workflow' in body) {
+					return json(req, res, 400, { error: 'Workflow starts through POST /api/workflows.' })
 				}
 				if (body.text !== undefined && typeof body.text !== 'string') {
 					return json(req, res, 400, { error: 'prompt must be a string' })
@@ -2716,8 +3725,15 @@ const server = http.createServer(async (req, res) => {
 					return json(req, res, 400, { error: 'agent must be a settings object' })
 				}
 				const requestedAgent = body.agent && Object.keys(body.agent).length ? body.agent : undefined
-				if (body.workflow && (requestedAgent || body.queue === true)) {
-					return json(req, res, 400, { error: 'workflow owns agent settings and cannot be queued behind another turn' })
+				const frozen = workflowFrozenError(sessionId)
+				if (
+					frozen &&
+					requestedAgent &&
+					(requestedAgent.model !== undefined ||
+						requestedAgent.effort !== undefined ||
+						requestedAgent.fast !== undefined)
+				) {
+					return json(req, res, 409, frozen)
 				}
 				const ws = body.workspaceId
 					? reads.getWorkspace(body.workspaceId)
@@ -2740,60 +3756,8 @@ const server = http.createServer(async (req, res) => {
 					)
 				}
 				const answer = await sendOnce.run(body.clientId, async () => {
-					let text = rawText
-					let agent = requestedAgent
-					if (body.workflow) {
-						const session = reads.getSession(sessionId)
-						const hasUserRow = reads.getMessages(sessionId).entries.some(entry => entry.role === 'user')
-						if (!session || session.last_user_message_at || hasUserRow) {
-							return {
-								status: 409,
-								body: {
-									ok: false,
-									strategy: actuator.name,
-									error: 'Workflow mode can only start with a new chat’s first message.'
-								}
-							}
-						}
-						if (session.status === 'working' || session.background_tasks.length) {
-							return {
-								status: 409,
-								body: {
-									ok: false,
-									strategy: actuator.name,
-									error: 'Workflow mode needs an idle new chat.'
-								}
-							}
-						}
-						const stored = roleStore.read()
-						if (stored.warning) {
-							return { status: 500, body: { ok: false, strategy: actuator.name, error: stored.warning } }
-						}
-						const prepared = prepareWorkflowRoot(stored.config, modelCache.list(), rawText)
-						if (!prepared.ok) {
-							return {
-								status: delegationHttpStatus(prepared.error),
-								body: { ok: false, strategy: actuator.name, error: prepared.error.message }
-							}
-						}
-						try {
-							const assigned = assignWorkflowRoot(ws, sessionId, prepared.role, Date.now())
-							if (!assigned.ok) {
-								return { status: 409, body: { ok: false, strategy: actuator.name, error: assigned.error } }
-							}
-						} catch (err) {
-							return {
-								status: 409,
-								body: {
-									ok: false,
-									strategy: actuator.name,
-									error: err instanceof Error ? err.message : String(err)
-								}
-							}
-						}
-						text = prepared.prompt
-						agent = prepared.agent
-					}
+					const text = rawText
+					const agent = requestedAgent
 					// A failed first-prompt entry offers the same Retry button as an ordinary
 					// prompt. If staging had been the failure, put its files in place before
 					// that retry reaches the attachment tokens.
@@ -3073,6 +4037,13 @@ const server = http.createServer(async (req, res) => {
 			return json(req, res, 404, { error: 'no route', pathname })
 		} catch (err) {
 			if (err instanceof PayloadTooLargeError) return json(req, res, 413, { error: err.message })
+			const workflowError = workflowHttpError(err)
+			if (workflowError) {
+				console.warn(
+					`[workflow] ${req.method} ${pathname}: ${workflowError.error.code}: ${workflowError.error.message}`
+				)
+				return json(req, res, workflowError.status, { ok: false, error: workflowError.error })
+			}
 			// A refused UI turn is not a server fault and a retry is the right move, so it gets
 			// 503 + Retry-After rather than a 500 that reads as "the relay is broken".
 			if (err instanceof UiBusyError) {
@@ -3091,6 +4062,16 @@ server.listen(cfg.port, cfg.host, () => {
 		console.info(`  voice:      127.0.0.1:${voicePort()}${voiceBroker ? '' : ' (waiting for OpenAI config)'}`)
 		void voiceBroker?.restore()
 	})
+	if (orchestration.writable) {
+		setInterval(() => orchestration.heartbeatRelayInstance(relayIdentity), 2_000).unref()
+		setInterval(() => void recoverUiLease(), 2_000).unref()
+		setInterval(wakeWorkflows, 2_000).unref()
+		setInterval(
+			() => orchestration.compactTerminalRuns({ olderThan: Date.now() - 30 * 24 * 60 * 60_000 }),
+			24 * 60 * 60_000
+		).unref()
+		queueMicrotask(() => void recoverUiLease().finally(wakeWorkflows))
+	}
 	// Under `yarn dev` the app comes from Vite and only /api comes from here, so the URL worth
 	// printing is Vite's — carrying the token, which Vite itself has no way to print.
 	const dev = cfg.devWebPort !== undefined

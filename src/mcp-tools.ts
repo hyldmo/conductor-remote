@@ -14,11 +14,11 @@
  *
  * Every tool is an HTTP call to the relay, injected as `call`, and that is the
  * load-bearing decision rather than a convenience. Conductor has one shared window,
- * so the only thing that makes writes safe is `writes.ts` ▸ `uiTurn`, and that lock is
- * *process-local*. A tool that drove AppleScript itself would sit outside it, and two
- * agents focusing different workspaces would land each other's prompts — the exact
- * failure every fail-closed assertion cannot catch. Routed through the relay, the
- * phone, both delivery queues and every agent share one lock.
+ * so the only thing that makes writes safe is `writes.ts` ▸ `uiTurn`, backed by the
+ * coordinator's relay-shared mutex. A tool that drove AppleScript itself would sit
+ * outside it, and two agents focusing different workspaces would land each other's
+ * prompts — the exact failure every fail-closed assertion cannot catch. Routed through
+ * the relay, the phone, delivery queues and every agent share the same gate.
  *
  * The in-relay transport calls the relay's own API over loopback rather than reaching
  * into `reads`/`writes` directly. That is a sub-millisecond hop against a 1000-line
@@ -28,29 +28,17 @@
 
 import { chatCursor, parseChatCursor } from './chat-cursor.ts'
 import { routes } from './routes.ts'
-import {
-	agentTypeCanExposeEffort,
-	agentTypeCanExposeFastMode,
-	HIT_CLOSE,
-	HIT_OPEN,
-	isToolResult,
-	modelAgentType,
-	timestampMs,
-	workspaceTitle
-} from './shared.ts'
+import { HIT_CLOSE, HIT_OPEN, isToolResult, timestampMs, workspaceTitle } from './shared.ts'
 import type { TranscriptEntry } from './transcript.ts'
 import type {
-	AgentEffort,
 	AgentResult,
 	ArchiveResult,
 	CloseChatResult,
 	CreateWorkspaceResult,
 	DefaultModelResult,
-	DelegateTaskResult,
 	DelegationsResponse,
 	DevServerResult,
 	DevServerState,
-	DismissDelegationResult,
 	LogsResponse,
 	MessagesResponse,
 	ModelCatalogResponse,
@@ -59,7 +47,6 @@ import type {
 	NoSleepStatus,
 	PlanUsageResponse,
 	ReposResponse,
-	RolesConfig,
 	RolesResponse,
 	SearchResponse,
 	SendResult,
@@ -68,7 +55,8 @@ import type {
 	StateResponse,
 	StatusResult,
 	StopResult,
-	UpdateRolesResult,
+	WorkflowDelegateRequest,
+	WorkflowDelegateResult,
 	WorkspaceDiff
 } from './wire.ts'
 
@@ -86,7 +74,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 export const SERVER_INFO = { name: 'conductor-remote', version: '1' }
 
 export const INSTRUCTIONS =
-	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. delegate_task later drives the real Mac UI and launches another agent through a persisted cross-provider queue; use it only when the user explicitly asked for delegation. It never uses Conductor Plan mode. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. Its workflow option is itself an explicit delegation request: the configured planning role owns the root chat and may use delegate_task, still in ordinary chat mode and never Plan mode. plan_usage, dev_server status, dismiss_prompt, keep_awake and relay_logs touch no UI. Use dev_server instead of launching a long-lived development server from a shell: its start/stop actions use Conductor’s configured Run task, drive the real Mac UI and steal focus for a few seconds. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace also drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat or workspace they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
+	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. delegate_task operates only inside a Workflow already authorized from the phone: the current root envelope supplies its workflow id and phase capability, and the relay later drives the real Mac UI to launch the tracked child. MCP cannot start a Workflow, edit its frozen roles, or perform recovery actions. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. plan_usage, dev_server status, dismiss_prompt, keep_awake and relay_logs touch no UI. Use dev_server instead of launching a long-lived development server from a shell: its start/stop actions use Conductor’s configured Run task, drive the real Mac UI and steal focus for a few seconds. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace also drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat or workspace they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
 
 /** Reads are quick; a UI write is measured in tens of seconds (writes.ts ▸ SEND_ATTEMPT_MS). */
 export const READ_TIMEOUT_MS = 10_000
@@ -200,6 +188,12 @@ function need(args: Record<string, unknown>, key: string): string {
 	const v = str(args[key])
 	if (!v) throw new Error(`${key} is required`)
 	return v
+}
+
+function rejectUnknown(args: Record<string, unknown>, allowed: readonly string[]): void {
+	const accepted = new Set(allowed)
+	const unknown = Object.keys(args).filter(key => !accepted.has(key))
+	if (unknown.length) throw new Error(`unknown ${unknown.length === 1 ? 'field' : 'fields'}: ${unknown.join(', ')}`)
 }
 
 /** Build the tool set against a given relay transport. */
@@ -446,7 +440,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'list_roles',
 			description:
-				'List the relay’s picker-backed cross-provider roles. A role marked invalid cannot be delegated until its exact model is selected. Delegated roles never enable Conductor Plan mode.',
+				'List the relay’s picker-backed cross-provider roles. A role marked invalid cannot be used by a new Workflow until its exact model is selected. Active Workflows keep their frozen snapshot when this configuration changes.',
 			inputSchema: { type: 'object', properties: {} },
 			run: async () => {
 				const data = await call<RolesResponse>(routes.roles.path())
@@ -461,106 +455,40 @@ export function createTools(call: RelayCall): Tool[] {
 			}
 		},
 		{
-			name: 'set_role',
-			description:
-				'Set one cross-provider delegated role using an exact label from list_models. Effort and Fast are available only when Conductor exposes those controls for the selected provider; omit them for Cursor and OpenCode. This changes relay config only and does not drive Conductor. Plan mode is intentionally not a role option.',
-			inputSchema: {
-				type: 'object',
-				properties: {
-					role: { type: 'string', description: 'Lowercase role name, for example exploration.' },
-					model: { type: 'string', description: 'Exact picker label from list_models.' },
-					effort: {
-						type: 'string',
-						enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'],
-						description: 'Optional Claude/Codex reasoning control. Omit for Cursor and OpenCode.'
-					},
-					fast: { type: 'boolean', description: 'Optional Claude/Codex Fast control.' },
-					preamble: { type: 'string', description: 'Optional instructions prepended to each delegated task.' }
-				},
-				required: ['role', 'model']
-			},
-			run: async args => {
-				const name = need(args, 'role')
-				const model = need(args, 'model')
-				const effort = str(args.effort)
-				const efforts: AgentEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
-				if (effort && !efforts.includes(effort as AgentEffort)) throw new Error('effort is invalid')
-				const agentType = modelAgentType(model)
-				if (effort && agentType && !agentTypeCanExposeEffort(agentType)) {
-					throw new Error('the selected provider has no Conductor reasoning control; omit effort')
-				}
-				if (typeof args.fast === 'boolean' && agentType && !agentTypeCanExposeFastMode(agentType)) {
-					throw new Error('the selected provider has no Conductor Fast control; omit fast')
-				}
-				const current = await call<RolesResponse>(routes.roles.path())
-				const prior = current.roles[name]
-				const preserveEffort = agentTypeCanExposeEffort(agentType)
-				const preserveFast = agentTypeCanExposeFastMode(agentType)
-				const role = {
-					model,
-					...(effort
-						? { effort: effort as AgentEffort }
-						: preserveEffort && prior?.effort
-							? { effort: prior.effort }
-							: {}),
-					...(typeof args.fast === 'boolean'
-						? { fast: args.fast }
-						: preserveFast && prior?.fast !== undefined
-							? { fast: prior.fast }
-							: {}),
-					...(typeof args.preamble === 'string'
-						? { preamble: args.preamble }
-						: prior?.preamble !== undefined
-							? { preamble: prior.preamble }
-							: {})
-				}
-				const config = { version: 1 as const, roles: { ...current.roles, [name]: role } } satisfies RolesConfig
-				const result = await call<UpdateRolesResult>(routes.updateRoles.path(), {
-					method: routes.updateRoles.method,
-					body: config
-				})
-				if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
-				return `${name}: ${[role.model, role.effort, role.fast ? 'fast' : null].filter(Boolean).join(' · ')}`
-			}
-		},
-		{
 			name: 'delegate_task',
 			description:
-				'Queue work in a real sibling Conductor chat using a configured role on a different provider. The relay attaches this chat’s transcript, configures the child without Plan mode, sends the task, waits for a stable answer, and returns its Baton here. Returns immediately with a delegation id; use list_delegations to observe it. Only use it when the user asked for cross-provider delegation because the queue launches a real agent and drives the Mac UI after this call returns.',
+				'Queue a tracked child in the Workflow this root already belongs to. Use only the workflow id and current phase capability delivered in the root’s private orchestration envelope. The relay owns the frozen child settings, transcript boundary, Baton routing, and later Mac UI work. Returns immediately with a delegation id; use list_delegations to observe it. This tool cannot start or recover a Workflow.',
 			inputSchema: {
 				type: 'object',
 				properties: {
-					session_id: { type: 'string', description: 'Parent chat that receives the eventual Baton.' },
-					workspace_id: { type: 'string', description: 'Optional assertion for the parent workspace.' },
-					role: { type: 'string', description: 'Exact role name from list_roles.' },
-					prompt: { type: 'string' },
-					through: { type: 'string', description: 'Optional cursor from read_chat; later rows are omitted.' },
-					include_thinking: { type: 'boolean', description: 'Include parent reasoning in the handoff (default true).' },
-					return_mode: {
+					workflow_id: { type: 'string', description: 'Workflow id from the private root envelope.' },
+					phase_capability: {
 						type: 'string',
-						enum: ['queue', 'steer'],
-						description: 'Queue a new parent turn by default; steer explicitly injects into a running turn.'
-					}
+						description: 'Opaque current-phase capability from that same envelope; never copy it elsewhere.'
+					},
+					session_id: { type: 'string', description: 'The persisted Workflow root session.' },
+					role: { type: 'string', enum: ['exploration', 'implementation'] },
+					prompt: { type: 'string', description: 'The independent question or implementation brief.' }
 				},
-				required: ['session_id', 'role', 'prompt']
+				required: ['workflow_id', 'phase_capability', 'session_id', 'role', 'prompt'],
+				additionalProperties: false
 			},
 			run: async args => {
+				rejectUnknown(args, ['workflow_id', 'phase_capability', 'session_id', 'role', 'prompt'])
+				const workflowId = need(args, 'workflow_id')
 				const sessionId = need(args, 'session_id')
-				const through = str(args.through)
-				const throughRowid = through ? parseChatCursor(through) : undefined
-				if (through && throughRowid === null) throw new Error('through must be a cursor returned by read_chat')
-				const returnMode = str(args.return_mode)
-				if (returnMode && returnMode !== 'queue' && returnMode !== 'steer') throw new Error('return_mode is invalid')
-				const result = await call<DelegateTaskResult>(routes.delegateTask.path(sessionId), {
-					method: routes.delegateTask.method,
-					body: {
-						role: need(args, 'role'),
-						prompt: need(args, 'prompt'),
-						workspaceId: str(args.workspace_id),
-						throughRowid,
-						includeThinking: args.include_thinking === undefined ? undefined : args.include_thinking === true,
-						returnMode
-					}
+				const role = need(args, 'role')
+				if (role !== 'exploration' && role !== 'implementation') throw new Error('role is invalid')
+				const body = {
+					workflow_id: workflowId,
+					phase_capability: need(args, 'phase_capability'),
+					session_id: sessionId,
+					role,
+					prompt: need(args, 'prompt')
+				} satisfies WorkflowDelegateRequest
+				const result = await call<WorkflowDelegateResult>(routes.workflowDelegation.path(workflowId), {
+					method: routes.workflowDelegation.method,
+					body
 				})
 				if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
 				return `delegation ${result.delegationId} queued · ${result.role} · ${result.model}`
@@ -586,23 +514,6 @@ export function createTools(call: RelayCall): Tool[] {
 						return `${job.status} · ${job.role} · ${job.resolvedRole.model} · ${job.id}${child}${failure}`
 					})
 					.join('\n')
-			}
-		},
-		{
-			name: 'dismiss_delegation',
-			description: 'Dismiss one failed delegation job. Its parent/child chats and role identity remain.',
-			inputSchema: {
-				type: 'object',
-				properties: { delegation_id: { type: 'string' } },
-				required: ['delegation_id']
-			},
-			run: async args => {
-				const id = need(args, 'delegation_id')
-				const result = await call<DismissDelegationResult>(routes.dismissDelegation.path(id), {
-					method: routes.dismissDelegation.method
-				})
-				if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
-				return `dismissed delegation ${result.delegationId}`
 			}
 		},
 		{
@@ -658,7 +569,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'create_workspace',
 			description:
-				'Start a new Conductor workspace in a repo, optionally with a first prompt and agent settings. The workspace starts from a Conductor deep link, so creation itself needs no Accessibility. The relay applies requested model, effort, plan, and fast settings through Conductor’s UI after it creates the first chat and before it delivers the prompt. Workflow mode instead configures the root from the planning role and explicitly authorizes cross-provider delegate_task calls; it never enables Conductor Plan mode. Returns as soon as the workspace row exists (~2s), before the worktree is built.',
+				'Start an ordinary new Conductor workspace in a repo, optionally with a first prompt and agent settings. The workspace starts from a Conductor deep link, so creation itself needs no Accessibility. The relay applies requested model, effort, plan, and fast settings through Conductor’s UI after it creates the first chat and before it delivers the prompt. This utility cannot start or join a Workflow. Returns as soon as the workspace row exists (~2s), before the worktree is built.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -676,11 +587,6 @@ export function createTools(call: RelayCall): Tool[] {
 					},
 					plan: { type: 'boolean', description: 'Start the first chat in Conductor’s Plan mode.' },
 					fast: { type: 'boolean', description: 'Set Fast mode before the first prompt.' },
-					workflow: {
-						type: 'boolean',
-						description:
-							'Start the first prompt as a delegated workflow rooted in the configured planning role. Requires a prompt and cannot be combined with model, effort, plan, or fast. Uses ordinary chat mode, never Conductor Plan mode.'
-					},
 					wait_for_send: {
 						type: 'boolean',
 						description:
@@ -692,37 +598,31 @@ export function createTools(call: RelayCall): Tool[] {
 							"Send the first prompt without waiting for the worktree to finish building, which is how Conductor's own New workspace box behaves. Default true. Pass false only when the agent's first move needs what the repo's setup script installs."
 					}
 				},
-				required: ['repo']
+				required: ['repo'],
+				additionalProperties: false
 			},
 			run: async args => {
+				rejectUnknown(args, ['repo', 'prompt', 'model', 'effort', 'plan', 'fast', 'wait_for_send', 'send_immediately'])
 				const repo = need(args, 'repo')
 				const prompt = str(args.prompt)
 				const model = str(args.model)
 				const effort = str(args.effort)
 				const plan = typeof args.plan === 'boolean' ? args.plan : undefined
 				const fast = typeof args.fast === 'boolean' ? args.fast : undefined
-				const workflow = args.workflow === true
 				const explicitAgent = model !== undefined || effort !== undefined || plan !== undefined || fast !== undefined
-				if (workflow && explicitAgent) {
-					throw new Error('workflow cannot be combined with model, effort, plan, or fast')
-				}
-				if (workflow && !prompt) throw new Error('workflow needs a first prompt')
-				const configured = workflow || explicitAgent
+				const configured = explicitAgent
 				const send = args.wait_for_send === true
 				// Default on, matching the relay: an omitted flag must never mean "wait".
 				const sendImmediately = args.send_immediately !== false
 				const data = await call<CreateWorkspaceResult>(routes.createWorkspace.path(), {
 					method: routes.createWorkspace.method,
-					body: workflow
-						? { repo, prompt, workflow: true, send, sendImmediately }
-						: { repo, prompt, model, effort, plan, fast, send, sendImmediately },
+					body: { repo, prompt, model, effort, plan, fast, send, sendImmediately },
 					timeoutMs: send ? WRITE_TIMEOUT_MS : 30_000
 				})
 				const lines = [
 					`created ${data.workspace ? workspaceTitle(data.workspace) : data.workspaceId}`,
 					`workspace_id: ${data.workspaceId}`
 				]
-				if (data.workflow) lines.push(`workflow root: ${data.workflow.role} · ${data.workflow.model}`)
 				if (data.warning) lines.push(`! ${data.warning}`)
 				else if (data.pendingPrompt && !data.sent)
 					lines.push('the first prompt is queued — the relay delivers it, so do not send it again')
@@ -745,9 +645,11 @@ export function createTools(call: RelayCall): Tool[] {
 					},
 					text: { type: 'string' }
 				},
-				required: ['session_id', 'text']
+				required: ['session_id', 'text'],
+				additionalProperties: false
 			},
 			run: async args => {
+				rejectUnknown(args, ['session_id', 'workspace_id', 'text'])
 				const sessionId = need(args, 'session_id')
 				const text = need(args, 'text')
 				const data = await call<SendResult>(routes.sendPrompt.path(sessionId), {

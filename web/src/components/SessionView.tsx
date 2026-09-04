@@ -18,7 +18,14 @@ import { shortModel, timestampMs, workspaceTitle } from '../lib/format.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
-import type { DiffStats, Session, SessionRoleAssignment } from '../lib/types.ts'
+import type {
+	DelegationProjection,
+	DiffStats,
+	Session,
+	SessionRoleAssignment,
+	WorkflowRoleName,
+	WorkflowRunWire
+} from '../lib/types.ts'
 import { useApp, WORKING_HINT_MS } from '../store.ts'
 import { ArchivedChat } from './ArchivedChat.tsx'
 import { Composer } from './Composer.tsx'
@@ -32,6 +39,25 @@ import type { SplitFormat } from './Transcript.tsx'
 import { Transcript } from './Transcript.tsx'
 import { PromptStatusDot, Spinner, UnlockLink } from './ui.tsx'
 import { WorkspaceMenu } from './WorkspaceMenu.tsx'
+
+/** Resolve Workflow ownership from the exact chat, never from a workspace-level display fallback. */
+export function workflowForActiveSession(
+	workflows: readonly WorkflowRunWire[],
+	sessionId: string | null,
+	roles: Readonly<Record<string, SessionRoleAssignment>>,
+	jobs: readonly DelegationProjection[]
+): WorkflowRunWire | undefined {
+	if (!sessionId) return undefined
+	const root = workflows.find(workflow => workflow.rootSessionId === sessionId)
+	if (root) return root
+	const assignedWorkflowId = roles[sessionId]?.workflowId
+	if (assignedWorkflowId) {
+		const assigned = workflows.find(workflow => workflow.id === assignedWorkflowId)
+		if (assigned) return assigned
+	}
+	const jobWorkflowId = jobs.find(job => job.childSessionId === sessionId && job.workflowId)?.workflowId
+	return jobWorkflowId ? workflows.find(workflow => workflow.id === jobWorkflowId) : undefined
+}
 
 export function SessionView() {
 	const { workspaceId } = useParams<{ workspaceId: string }>()
@@ -115,6 +141,30 @@ export function SessionView() {
 	const activeSession = sessions.find(s => s.id === sessionId)
 	const sessionRoles = { ...(sessionsData?.session_roles ?? {}), ...(ws?.session_roles ?? {}) }
 	const delegations = ws?.delegations ?? []
+	const legacyDelegations = delegations.filter(job => !job.workflowId)
+	const workspaceWorkflows = (data?.workflows ?? []).filter(run => run.workspaceId === workspaceId)
+	if (ws?.workflow && !workspaceWorkflows.some(run => run.id === ws.workflow?.id)) workspaceWorkflows.push(ws.workflow)
+	const sessionWorkflow = workflowForActiveSession(workspaceWorkflows, sessionId, sessionRoles, delegations)
+	// The summary may show the workspace's most relevant run while ownership-sensitive
+	// composer controls use only `sessionWorkflow` below.
+	const displayedWorkflow = sessionWorkflow ?? ws?.workflow ?? workspaceWorkflows[0]
+	const activeWorkflowAssignment = sessionId ? sessionRoles[sessionId] : undefined
+	const activeWorkflowJob = sessionId
+		? delegations.find(job => job.workflowId === sessionWorkflow?.id && job.childSessionId === sessionId)
+		: undefined
+	const assignedWorkflowRole =
+		activeWorkflowAssignment && activeWorkflowAssignment.workflowId === sessionWorkflow?.id
+			? activeWorkflowAssignment.role
+			: activeWorkflowJob?.role
+	const workflowOwnsAgent = sessionWorkflow?.phase !== 'completed' && sessionWorkflow?.phase !== 'cancelled'
+	const workflowRole: WorkflowRoleName | undefined =
+		sessionWorkflow && workflowOwnsAgent && sessionId === sessionWorkflow.rootSessionId
+			? 'planning'
+			: assignedWorkflowRole === 'planning' ||
+					assignedWorkflowRole === 'exploration' ||
+					assignedWorkflowRole === 'implementation'
+				? assignedWorkflowRole
+				: undefined
 	const delegationSubtabSessionIds = useMemo(
 		() => new Set(delegations.flatMap(job => (job.childSessionId ? [job.childSessionId] : []))),
 		[delegations]
@@ -376,6 +426,7 @@ export function SessionView() {
 						</div>
 					) : null}
 					<DelegationPipeline
+						workflow={displayedWorkflow}
 						jobs={delegations}
 						sessions={sessions}
 						roles={sessionRoles}
@@ -409,7 +460,7 @@ export function SessionView() {
 								workingSince={workingSince}
 								turnStartedAt={activeSession?.turn_started_at}
 								waiting={activeSession?.background_tasks}
-								delegations={delegations}
+								delegations={legacyDelegations}
 								queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
 								onFork={forkChat}
 								onSelectSession={pickSession}
@@ -451,6 +502,8 @@ export function SessionView() {
 						workflowStarted={
 							!!(sessionId && sessionRoles[sessionId]) || !!(ws.pending_prompt && sessionId === ws.active_session_id)
 						}
+						workflow={sessionWorkflow}
+						workflowRole={workflowRole}
 						focusDraft={sessionId === focusComposerFor}
 						onDraftFocused={() => setFocusComposerFor(null)}
 					/>

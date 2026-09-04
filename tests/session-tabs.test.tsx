@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test, vi } from 'vitest'
-import type { Session } from '../src/wire.ts'
+import type { DelegationProjection, Session, WorkflowRunWire } from '../src/wire.ts'
 
 Object.defineProperty(globalThis, 'location', { configurable: true, value: { hash: '', pathname: '/', search: '' } })
 Object.defineProperty(globalThis, 'localStorage', {
@@ -9,7 +9,9 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { DiffButton, DiffFileScopeToggle, SessionTabs } = await import('../web/src/components/SessionView.tsx')
+const { DiffButton, DiffFileScopeToggle, SessionTabs, workflowForActiveSession } = await import(
+	'../web/src/components/SessionView.tsx'
+)
 
 const session: Session = {
 	id: 'chat-1',
@@ -31,6 +33,62 @@ const session: Session = {
 }
 
 describe('phone chat tabs', () => {
+	test('binds Workflow ownership to the exact root or child when one workspace has multiple runs', () => {
+		const workflow = (id: string, rootSessionId: string): WorkflowRunWire => ({
+			id,
+			workspaceId: 'workspace-1',
+			rootSessionId,
+			phase: 'exploring',
+			objectiveExcerpt: id,
+			roles: {
+				planning: { model: 'Fable 5.1', agentType: 'claude' },
+				exploration: { model: '5.6 Terra', agentType: 'codex' },
+				implementation: { model: 'Composer 2.5', agentType: 'cursor' }
+			},
+			jobs: {
+				exploration: { requested: 1, running: 1, returned: 0, failed: 0 },
+				implementation: { requested: 0, running: 0, returned: 0, failed: 0 }
+			},
+			actions: {
+				canRetry: false,
+				canAdopt: false,
+				canReplayAmbiguous: false,
+				canCancel: true,
+				canComplete: false
+			},
+			createdAt: 1,
+			updatedAt: 2
+		})
+		const first = workflow('workflow-1', 'root-1')
+		const second = workflow('workflow-2', 'root-2')
+		const childJob = {
+			id: 'job-2',
+			workspaceId: 'workspace-1',
+			parentSessionId: 'root-2',
+			childSessionId: 'child-2',
+			workflowId: second.id,
+			role: 'exploration',
+			resolvedRole: second.roles.exploration,
+			prompt: 'Inspect it.',
+			returnMode: 'queue',
+			status: 'running',
+			attempts: 0,
+			createdAt: 1,
+			updatedAt: 2
+		} satisfies DelegationProjection
+
+		expect(workflowForActiveSession([first, second], 'root-2', {}, [childJob])?.id).toBe(second.id)
+		expect(
+			workflowForActiveSession(
+				[first, second],
+				'child-2',
+				{ 'child-2': { role: 'exploration', workflowId: second.id, delegationId: childJob.id, assignedAt: 2 } },
+				[childJob]
+			)?.id
+		).toBe(second.id)
+		expect(workflowForActiveSession([first, second], 'ordinary-chat', {}, [childJob])).toBeUndefined()
+	})
+
 	test('hides the close control when there is only one tab', () => {
 		const html = renderToStaticMarkup(
 			<SessionTabs

@@ -1,12 +1,20 @@
 import { useRef } from 'react'
 import { Navigate, Outlet, Route, Routes, useMatch } from 'react-router'
+import { UiQuarantineBanner, WorkflowWarningBanner } from './components/DelegationPipeline.tsx'
 import { ReloadPrompt } from './components/ReloadPrompt.tsx'
 import { SessionView } from './components/SessionView.tsx'
 import { TokenGate } from './components/TokenGate.tsx'
 import { VoiceCallSheet } from './components/VoiceCallSheet.tsx'
 import { VoiceCallProvider } from './components/VoiceProvider.tsx'
 import { WorkspaceList } from './components/WorkspaceList.tsx'
-import { useEdgeSwipeDrawer, usePrefsSync, usePushRouting, usePushSync, useVisualViewportHeight } from './hooks.ts'
+import {
+	useEdgeSwipeDrawer,
+	usePrefsSync,
+	usePushRouting,
+	usePushSync,
+	useVisualViewportHeight,
+	useWorkspaces
+} from './hooks.ts'
 import { cn } from './lib/cn.ts'
 import { useApp } from './store.ts'
 
@@ -43,6 +51,7 @@ function Shell() {
 	const sidebarOpen = useApp(s => s.sidebarOpen)
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const drawerRef = useRef<HTMLElement>(null)
+	const { data } = useWorkspaces()
 	useEdgeSwipeDrawer(drawerRef)
 	// A tapped notification arrives as a message from the service worker, on whichever
 	// screen the app happens to be showing — so the listener lives with the router.
@@ -56,23 +65,35 @@ function Shell() {
 	usePrefsSync()
 	return (
 		<VoiceCallProvider>
-			<div className="flex h-full overflow-hidden">
-				{sidebarOpen ? (
-					<div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} aria-hidden />
+			<div className="flex h-full min-h-0 flex-col overflow-hidden">
+				<div className="flex min-h-0 flex-1 overflow-hidden">
+					{sidebarOpen ? (
+						<div
+							className="fixed inset-0 z-40 bg-black/50 md:hidden"
+							onClick={() => setSidebarOpen(false)}
+							aria-hidden
+						/>
+					) : null}
+					<aside
+						ref={drawerRef}
+						className={cn(
+							'fixed inset-y-0 left-0 z-50 flex w-[85%] max-w-80 flex-col border-r border-border-soft bg-bg transition-transform duration-200 ease-out',
+							'md:static md:z-auto md:w-72 md:max-w-none md:shrink-0 md:translate-x-0 md:transition-none lg:w-80',
+							sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+						)}
+					>
+						<WorkspaceList selectedId={match?.params.workspaceId} />
+					</aside>
+					<main className="flex min-w-0 flex-1 flex-col">
+						<Outlet />
+					</main>
+				</div>
+				{data?.workflowWarning || data?.uiQuarantine ? (
+					<div className="pb-safe relative z-[60] shrink-0 border-t border-del/40">
+						<WorkflowWarningBanner warning={data.workflowWarning} />
+						<UiQuarantineBanner quarantine={data.uiQuarantine} />
+					</div>
 				) : null}
-				<aside
-					ref={drawerRef}
-					className={cn(
-						'fixed inset-y-0 left-0 z-50 flex w-[85%] max-w-80 flex-col border-r border-border-soft bg-bg transition-transform duration-200 ease-out',
-						'md:static md:z-auto md:w-72 md:max-w-none md:shrink-0 md:translate-x-0 md:transition-none lg:w-80',
-						sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-					)}
-				>
-					<WorkspaceList selectedId={match?.params.workspaceId} />
-				</aside>
-				<main className="flex min-w-0 flex-1 flex-col">
-					<Outlet />
-				</main>
 			</div>
 			<VoiceCallSheet />
 		</VoiceCallProvider>

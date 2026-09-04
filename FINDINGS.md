@@ -61,16 +61,19 @@ defines provider-specific defaults only for Claude Code and Codex.
 A provider-changing model selection rerenders the composer controls, so model and
 effort cannot safely share one AX pass. The verified sequence is model-only, DB
 confirmation of `model` plus `agent_type`, reacquire controls, delta-only
-effort/fast for a delegated role, then final DB confirmation. The generic legacy
-settings endpoint can still carry Plan independently. Codex's measured effort ring is
+effort/fast for a frozen Workflow role, then final DB confirmation. Plan is a
+separate generic per-chat control and remains independently available through the
+ordinary agent-option path; Workflow neither freezes nor interprets it and adds no
+Plan-specific policy or UI copy. Codex's measured effort ring is
 `none` (an unnamed AX button), `low` (labelled “Light”), `medium`, `high`, `xhigh`
 (“Extra high”), `max`, and stored `ultra` (labelled “Ultra”). The relay normalizes
 that final stored value to its existing `ultracode` wire key. Claude retains its
-Low-through-Ultracode ring. Plan mode was not a reliable live control during this
-measurement and must not be used by delegated roles or as a completion signal.
+Low-through-Ultracode ring. Plan was not a reliable orchestration signal during this
+measurement, so phase progress and completion come only from durable Workflow
+receipts—not from its value.
 The implementation-time live check stopped at configuration on blank, unsent
 chats: it did not submit a delegated prompt or run a Fable/Claude worker. The
-end-to-end delegation state machine stays under injected fake-actuator coverage
+end-to-end Workflow state machine stays under injected fake-actuator coverage
 until a separate live smoke is explicitly wanted.
 
 Crucially, **Conductor's `sessions.id` equals the Claude Code `claude_session_id`** — the app is a GUI over Claude Code sessions.
@@ -125,6 +128,42 @@ recorded tokens/cost rather than a provider subscription allowance. The relay re
 those two as unavailable. `src/plan-usage.ts` normalizes the supported responses,
 runs them concurrently on demand, coalesces simultaneous reads, and caches the result
 for one minute; no plan read rides the 2.5s workspace poll.
+
+### Deterministic Workflow needs its own evidence ledger
+
+Conductor's database supplies excellent positive receipts—an exact workspace/session,
+an outbox row, or a delivered message row—but it has no concept of one cross-provider
+Workflow, a frozen role snapshot, a phase capability, or which relay process owns the
+next UI effect. It also cannot prove a negative after a process dies: failing to find a
+new tab does not prove that a dispatched click never happened. Treating the legacy
+worktree JSON delegation queue as that authority left both phase ordering and
+cross-process effect ownership implicit.
+
+The implemented coordinator therefore uses a separate WAL database,
+`stateDir()/orchestration.db`. The PWA's UI-only `POST /api/workflows` transaction
+records the immutable objective, all three frozen roles, canonical idempotency key,
+target baseline, prepared first effect, and dormant guaranteed explorer before any
+visible action. Ordinary create/send routes have no Workflow flag, and no MCP tool can
+start one. The only agent-facing Workflow mutation is Workflow-scoped `delegate_task`,
+authorized by a hashed capability tied to the exact root, phase, cycle, and revision.
+Extra explorers remain possible, but implementation stays closed until every current
+exploration Baton has a delivered parent-message receipt.
+
+The same database owns logical jobs and their physical attempts, UI effects and their
+receipts, an audit stream, relay PID/start identities, and the cross-process UI lease.
+An external helper waits behind a private gate until its identity and `mayExecute`
+boundary are durable. After a crash, positive receipts can safely commit an effect;
+provably pre-dispatch failures can Retry; candidate deltas require explicit phone
+Adopt; an unresolved possibly-executed action requires a separately confirmed risky
+Replay or Cancel. Review is durable rather than inferred from chat idleness and ends
+only through another permitted tracked pass or phone Complete. Existing legacy JSON
+jobs may drain, but ordinary new delegation intake is rejected.
+
+This machinery controls ordering and ownership, not the root process's filesystem
+permissions. The planning root is still an ordinary Conductor chat with its normal
+tools. Its instruction says to investigate without editing and the coordinator routes
+tracked changes through the implementation role, but that no-edit boundary is a
+prompt/orchestration contract—not an OS sandbox.
 
 **Durability:** an app update can rename every UI string and both read paths
 keep working. The schema has migrated additively (`_sqlx_migrations`, many

@@ -193,6 +193,15 @@ export interface DeliveryCursor {
 	outboxIds: ReadonlySet<string>
 }
 
+/**
+ * A send is first accepted into Conductor's outbox, then promoted under the same
+ * message id into a durable turn. Keeping those states tagged prevents an accepted
+ * Baton from opening the next Workflow phase before it actually reaches the root.
+ */
+export type DeliveryReceipt =
+	| { kind: 'outbox'; id: string }
+	| { kind: 'message'; id: string; rowid: number; turnId: string | null }
+
 export interface Workspace extends WorkspaceRow {
 	/** Chats in this workspace Conductor flags unread — empty for most (see `unreadSessions`). */
 	unread_sessions: UnreadSession[]
@@ -939,16 +948,166 @@ export class Reads {
 
 	/** Has this send created either a durable user row or a newly-owned outbox item? */
 	promptDeliveredSince(sessionId: string, text: string, before: DeliveryCursor): boolean {
+		return this.deliveryReceiptSince(sessionId, text, before) !== null
+	}
+
+	private deliveryMessageRows(
+		where: string,
+		params: unknown[]
+	): Array<{
+		rowid: number
+		id: string
+		content: string | null
+		turn_id: string | null
+	}> {
+		const select = (turn: string) =>
+			`SELECT rowid, id, content, ${turn} AS turn_id
+			 FROM session_messages
+			 WHERE session_id = ? AND role = 'user' AND ${where}
+			 ORDER BY rowid ASC`
+		try {
+			return this.db.query(select('turn_id'), params)
+		} catch (error) {
+			// turn_id predates the current outbox protocol. Preserve the tagged receipt
+			// on older Conductor builds, with a truthful null rather than inventing a turn.
+			if (!(error instanceof Error && /no such column:\s*turn_id/i.test(error.message))) throw error
+			return this.db.query(select('NULL'), params)
+		}
+	}
+
+	private rawOutboxRows(
+		sessionId: string,
+		messageId?: string
+	): Array<{
+		message_id: string
+		delivery_payload: string | null
+	}> {
+		if (!this.hasMessageOutbox()) return []
+		try {
+			return this.db.query(
+				`SELECT message_id, delivery_payload
+				 FROM session_messages_outbox
+				 WHERE session_id = ?${messageId === undefined ? '' : ' AND message_id = ?'}
+				 ORDER BY COALESCE(queue_order, 2147483647), created_at ASC`,
+				messageId === undefined ? [sessionId] : [sessionId, messageId]
+			)
+		} catch (error) {
+			if (!(error instanceof Error && /no such table:\s*session_messages_outbox/i.test(error.message))) throw error
+			this.messageOutboxAvailable = false
+			this.messageOutboxCheckedAt = Date.now()
+			return []
+		}
+	}
+
+	private outboxText(payload: string | null): string | null {
+		try {
+			const message = (JSON.parse(payload ?? '') as { message?: unknown }).message
+			return typeof message === 'string' ? message : null
+		} catch {
+			return null
+		}
+	}
+
+	/**
+	 * Find the first positive receipt created after a pre-send cursor. Matching uses
+	 * the private raw text inside this read-only method: parsed transcripts intentionally
+	 * redact Workflow capabilities, which would make two rotated envelopes look equal.
+	 * A durable row wins over a stale outbox snapshot if promotion straddles the reads.
+	 */
+	deliveryReceiptSince(sessionId: string, text: string, before: DeliveryCursor): DeliveryReceipt | null {
 		const target = text.trim()
-		const durable = this.durableMessages(sessionId, before.rowid).entries
-		const pending = this.outboxMessages(sessionId, false)
-		return [...durable, ...pending].some(
-			entry => entry.role === 'user' && entry.text.trim() === target && !before.outboxIds.has(entry.id)
+		const durableReceipt = (): DeliveryReceipt | null => {
+			const durable = this.deliveryMessageRows('rowid > ?', [sessionId, before.rowid]).find(
+				row => row.content?.trim() === target && !before.outboxIds.has(row.id)
+			)
+			return durable ? { kind: 'message', id: durable.id, rowid: durable.rowid, turnId: durable.turn_id ?? null } : null
+		}
+		const durable = durableReceipt()
+		if (durable) return durable
+		const accepted = this.rawOutboxRows(sessionId).find(
+			row => this.outboxText(row.delivery_payload)?.trim() === target && !before.outboxIds.has(row.message_id)
 		)
+		if (accepted) return { kind: 'outbox', id: accepted.message_id }
+		// Promotion deletes the outbox row and inserts the durable row. If that
+		// transaction lands after our first query but before the outbox query, one
+		// final durable read closes the otherwise false-negative snapshot gap.
+		return durableReceipt()
+	}
+
+	/**
+	 * Recover an orphaned Workflow send by its persisted non-secret correlation
+	 * marker. Raw message text stays inside this read-only boundary; callers receive
+	 * only the tagged receipt, and ordinary transcript surfaces still scrub the whole
+	 * private envelope that contains the marker.
+	 */
+	deliveryReceiptContainingSince(sessionId: string, marker: string, before: DeliveryCursor): DeliveryReceipt | null {
+		if (!marker) return null
+		const durableReceipt = (): DeliveryReceipt | null => {
+			const durable = this.deliveryMessageRows('rowid > ?', [sessionId, before.rowid]).find(
+				row => row.content?.includes(marker) && !before.outboxIds.has(row.id)
+			)
+			return durable ? { kind: 'message', id: durable.id, rowid: durable.rowid, turnId: durable.turn_id ?? null } : null
+		}
+		const durable = durableReceipt()
+		if (durable) return durable
+		const accepted = this.rawOutboxRows(sessionId).find(
+			row => this.outboxText(row.delivery_payload)?.includes(marker) && !before.outboxIds.has(row.message_id)
+		)
+		return accepted ? { kind: 'outbox', id: accepted.message_id } : durableReceipt()
+	}
+
+	/** Follow one accepted id as Conductor promotes it from outbox to transcript. */
+	deliveryReceiptForId(sessionId: string, messageId: string): DeliveryReceipt | null {
+		if (!this.hasMessageOutbox()) {
+			const durable = this.deliveryMessageRows('id = ?', [sessionId, messageId])[0]
+			return durable ? { kind: 'message', id: durable.id, rowid: durable.rowid, turnId: durable.turn_id ?? null } : null
+		}
+
+		const select = (turn: string) => `
+			SELECT kind, id, rowid, turn_id
+			FROM (
+				SELECT 'message' AS kind, id, rowid, ${turn} AS turn_id, 0 AS preference
+				FROM session_messages
+				WHERE session_id = ? AND role = 'user' AND id = ?
+				UNION ALL
+				SELECT 'outbox' AS kind, message_id AS id, NULL AS rowid, NULL AS turn_id, 1 AS preference
+				FROM session_messages_outbox
+				WHERE session_id = ? AND message_id = ?
+			)
+			ORDER BY preference
+			LIMIT 1`
+		type ReceiptRow = {
+			kind: 'message' | 'outbox'
+			id: string
+			rowid: number | null
+			turn_id: string | null
+		}
+		let row: ReceiptRow | undefined
+		try {
+			row = this.db.query<ReceiptRow>(select('turn_id'), [sessionId, messageId, sessionId, messageId])[0]
+		} catch (error) {
+			if (error instanceof Error && /no such column:\s*turn_id/i.test(error.message)) {
+				row = this.db.query<ReceiptRow>(select('NULL'), [sessionId, messageId, sessionId, messageId])[0]
+			} else if (error instanceof Error && /no such table:\s*session_messages_outbox/i.test(error.message)) {
+				this.messageOutboxAvailable = false
+				this.messageOutboxCheckedAt = Date.now()
+				return this.deliveryReceiptForId(sessionId, messageId)
+			} else {
+				throw error
+			}
+		}
+		if (!row) return null
+		if (row.kind === 'outbox') return { kind: 'outbox', id: row.id }
+		if (!Number.isSafeInteger(row.rowid)) return null
+		return { kind: 'message', id: row.id, rowid: row.rowid as number, turnId: row.turn_id ?? null }
 	}
 
 	/** Incremental durable transcript fetch, without the independently replaced outbox snapshot. */
-	private durableMessages(sessionId: string, afterRowid: number): { entries: TranscriptEntry[]; cursor: number } {
+	private durableMessages(
+		sessionId: string,
+		afterRowid: number,
+		turnId?: string
+	): { entries: TranscriptEntry[]; cursor: number } {
 		const rows = this.db.query<{
 			rowid: number
 			id: string
@@ -961,9 +1120,9 @@ export class Reads {
 		}>(
 			`SELECT rowid, id, role, content, full_message, created_at, sent_at, queue_order
 			 FROM session_messages
-			 WHERE session_id = ? AND rowid > ?
+			 WHERE session_id = ? AND rowid > ?${turnId === undefined ? '' : ' AND turn_id = ?'}
 			 ORDER BY rowid ASC`,
-			[sessionId, afterRowid]
+			turnId === undefined ? [sessionId, afterRowid] : [sessionId, afterRowid, turnId]
 		)
 		const worktree = this.sessionWorktree(sessionId)
 		const entries: TranscriptEntry[] = []
@@ -1036,5 +1195,14 @@ export class Reads {
 			categories: current.categories,
 			forkTokens
 		}
+	}
+
+	/** Exact durable frames from one Conductor turn; used to keep managed child outcomes correlated. */
+	getMessagesForTurn(
+		sessionId: string,
+		turnId: string,
+		afterRowid = 0
+	): { entries: TranscriptEntry[]; cursor: number } {
+		return this.durableMessages(sessionId, afterRowid, turnId)
 	}
 }

@@ -123,6 +123,19 @@ export const routes = {
 	delegations: flat('GET', '/api/delegations'),
 	/** Dismiss one failed job without touching its chats or session-role identity. */
 	dismissDelegation: param('DELETE', '/api/delegations/:delegationId'),
+	/** UI-only intake for a durable Workflow; MCP deliberately exposes no start tool. */
+	workflows: flat('POST', '/api/workflows'),
+	/** Cancel without destructive Conductor UI actions; `clientId` travels in the query. */
+	workflow: param('DELETE', '/api/workflows/:workflowId'),
+	/** The only agent-facing Workflow mutation, authorized by the current phase capability. */
+	workflowDelegation: param('POST', '/api/workflows/:workflowId/delegations'),
+	/** Phone-only, idempotent recovery actions for a blocked Workflow. */
+	workflowRetry: param('POST', '/api/workflows/:workflowId/retry'),
+	workflowAdopt: param('POST', '/api/workflows/:workflowId/adopt'),
+	workflowReplay: param('POST', '/api/workflows/:workflowId/replay'),
+	workflowComplete: param('POST', '/api/workflows/:workflowId/complete'),
+	/** Phone-only acknowledgement that the user inspected Conductor after an ambiguous UI dispatch. */
+	confirmUiStable: flat('POST', '/api/ui-quarantine/confirm'),
 
 	// ── workspaces ──
 	createWorkspace: flat('POST', '/api/workspaces'),
@@ -162,7 +175,7 @@ export const routes = {
 	uploadAttachment: param('POST', '/api/sessions/:sessionId/attachments'),
 	/** Copy a chat into a fresh tab beside it, as a Conductor attachment (src/attachments.ts). */
 	splitChat: param('POST', '/api/sessions/:sessionId/split'),
-	/** Accept a persisted cross-provider job and return before its UI stages run. */
+	/** Legacy intake retained only to reject new ordinary-chat delegation after migration. */
 	delegateTask: param('POST', '/api/sessions/:sessionId/delegate'),
 	/** Dismiss a prompt parked behind the lock screen (src/parked.ts). */
 	dismissParkedPrompt: param('DELETE', '/api/sessions/:sessionId/prompt')

@@ -1,6 +1,6 @@
 # conductor-remote
 
-Phone control panel for **local** Conductor agents: a dependency-free Node relay
+Phone control panel for **local** Conductor agents: a small Node relay
 serves an installable React PWA, reads agent state, and relays prompts back into
 Conductor. Deep dives live in [ARCHITECTURE.md](./ARCHITECTURE.md) (file map, and how
 to re-derive Conductor's internals) and [FINDINGS.md](./FINDINGS.md) (the Conductor
