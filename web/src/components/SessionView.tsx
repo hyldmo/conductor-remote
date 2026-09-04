@@ -687,7 +687,7 @@ function ContextButton({ session, onOpen }: { session: Session; onOpen: () => vo
 			aria-label={`Context for ${session.title || 'Untitled'}: ${Math.round(used)}% used`}
 			aria-haspopup="dialog"
 			className={cn(
-				'mr-1 flex h-7 min-w-10 shrink-0 items-center justify-center rounded-full px-2 text-[11px] tabular-nums transition active:bg-bg/70',
+				'flex h-7 min-w-10 shrink-0 items-center justify-center rounded-full px-2 text-[11px] tabular-nums transition active:bg-bg/70',
 				used >= 80 ? 'text-working' : 'text-faint'
 			)}
 		>
