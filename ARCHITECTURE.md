@@ -38,7 +38,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   relay's matching regex, so the two cannot drift
   shared.ts       what both sides must compute identically (workspaceTitle, query tokens,
                   the locked-Mac phrase) — the one module web/ may import as a *value*
-  mcp-tools.ts    the 25 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
+  mcp-tools.ts    the 26 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
                   the relay through an injected `call`, so both transports share one path
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively

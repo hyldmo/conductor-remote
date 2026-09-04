@@ -293,7 +293,7 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 `conductor-remote mcp` is an MCP server on stdio. It gives a coding agent the same
 control the phone has, over the same relay.
 
-Two transports, same 25 tools.
+Two transports, same 26 tools.
 
 | | |
 |---|---|
@@ -301,6 +301,7 @@ Two transports, same 25 tools.
 | `list_workspaces` · `list_chats` · `workspace_diff` · `list_repos` | what is running, and what it changed |
 | `plan_usage` | prompt-free Claude/Codex subscription allowances and reset times |
 | `create_workspace` | start work in a repo, with an optional first prompt and model/effort/plan/fast choices, or `workflow: true` to use the configured planning root and authorize delegation without Plan mode. Creation uses a deep link; selected settings apply before the prompt |
+| `dev_server` | inspect, start, forward or stop a workspace's configured Conductor Run task; use this instead of launching a long-lived server from an agent shell |
 | `send_prompt` · `stop_turn` · `close_chat` | talk to a running agent, cancel its turn, or hide a chat tab |
 | `split_chat` | move a tangent into a fresh tab, or set `new_workspace` to carry the transcript and current code into a separate worktree |
 | `list_roles` · `set_role` | inspect or edit exact-picker delegated roles (model, effort, fast, and preamble; no Plan setting) |
@@ -315,7 +316,7 @@ Two transports, same 25 tools.
 **Name it `conductor-remote`, not `conductor`.** Conductor injects an MCP server of its
 own into every agent it runs, and that one is already called `conductor`. Register this
 under the same name and inside a Conductor workspace the two collide: Conductor's tools
-win, these 25 vanish, and the only trace left is this server's instructions text —
+win, these 26 vanish, and the only trace left is this server's instructions text —
 so it reads as if the tools should be there.
 
 **stdio** — for an agent running on this Mac. The client spawns it as a child process;
@@ -368,6 +369,7 @@ of the time.
 | `list_repos` | repos a workspace can be created in |
 | `plan_usage` | Claude/Codex rolling subscription limits, without sending a prompt |
 | `create_workspace` | start a new workspace, optionally with a first prompt and agent settings, or as a configured delegated workflow |
+| `dev_server` | inspect/start/stop the configured Run task and its tailnet preview (`status` is read-only; start/stop drive the real UI) |
 | `send_prompt` | send into an existing chat (drives the real UI) |
 | `stop_turn` | cancel a running answer (drives the real UI) |
 | `close_chat` | hide a chat tab without deleting its transcript (drives the real UI) |
@@ -375,7 +377,7 @@ of the time.
 | `archive_workspace` | archive a workspace (drives the real UI, deletes the worktree) |
 
 Search, transcript, workspace/chat, diff, repo, role, delegation-status, dismiss,
-keep-awake-status, and log reads touch no Conductor UI. `create_workspace` opens a
+dev-server status, keep-awake-status, and log reads touch no Conductor UI. `create_workspace` opens a
 Conductor deep link, so creation itself needs no Accessibility and steals no focus;
 requested model, effort, plan, and fast settings are applied later before the first
 prompt. Its `workflow` option instead freezes the configured `planning` role, tags the
@@ -383,6 +385,10 @@ first chat as that role, and explicitly authorizes that root to use `delegate_ta
 it cannot be combined with explicit agent settings and never touches Plan mode. `delegate_task`
 persists and returns immediately, then its background queue opens/configures/sends
 through the same serialized UI path as phone writes. It never changes Plan mode.
+Agents are explicitly told to use `dev_server` instead of starting a long-lived server
+from their shell. Its start and stop actions go through Conductor's Run controls, which
+preserves the workspace's allocated ports, run-mode policy and process-group cleanup;
+the MCP tool cannot forbid shell commands, but removes the reason to use one here.
 
 The HTTP transport is deliberately minimal: the server never initiates a message, so
 there is no SSE stream and `GET /mcp` answers 405, which the spec allows. It keeps no
