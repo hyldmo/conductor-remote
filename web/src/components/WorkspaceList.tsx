@@ -1,7 +1,7 @@
 import { ChevronDown, Gauge, PhoneCall, Plus, QrCode, Search, SlidersHorizontal, Workflow } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useModelCatalog, useWorkspaces } from '../hooks.ts'
+import { useModelCatalog, useRoles, useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
 	isDone,
@@ -19,7 +19,7 @@ import {
 } from '../lib/format.ts'
 import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { unreadCount } from '../lib/read.ts'
-import type { CachedModelGroup, Workspace } from '../lib/types.ts'
+import type { CachedModelGroup, RolesConfig, Workspace } from '../lib/types.ts'
 import { type RepoSelection, selectedRepos, workspaceFilterSummary } from '../lib/workspace-filter.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs, WORKING_HINT_MS } from '../store.ts'
 import { ChangeStats } from './ChangeStats.tsx'
@@ -34,7 +34,7 @@ import { RolesSettings } from './RolesSettings.tsx'
 import { SearchSheet } from './SearchSheet.tsx'
 import { Badge, Empty, RelayUnreachable, RepoAvatar, RunBadge, Spinner, StatusDot } from './ui.tsx'
 import { useVoiceCall } from './VoiceProvider.tsx'
-import { WorkspaceRunLabel } from './WorkspaceRunLabel.tsx'
+import { WorkspaceRunLabel, workspaceHasWorkflow } from './WorkspaceRunLabel.tsx'
 
 /** Pinned first (matches the relay's order), then the chosen sort key. */
 function sortWorkspaces(list: Workspace[], sortBy: SortBy): Workspace[] {
@@ -115,6 +115,12 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	// subscription per row on a list that re-reads every 2.5s. It costs no UI trip —
 	// `GET /api/models` serves what the picker was last seen holding.
 	const modelGroups = useModelCatalog().data?.groups
+	// Managed runs carry their frozen roles in `/api/state`; only pre-coordinator
+	// Workflow roots need today's configured roles to reconstruct their icon stack.
+	const needsLegacyWorkflowRoles = workspaces.some(
+		workspace => !workspace.workflow && !workspace.workflow_identity && workspaceHasWorkflow(workspace)
+	)
+	const workflowRoles = useRoles(needsLegacyWorkflowRoles).data?.roles
 
 	// ⌘K / Ctrl+K opens search from any screen. This component is always mounted —
 	// drawer on phones, static rail on md+ — so the one listener covers the whole app
@@ -333,6 +339,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 															unread={unread}
 															selected={w.id === selectedId}
 															modelGroups={modelGroups}
+															workflowRoles={workflowRoles}
 															promptState={promptState}
 															showDiffs={view.showDiffs}
 														/>
@@ -585,6 +592,7 @@ function WorkspaceCard({
 	unread,
 	selected,
 	modelGroups,
+	workflowRoles,
 	promptState,
 	showDiffs
 }: {
@@ -592,6 +600,7 @@ function WorkspaceCard({
 	unread: number
 	selected: boolean
 	modelGroups: CachedModelGroup[] | undefined
+	workflowRoles: RolesConfig['roles'] | undefined
 	promptState: PromptIndicatorState
 	showDiffs: boolean
 }) {
@@ -639,7 +648,7 @@ function WorkspaceCard({
 				    span several models, while an ordinary workspace names its active chat's model. */}
 				<div className="flex min-w-0 items-end gap-2 text-xs text-muted">
 					<span className="shrink-0 text-[11px] text-faint">{relativeAge(w.updated_at)}</span>
-					<WorkspaceRunLabel workspace={w} modelGroups={modelGroups} />
+					<WorkspaceRunLabel workspace={w} modelGroups={modelGroups} configuredRoles={workflowRoles} />
 				</div>
 			</div>
 		</>

@@ -276,6 +276,9 @@ export interface WorkflowRunWire {
 	updatedAt: number
 }
 
+/** Newest durable run identity retained for a workspace after its active Workflow leaves the live run list. */
+export type WorkflowIdentityWire = Pick<WorkflowRunWire, 'id' | 'phase' | 'roles'>
+
 export type StartWorkflowRequest =
 	| {
 			clientId: string
@@ -376,6 +379,8 @@ export type Workspace = ReadWorkspace & {
 	delegations?: DelegationProjection[]
 	session_roles?: Record<string, SessionRoleAssignment>
 	workflow?: WorkflowRunWire
+	/** Sidebar identity for the newest terminal run; active controls continue to use `workflow`. */
+	workflow_identity?: WorkflowIdentityWire
 	/** A malformed/unsupported worktree file is preserved and reported here. */
 	delegation_warning?: string
 }

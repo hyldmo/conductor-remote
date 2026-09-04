@@ -165,6 +165,57 @@ describe('OrchestrationDb schema and intake', () => {
 		db.close()
 	})
 
+	test('projects only the newest Workflow identity for each requested workspace', () => {
+		let clock = 1_000
+		const db = new OrchestrationDb(databaseFile(), { now: () => clock++ })
+		const first = startExisting(db).run
+		db.transitionWorkflowRun({
+			runId: first.id,
+			expectedPhase: 'pending_root',
+			expectedCancellationGeneration: 0,
+			phase: 'completed',
+			eventKey: 'complete-first',
+			eventType: 'workflow_completed'
+		})
+		const newestRoles = { ...roles, planning: { ...roles.planning, model: 'Newest planner' } }
+		const newest = startExisting(db, {
+			id: 'newest-workspace-1',
+			clientId: 'newest-workspace-1-client',
+			roles: newestRoles
+		}).run
+		db.transitionWorkflowRun({
+			runId: newest.id,
+			expectedPhase: 'pending_root',
+			expectedCancellationGeneration: 0,
+			phase: 'cancelled',
+			eventKey: 'cancel-newest',
+			eventType: 'workflow_cancelled'
+		})
+		const other = startExisting(db, {
+			id: 'workspace-2-run',
+			clientId: 'workspace-2-client',
+			target: { kind: 'existing_session', workspaceId: 'workspace-2', sessionId: 'root-2' }
+		}).run
+
+		const projected = db.listLatestWorkflowProjectionsForWorkspaces([
+			'workspace-1',
+			'workspace-2',
+			'workspace-1',
+			'unknown'
+		])
+		const byWorkspace = new Map(projected.map(run => [run.workspaceId, run]))
+
+		expect(projected).toHaveLength(2)
+		expect(byWorkspace.get('workspace-1')).toMatchObject({
+			id: newest.id,
+			phase: 'cancelled',
+			roles: { planning: { model: 'Newest planner' } }
+		})
+		expect(byWorkspace.get('workspace-2')).toMatchObject({ id: other.id, phase: 'pending_root' })
+		expect(db.listLatestWorkflowProjectionsForWorkspaces([])).toEqual([])
+		db.close()
+	})
+
 	test('preserves an unsupported future schema and refuses writes', () => {
 		const file = databaseFile()
 		const raw = new DatabaseSync(file)
