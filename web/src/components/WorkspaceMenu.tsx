@@ -1,11 +1,84 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Archive, Check } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { SETTABLE_STATUSES, STATUS_COLORS, workspaceStatus, workspaceStatusLabel } from '../lib/format.ts'
 import type { Workspace } from '../lib/types.ts'
 import { useApp } from '../store.ts'
+
+/**
+ * The status and archive writes, owned by the session view and shared between this
+ * menu and the command palette. One `busy` for both surfaces, because the relay drives
+ * Conductor's single window for either and a second request would only queue behind
+ * the first; one `error`, because whichever surface asked, the menu is where the answer
+ * is read.
+ */
+export interface WorkspaceActions {
+	/** The status being applied, or 'archive', while the relay drives Conductor's UI. */
+	busy: string | null
+	error: string | null
+	setStatus: (status: string) => Promise<void>
+	archive: (stopAgents: boolean) => Promise<void>
+	dismissError: () => void
+}
+
+export function useWorkspaceActions(workspaceId: string | undefined): WorkspaceActions {
+	const [busy, setBusy] = useState<string | null>(null)
+	// Kept with the workspace it came from: the session view stays mounted across a route
+	// change, and a refusal from the workspace you left is not one from the one you reached.
+	const [refusal, setRefusal] = useState<{ workspaceId: string; message: string } | null>(null)
+	const queryClient = useQueryClient()
+	const error = refusal && refusal.workspaceId === workspaceId ? refusal.message : null
+	const setError = useCallback(
+		(message: string | null) => setRefusal(message && workspaceId ? { workspaceId, message } : null),
+		[workspaceId]
+	)
+
+	const setStatus = useCallback(
+		async (status: string) => {
+			if (!workspaceId || busy) return
+			setBusy(status)
+			setError(null)
+			try {
+				const r = await client.setStatus(workspaceId, status)
+				if (!r.ok) setError(r.error ?? 'status change failed')
+				await queryClient.invalidateQueries({ queryKey: ['state'] })
+			} catch (e) {
+				setError(e instanceof Error ? e.message : 'status change failed')
+			} finally {
+				setBusy(null)
+			}
+		},
+		[workspaceId, busy, queryClient, setError]
+	)
+
+	const archive = useCallback(
+		async (stopAgents: boolean) => {
+			if (!workspaceId || busy) return
+			setBusy('archive')
+			setError(null)
+			try {
+				// The relay counts the running agents itself and refuses unless this says the
+				// dialog above named them — so send what the user was actually shown.
+				const r = await client.archive(workspaceId, stopAgents)
+				if (!r.ok) setError(r.error ?? 'archiving failed')
+				// The state poll drops the workspace on its own; invalidating both keys is what
+				// swaps this chat to its archived, read-only view now rather than in 2.5s.
+				await queryClient.invalidateQueries({ queryKey: ['state'] })
+				await queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId] })
+			} catch (e) {
+				setError(e instanceof Error ? e.message : 'archiving failed')
+			} finally {
+				setBusy(null)
+			}
+		},
+		[workspaceId, busy, queryClient, setError]
+	)
+
+	const dismissError = useCallback(() => setRefusal(null), [])
+	return { busy, error, setStatus, archive, dismissError }
+}
 
 /**
  * The workspace's own menu, on the phone: move it between the sidebar's status
@@ -26,13 +99,19 @@ import { useApp } from '../store.ts'
  * deleted and any turn still in flight ends with it. The chat itself survives —
  * this workspace becomes the read-only view search already opens.
  */
-export function WorkspaceMenu({ workspace, agentsRunning }: { workspace: Workspace; agentsRunning: number }) {
+export function WorkspaceMenu({
+	workspace,
+	agentsRunning,
+	actions
+}: {
+	workspace: Workspace
+	agentsRunning: number
+	actions: WorkspaceActions
+}) {
 	const [open, setOpen] = useState(false)
 	const [confirmingArchive, setConfirmingArchive] = useState(false)
-	const [busy, setBusy] = useState<string | null>(null)
-	const [error, setError] = useState<string | null>(null)
 	const online = useApp(s => s.online)
-	const queryClient = useQueryClient()
+	const { busy, error } = actions
 
 	const current = workspaceStatus(workspace)
 
@@ -41,42 +120,15 @@ export function WorkspaceMenu({ workspace, agentsRunning }: { workspace: Workspa
 		setConfirmingArchive(false)
 	}
 
-	const apply = async (status: string) => {
-		if (busy) return
+	const apply = (status: string) => {
 		close()
 		if (status === current) return
-		setBusy(status)
-		setError(null)
-		try {
-			const r = await client.setStatus(workspace.id, status)
-			if (!r.ok) setError(r.error ?? 'status change failed')
-			await queryClient.invalidateQueries({ queryKey: ['state'] })
-		} catch (e) {
-			setError(e instanceof Error ? e.message : 'status change failed')
-		} finally {
-			setBusy(null)
-		}
+		void actions.setStatus(status)
 	}
 
-	const archive = async () => {
-		if (busy) return
+	const archive = () => {
 		close()
-		setBusy('archive')
-		setError(null)
-		try {
-			// The relay counts the running agents itself and refuses unless this says the
-			// dialog above named them — so send what the user was actually shown.
-			const r = await client.archive(workspace.id, agentsRunning > 0)
-			if (!r.ok) setError(r.error ?? 'archiving failed')
-			// The state poll drops the workspace on its own; invalidating both keys is what
-			// swaps this chat to its archived, read-only view now rather than in 2.5s.
-			await queryClient.invalidateQueries({ queryKey: ['state'] })
-			await queryClient.invalidateQueries({ queryKey: ['workspace', workspace.id] })
-		} catch (e) {
-			setError(e instanceof Error ? e.message : 'archiving failed')
-		} finally {
-			setBusy(null)
-		}
+		void actions.archive(agentsRunning > 0)
 	}
 
 	const archiving = busy === 'archive'
@@ -166,7 +218,7 @@ export function WorkspaceMenu({ workspace, agentsRunning }: { workspace: Workspa
 			{error ? (
 				<button
 					type="button"
-					onClick={() => setError(null)}
+					onClick={actions.dismissError}
 					className="absolute right-2 top-full z-30 max-w-64 rounded-lg border border-del/40 bg-surface px-3 py-2 text-left text-xs text-del shadow-xl"
 				>
 					{error}

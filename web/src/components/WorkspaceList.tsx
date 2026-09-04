@@ -1,8 +1,30 @@
-import { ChevronDown, Gauge, PhoneCall, Plus, QrCode, Search, SlidersHorizontal, Workflow } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import {
+	ArrowDownUp,
+	ChevronDown,
+	CircleCheck,
+	FileDiff,
+	FolderTree,
+	Gauge,
+	GitMerge,
+	LayoutList,
+	ListFilter,
+	type LucideIcon,
+	Moon,
+	PhoneCall,
+	Plus,
+	QrCode,
+	ScrollText,
+	Search,
+	SlidersHorizontal,
+	Sun,
+	SunMoon,
+	Workflow
+} from 'lucide-react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useModelCatalog, useRoles, useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
+import { type Command, useCommandStore, useRegisterCommands } from '../lib/commands.ts'
 import {
 	isDone,
 	isMerged,
@@ -19,8 +41,9 @@ import {
 } from '../lib/format.ts'
 import { type PromptIndicatorState, promptIndicator } from '../lib/pending.ts'
 import { unreadCount } from '../lib/read.ts'
+import { readThemePreference, type ThemePreference, writeThemePreference } from '../lib/theme.ts'
 import type { CachedModelGroup, RolesConfig, Workspace } from '../lib/types.ts'
-import { type RepoSelection, selectedRepos, workspaceFilterSummary } from '../lib/workspace-filter.ts'
+import { ALL_REPOS, type RepoSelection, selectedRepos, workspaceFilterSummary } from '../lib/workspace-filter.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs, WORKING_HINT_MS } from '../store.ts'
 import { ChangeStats } from './ChangeStats.tsx'
 import { ConnectSheet } from './ConnectSheet.tsx'
@@ -106,7 +129,9 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const [logsOpen, setLogsOpen] = useState(false)
 	const [usageOpen, setUsageOpen] = useState(false)
 	const [rolesOpen, setRolesOpen] = useState(false)
-	const [searchOpen, setSearchOpen] = useState(false)
+	const searchOpen = useCommandStore(s => s.open)
+	const setSearchOpen = useCommandStore(s => s.setOpen)
+	const [theme, setTheme] = useState(readThemePreference)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
 	const unboundWorkflows = (data?.workflows ?? []).filter(workflow => !workflow.workspaceId)
@@ -122,20 +147,11 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	)
 	const workflowRoles = useRoles(needsLegacyWorkflowRoles).data?.roles
 
-	// ⌘K / Ctrl+K opens search from any screen. This component is always mounted —
-	// drawer on phones, static rail on md+ — so the one listener covers the whole app
-	// without a second copy next to the router. It toggles, palette-style, and the
-	// preventDefault keeps Ctrl+K away from the browser's own address-bar search.
+	// The theme is device-local and the Connect sheet edits it too, so re-read it as the
+	// palette opens rather than trust a copy taken at mount.
 	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
-				e.preventDefault()
-				setSearchOpen(o => !o)
-			}
-		}
-		window.addEventListener('keydown', onKey)
-		return () => window.removeEventListener('keydown', onKey)
-	}, [])
+		if (searchOpen) setTheme(readThemePreference())
+	}, [searchOpen])
 
 	const repoIcons = new Map(workspaces.map(w => [w.repo_name, w.icon] as const))
 	const selectedRepoNames = selectedRepos(view.repoSelection)
@@ -172,6 +188,199 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	// already says which repos are selected.
 	const repoFiltered = view.repoSelection.mode === 'selected'
 	const filtered = repoFiltered || view.hideMerged || view.hideDone
+
+	// The palette's rows for the sheets this toolbar opens and the switches inside View
+	// options (`lib/commands.ts`). Registered here because this component is always
+	// mounted and holds every setter involved; toggles read the store as they run, so a
+	// row cannot flip a value it was built against.
+	const setView = useApp(s => s.setView)
+	const voiceActive = voice.status !== 'idle'
+	const openPanel = voice.openPanel
+	const commands = useMemo<Command[]>(() => {
+		const groups: [GroupBy, string][] = [
+			['status', 'Status'],
+			['recent', 'Recent'],
+			['repo', 'Repo'],
+			['none', 'None']
+		]
+		const sorts: [SortBy, string][] = [
+			['updated', 'Updated'],
+			['created', 'Created'],
+			['name', 'Name']
+		]
+		const themes: [ThemePreference, string, LucideIcon][] = [
+			['system', 'System', SunMoon],
+			['light', 'Light', Sun],
+			['dark', 'Dark', Moon]
+		]
+		return [
+			{
+				id: 'app.search',
+				label: 'Search chats and actions',
+				group: 'App',
+				hidden: true,
+				shortcut: { key: 'k', mod: true },
+				run: () => setSearchOpen(open => !open)
+			},
+			{
+				id: 'app.newWorkspace',
+				label: 'New workspace',
+				group: 'App',
+				icon: Plus,
+				keywords: ['create', 'start', 'repo', 'branch'],
+				run: () => setNewOpen(true)
+			},
+			{
+				id: 'app.usage',
+				label: 'Plan usage',
+				group: 'App',
+				icon: Gauge,
+				keywords: ['models', 'quota', 'limits', 'rate', 'effort', 'defaults'],
+				run: () => setUsageOpen(true)
+			},
+			{
+				id: 'app.connect',
+				label: 'Connect a device',
+				group: 'App',
+				icon: QrCode,
+				keywords: ['qr', 'token', 'link', 'phone', 'pair', 'disconnect', 'notifications', 'push'],
+				run: () => setConnectOpen(true)
+			},
+			{
+				id: 'app.logs',
+				label: 'Relay logs',
+				group: 'App',
+				icon: ScrollText,
+				keywords: ['diagnostics', 'debug', 'errors'],
+				run: () => setLogsOpen(true)
+			},
+			{
+				id: 'app.roles',
+				label: 'Delegated roles',
+				group: 'App',
+				icon: Workflow,
+				keywords: ['workflow', 'planning', 'exploration', 'implementation', 'models'],
+				run: () => setRolesOpen(true)
+			},
+			{
+				id: 'app.controlRoom',
+				label: voiceActive ? 'Open active call' : 'Control room',
+				group: 'App',
+				icon: PhoneCall,
+				keywords: ['voice', 'call', 'fleet', 'orchestrator'],
+				run: openPanel
+			},
+			...themes.map(
+				([value, label, icon]): Command => ({
+					id: `app.theme.${value}`,
+					label: `Theme: ${label}`,
+					group: 'App',
+					icon,
+					keywords: ['appearance', 'dark mode', 'light mode'],
+					checked: theme === value,
+					run: () => {
+						writeThemePreference(value)
+						setTheme(value)
+					}
+				})
+			),
+			{
+				id: 'view.filters',
+				label: 'Workspace filters',
+				group: 'View',
+				icon: SlidersHorizontal,
+				keywords: ['view options', 'group', 'sort', 'repo'],
+				run: () => {
+					// The popover hangs off this toolbar, which on a phone may be in a closed drawer.
+					setSidebarOpen(true)
+					setControlsOpen(true)
+				}
+			},
+			{
+				id: 'view.hideMerged',
+				label: 'Hide merged',
+				group: 'View',
+				icon: GitMerge,
+				keywords: ['filter', 'pull request', 'pr', 'landed'],
+				checked: view.hideMerged,
+				run: () => setView({ hideMerged: !useApp.getState().view.hideMerged })
+			},
+			{
+				id: 'view.hideDone',
+				label: 'Hide done',
+				group: 'View',
+				icon: CircleCheck,
+				keywords: ['filter', 'status', 'finished'],
+				checked: view.hideDone,
+				run: () => setView({ hideDone: !useApp.getState().view.hideDone })
+			},
+			{
+				id: 'view.showDiffs',
+				label: 'Sidebar diffs',
+				group: 'View',
+				icon: FileDiff,
+				keywords: ['additions', 'deletions', 'line changes', 'stats'],
+				checked: view.showDiffs,
+				run: () => setView({ showDiffs: !useApp.getState().view.showDiffs })
+			},
+			{
+				id: 'view.showFolders',
+				label: 'Folders in the file rail',
+				group: 'View',
+				icon: FolderTree,
+				keywords: ['diff', 'files', 'tree', 'group'],
+				checked: view.showFolders,
+				run: () => setView({ showFolders: !useApp.getState().view.showFolders })
+			},
+			{
+				id: 'view.repos.all',
+				label: 'Show all repos',
+				group: 'View',
+				icon: ListFilter,
+				keywords: ['repo filter', 'clear', 'reset'],
+				enabled: repoFiltered,
+				run: () => setView({ repoSelection: ALL_REPOS })
+			},
+			...groups.map(
+				([value, label]): Command => ({
+					id: `view.groupBy.${value}`,
+					label: `Group by: ${label}`,
+					group: 'View',
+					icon: LayoutList,
+					keywords: ['sections', 'sidebar'],
+					checked: view.groupBy === value,
+					run: () => setView({ groupBy: value })
+				})
+			),
+			...sorts.map(
+				([value, label]): Command => ({
+					id: `view.sortBy.${value}`,
+					label: `Sort by: ${label}`,
+					group: 'View',
+					icon: ArrowDownUp,
+					keywords: ['order', 'sidebar'],
+					checked: view.sortBy === value,
+					run: () => setView({ sortBy: value })
+				})
+			)
+		]
+	}, [
+		theme,
+		view.hideMerged,
+		view.hideDone,
+		view.showDiffs,
+		view.showFolders,
+		view.groupBy,
+		view.sortBy,
+		repoFiltered,
+		voiceActive,
+		openPanel,
+		setView,
+		setSearchOpen,
+		setSidebarOpen
+	])
+	useRegisterCommands('sidebar', commands)
+
 	const repoLabel = repoFilterLabel(view.repoSelection)
 	const filterSummary = workspaceFilterSummary({
 		total: workspaces.length,
@@ -196,8 +405,8 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 						<button
 							type="button"
 							onClick={() => setSearchOpen(true)}
-							aria-label="Search workspaces and chats"
-							title="Search (⌘K)"
+							aria-label="Search chats and actions"
+							title="Search and actions (⌘K)"
 							className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 min-[360px]:size-9"
 						>
 							<Search size={18} />
