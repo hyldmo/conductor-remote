@@ -65,6 +65,7 @@ describe('new-workspace Workflow mode', () => {
 		const inactive = renderToStaticMarkup(<WorkflowModePill active={false} onChange={vi.fn()} />)
 
 		expect(active).toContain('Workflow')
+		expect(active).toContain('Beta')
 		expect(active).toContain('aria-pressed="true"')
 		expect(inactive).toContain('aria-pressed="false"')
 	})

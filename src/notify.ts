@@ -31,6 +31,7 @@ import path from 'node:path'
 import { stateDir } from './config.ts'
 import type { Reads, SessionState } from './reads.ts'
 import type { SessionPoller } from './session-poller.ts'
+import { clipExact, oneLine } from './speech.ts'
 import type { PushSubscription, VapidKeys } from './webpush.ts'
 import { generateVapidKeys, MAX_PAYLOAD_BYTES, sendPush } from './webpush.ts'
 
@@ -94,8 +95,6 @@ const MAX_FAILURES = 20
  * long enough to survive a slow tunnel dropping a handful of ticks.
  */
 const VIEWING_FRESH_MS = 10_000
-
-const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n).trimEnd()}…` : s)
 
 /** Alongside the token and the first-prompt queue — one dir holding everything this relay persists. */
 function storePath(): string {
@@ -264,7 +263,7 @@ async function deliver(device: Device, message: PushMessage): Promise<boolean> {
 		// Unreachable at the current BODY_CHARS, but an over-long title (a workspace name
 		// is user text) must clip rather than turn into a failed send.
 		const room = Math.max(0, message.body.length - (payload.length - MAX_PAYLOAD_BYTES) - 8)
-		payload = Buffer.from(JSON.stringify({ ...message, body: clip(message.body, room) }))
+		payload = Buffer.from(JSON.stringify({ ...message, body: clipExact(message.body, room) }))
 	}
 	const result = await sendPush(device, s.vapid, subject(), payload, TTL_SECONDS)
 	if (result.ok) {
@@ -331,17 +330,6 @@ export function deviceCount(): number {
  */
 export function chatRoute(workspaceId: string, sessionId: string): string {
 	return `/w/${workspaceId}?session=${encodeURIComponent(sessionId)}`
-}
-
-/** Collapse a transcript entry to one lock-screen line: no code fences, no blank runs. */
-function oneLine(text: string): string {
-	return clip(
-		text
-			.replace(/```[\s\S]*?```/g, '…')
-			.replace(/\s+/g, ' ')
-			.trim(),
-		BODY_CHARS
-	)
 }
 
 // --- the watcher ---
@@ -492,10 +480,10 @@ async function fire(
 	const body =
 		kind === 'error'
 			? said
-				? `Stopped with an error. ${oneLine(said)}`
+				? `Stopped with an error. ${oneLine(said, BODY_CHARS)}`
 				: 'The agent stopped with an error.'
 			: said
-				? oneLine(said)
+				? oneLine(said, BODY_CHARS)
 				: 'Finished its turn.'
 	const sent = await notifyAll(
 		{

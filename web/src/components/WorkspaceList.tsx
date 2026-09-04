@@ -1,4 +1,4 @@
-import { ChevronDown, Gauge, Plus, QrCode, Search, SlidersHorizontal, Workflow } from 'lucide-react'
+import { ChevronDown, Gauge, PhoneCall, Plus, QrCode, Search, SlidersHorizontal, Workflow } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useModelCatalog, useWorkspaces } from '../hooks.ts'
@@ -24,7 +24,7 @@ import { workspaceFilterSummary } from '../lib/workspace-filter.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs, WORKING_HINT_MS } from '../store.ts'
 import { ChangeStats } from './ChangeStats.tsx'
 import { ConnectSheet } from './ConnectSheet.tsx'
-import { Header } from './Header.tsx'
+import { HeaderFrame } from './Header.tsx'
 import { LogsSheet } from './LogsSheet.tsx'
 import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
 import { PlanUsageSheet } from './PlanUsageSheet.tsx'
@@ -32,6 +32,7 @@ import { type RepoChoice, RepoOptions, repoFilterLabel } from './RepoFilter.tsx'
 import { RolesSettings } from './RolesSettings.tsx'
 import { SearchSheet } from './SearchSheet.tsx'
 import { Badge, Empty, RelayUnreachable, RepoAvatar, RunBadge, Spinner, StatusDot } from './ui.tsx'
+import { useVoiceCall } from './VoiceProvider.tsx'
 import { WorkspaceRunLabel } from './WorkspaceRunLabel.tsx'
 
 /** Pinned first (matches the relay's order), then the chosen sort key. */
@@ -91,6 +92,7 @@ function groupWorkspaces(list: Workspace[], groupBy: GroupBy): Group[] {
 /** Workspace list — floating drawer on phones, persistent left rail on md+. */
 export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const navigate = useNavigate()
+	const voice = useVoiceCall()
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const view = useApp(s => s.view)
 	const readMarks = useApp(s => s.readMarks)
@@ -170,69 +172,85 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	return (
 		<div className="flex h-full min-w-0 flex-col overflow-hidden">
 			<div className="relative">
-				<Header
-					title={<span className="sr-only">Workspaces</span>}
-					right={
-						/* No close button. The drawer already closes four other ways — the scrim, an
-						   edge swipe back, picking a workspace, the header toggle it opened from — and
-						   on md+ it is a static rail that cannot close at all, so the X was a control
-						   that did nothing half the time and cost a slot on the phone the whole time. */
-						<>
-							<button
-								type="button"
-								onClick={() => setSearchOpen(true)}
-								aria-label="Search workspaces and chats"
-								title="Search (⌘K)"
-								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
-							>
-								<Search size={18} />
-							</button>
-							<button
-								type="button"
-								onClick={() => setUsageOpen(true)}
-								aria-label="Models"
-								title="Models"
-								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
-							>
-								<Gauge size={18} />
-							</button>
-							<button
-								type="button"
-								onClick={() => setControlsOpen(o => !o)}
-								aria-label="View options"
-								className="relative flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
-							>
-								<SlidersHorizontal size={18} />
-								{filtered ? <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-accent" /> : null}
-							</button>
-							<button
-								type="button"
-								onClick={() => setConnectOpen(true)}
-								aria-label="Connect a device"
-								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
-							>
-								<QrCode size={18} />
-							</button>
-							<button
-								type="button"
-								onClick={() => setRolesOpen(true)}
-								aria-label="Open delegated roles"
-								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
-							>
-								<Workflow size={18} />
-							</button>
-							{/* Last, and the only filled one: it is the thing you came here to do. */}
-							<button
-								type="button"
-								onClick={() => setNewOpen(true)}
-								aria-label="New workspace"
-								className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-text active:bg-surface-2"
-							>
-								<Plus size={20} />
-							</button>
-						</>
-					}
-				/>
+				<HeaderFrame>
+					{/* No close button. The drawer already closes four other ways — the scrim, an
+					    edge swipe back, picking a workspace, the header toggle it opened from — and
+					    on md+ it is a static rail that cannot close at all, so the X was a control
+					    that did nothing half the time and cost a slot on the phone the whole time. */}
+					<div
+						role="toolbar"
+						aria-label="Workspace controls"
+						className="flex w-full items-center justify-between px-3 pb-2.5"
+					>
+						<button
+							type="button"
+							onClick={() => setSearchOpen(true)}
+							aria-label="Search workspaces and chats"
+							title="Search (⌘K)"
+							className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 min-[360px]:size-9"
+						>
+							<Search size={18} />
+						</button>
+						<button
+							type="button"
+							onClick={() => setUsageOpen(true)}
+							aria-label="Models"
+							title="Models"
+							className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 min-[360px]:size-9"
+						>
+							<Gauge size={18} />
+						</button>
+						<button
+							type="button"
+							onClick={() => setControlsOpen(o => !o)}
+							aria-label="View options"
+							className="relative flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 min-[360px]:size-9"
+						>
+							<SlidersHorizontal size={18} />
+							{filtered ? <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-accent" /> : null}
+						</button>
+						<button
+							type="button"
+							onClick={() => setConnectOpen(true)}
+							aria-label="Connect a device"
+							className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 min-[360px]:size-9"
+						>
+							<QrCode size={18} />
+						</button>
+						<button
+							type="button"
+							onClick={() => setRolesOpen(true)}
+							aria-label="Open delegated roles"
+							className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 min-[360px]:size-9"
+						>
+							<Workflow size={18} />
+						</button>
+						<button
+							type="button"
+							onClick={voice.openPanel}
+							aria-label={voice.status === 'idle' ? 'Call fleet orchestrator' : 'Open active call'}
+							title="Control room"
+							className={cn(
+								'relative flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 min-[360px]:size-9',
+								voice.status !== 'idle' && 'bg-voice-soft text-voice'
+							)}
+						>
+							<PhoneCall size={18} />
+							{voice.status !== 'idle' ? (
+								<span className="absolute right-1 top-1 size-1.5 rounded-full bg-voice" />
+							) : null}
+						</button>
+						{/* Last, and the only filled one: it is the thing you came here to do. */}
+						<button
+							type="button"
+							onClick={() => setNewOpen(true)}
+							aria-label="New workspace"
+							className="flex size-8 shrink-0 items-center justify-center rounded-full text-text active:bg-surface-2 min-[360px]:size-9"
+						>
+							<Plus size={20} />
+						</button>
+					</div>
+				</HeaderFrame>
 				{controlsOpen ? (
 					<ViewControls repos={repos} view={view} summary={filterSummary} onClose={() => setControlsOpen(false)} />
 				) : null}

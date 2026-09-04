@@ -1,0 +1,537 @@
+/** OpenAI SIP/WebRTC setup plus the authenticated sideband controller for one live call. */
+import fs from 'node:fs'
+import path from 'node:path'
+import type { Tool } from '../mcp-tools.ts'
+import { VOICE_INSTRUCTIONS } from './prompt.ts'
+import { VOICE_TOOL_NAMES } from './tools.ts'
+
+export interface BrokerSocket {
+	readonly readyState: number
+	send(data: string): void
+	close(): void
+	addEventListener(type: string, listener: (event: { data?: unknown }) => void): void
+}
+
+export type BrokerSocketFactory = (url: string, headers: Record<string, string>) => BrokerSocket
+
+interface AcceptBodyInput {
+	callId: string
+	model: string
+	voice: string
+	mcpUrl: string
+	mcpToken: string
+	instructions: string
+}
+
+/** Current Realtime call-accept shape, kept pure so upstream API drift has a snapshot-sized test. */
+export function buildAcceptBody(input: AcceptBodyInput): Record<string, unknown> {
+	return {
+		type: 'realtime',
+		model: input.model,
+		instructions: input.instructions,
+		max_output_tokens: 800,
+		audio: { output: { voice: input.voice } },
+		tools: [
+			{
+				type: 'mcp',
+				server_label: 'conductor_voice',
+				server_url: input.mcpUrl,
+				headers: {
+					authorization: `Bearer ${input.mcpToken}`,
+					'x-voice-call-id': input.callId
+				},
+				allowed_tools: [...VOICE_TOOL_NAMES],
+				require_approval: 'never'
+			}
+		]
+	}
+}
+
+interface TokenDetails {
+	text_tokens?: number
+	audio_tokens?: number
+	cached_tokens?: number
+	cached_tokens_details?: { text_tokens?: number; audio_tokens?: number }
+}
+
+export interface RealtimeUsage {
+	input_tokens?: number
+	output_tokens?: number
+	total_tokens?: number
+	input_token_details?: TokenDetails
+	output_token_details?: TokenDetails
+}
+
+/** USD estimate for the model whose rates are pinned in the design and documentation. */
+export function estimateRealtimeCost(model: string, usage: RealtimeUsage): number | null {
+	if (model !== 'gpt-realtime-2.1-mini') return null
+	const input = usage.input_token_details ?? {}
+	const output = usage.output_token_details ?? {}
+	const cachedText = input.cached_tokens_details?.text_tokens ?? 0
+	const cachedAudio = input.cached_tokens_details?.audio_tokens ?? 0
+	const uncachedText = Math.max(0, (input.text_tokens ?? 0) - cachedText)
+	const uncachedAudio = Math.max(0, (input.audio_tokens ?? 0) - cachedAudio)
+	return (
+		(uncachedText * 0.6 +
+			cachedText * 0.06 +
+			uncachedAudio * 10 +
+			cachedAudio * 0.3 +
+			(output.text_tokens ?? 0) * 2.4 +
+			(output.audio_tokens ?? 0) * 20) /
+		1_000_000
+	)
+}
+
+interface StoredCall {
+	callId: string
+	acceptedAt: number
+	mode: 'mcp' | 'function'
+	ready: boolean
+	greeted: boolean
+}
+
+interface Runtime {
+	socket: BrokerSocket
+	mode: StoredCall['mode']
+	ready: boolean
+	open: boolean
+	toolsReady: boolean
+	greeted: boolean
+	started: boolean
+	responseActive: boolean
+	responseDone: boolean
+	responseHadTool: boolean
+	pending: string[]
+	pendingTools: Set<string>
+	handledTools: Set<string>
+	toolStarted: Map<string, number>
+}
+
+interface BrokerDeps {
+	apiKey: string
+	apiOrigin: string
+	model: string
+	voice: string
+	mcpUrl?: string | null
+	mcpToken?: string | null
+	stateFile: string
+	fetch?: typeof fetch
+	socket?: BrokerSocketFactory
+	log?: (line: string) => void
+	now?: () => number
+	instructions?: string
+	/** Function tools are used only for relay-created WebRTC calls. */
+	tools?: (callId: string) => Tool[]
+	onClose?: (callId: string) => void
+}
+
+export interface VoiceCallOptions {
+	/** Chosen before the call is accepted; OpenAI does not allow changing it after audio begins. */
+	voice?: string
+	/** Per-call language or presentation instructions layered over the relay default. */
+	instructions?: string
+}
+
+function defaultSocket(url: string, headers: Record<string, string>): BrokerSocket {
+	// Node 24's built-in client accepts an undici options object here. DOM's constructor
+	// type still describes the browser's `protocols` argument, hence the narrow cast.
+	const Client = WebSocket as unknown as new (url: string, options: { headers: Record<string, string> }) => BrokerSocket
+	return new Client(url, { headers })
+}
+
+function messageText(raw: unknown): string {
+	if (typeof raw === 'string') return raw
+	if (raw instanceof ArrayBuffer) return Buffer.from(raw).toString('utf8')
+	if (ArrayBuffer.isView(raw)) return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString('utf8')
+	return String(raw ?? '')
+}
+
+function safeNumber(value: unknown): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+export class VoiceBroker {
+	readonly stateFile: string
+	private readonly deps: BrokerDeps
+	private readonly fetcher: typeof fetch
+	private readonly sockets: BrokerSocketFactory
+	private readonly log: (line: string) => void
+	private readonly now: () => number
+	private readonly apiOrigin: string
+	private readonly websocketOrigin: string
+	private readonly calls = new Map<string, StoredCall>()
+	private readonly runtimes = new Map<string, Runtime>()
+
+	constructor(deps: BrokerDeps) {
+		this.deps = deps
+		this.stateFile = deps.stateFile
+		this.fetcher = deps.fetch ?? fetch
+		this.sockets = deps.socket ?? defaultSocket
+		this.log = deps.log ?? console.info
+		this.now = deps.now ?? Date.now
+		this.apiOrigin = deps.apiOrigin.replace(/\/+$/, '')
+		this.websocketOrigin = this.apiOrigin.replace(/^https:/, 'wss:')
+		this.readCalls()
+	}
+
+	private readCalls(): void {
+		try {
+			const parsed: unknown = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'))
+			if (!Array.isArray(parsed)) return
+			for (const raw of parsed) {
+				const call = raw as Partial<StoredCall>
+				if (typeof call.callId === 'string' && typeof call.acceptedAt === 'number') {
+					this.calls.set(call.callId, {
+						callId: call.callId,
+						acceptedAt: call.acceptedAt,
+						// Records written before WebRTC support were all SIP/MCP calls.
+						mode: call.mode === 'function' ? 'function' : 'mcp',
+						ready: call.ready ?? true,
+						greeted: call.greeted ?? false
+					})
+				}
+			}
+		} catch {
+			// First run or a recoverable partial file: the webhook can repopulate it.
+		}
+	}
+
+	private persist(): void {
+		fs.mkdirSync(path.dirname(this.stateFile), { recursive: true })
+		fs.writeFileSync(this.stateFile, `${JSON.stringify([...this.calls.values()], null, 2)}\n`, { mode: 0o600 })
+		fs.chmodSync(this.stateFile, 0o600)
+	}
+
+	async accept(callId: string, options: VoiceCallOptions = {}): Promise<void> {
+		if (!this.deps.mcpUrl || !this.deps.mcpToken) throw new Error('SIP voice MCP is not configured')
+		const response = await this.fetcher(`${this.apiOrigin}/v1/realtime/calls/${encodeURIComponent(callId)}/accept`, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${this.deps.apiKey}`, 'content-type': 'application/json' },
+			body: JSON.stringify(
+				buildAcceptBody({
+					callId,
+					model: this.deps.model,
+					voice: options.voice ?? this.deps.voice,
+					mcpUrl: this.deps.mcpUrl,
+					mcpToken: this.deps.mcpToken,
+					instructions: options.instructions ?? this.deps.instructions ?? VOICE_INSTRUCTIONS
+				})
+			)
+		})
+		if (!response.ok) throw new Error(`OpenAI call accept returned ${response.status}: ${await response.text()}`)
+		this.calls.set(callId, {
+			callId,
+			acceptedAt: this.now(),
+			mode: 'mcp',
+			ready: true,
+			greeted: false
+		})
+		this.persist()
+		this.attach(callId)
+	}
+
+	async reject(callId: string, statusCode = 603): Promise<void> {
+		const response = await this.fetcher(`${this.apiOrigin}/v1/realtime/calls/${encodeURIComponent(callId)}/reject`, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${this.deps.apiKey}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ status_code: statusCode })
+		})
+		if (!response.ok) throw new Error(`OpenAI call reject returned ${response.status}: ${await response.text()}`)
+	}
+
+	/** Reattach every call whose socket was alive when a self-update stopped this process. */
+	async restore(): Promise<void> {
+		for (const callId of this.calls.keys()) this.attach(callId)
+	}
+
+	private attach(callId: string): void {
+		if (this.runtimes.has(callId)) return
+		const call = this.calls.get(callId)
+		if (!call) return
+		const socket = this.sockets(`${this.websocketOrigin}/v1/realtime?call_id=${encodeURIComponent(callId)}`, {
+			authorization: `Bearer ${this.deps.apiKey}`
+		})
+		const runtime: Runtime = {
+			socket,
+			mode: call.mode,
+			ready: call.ready,
+			open: socket.readyState === 1,
+			toolsReady: call.mode === 'function',
+			greeted: call.greeted,
+			started: call.greeted,
+			responseActive: false,
+			responseDone: false,
+			responseHadTool: false,
+			pending: [],
+			pendingTools: new Set(),
+			handledTools: new Set(),
+			toolStarted: new Map()
+		}
+		this.runtimes.set(callId, runtime)
+		socket.addEventListener('open', () => {
+			runtime.open = true
+			this.maybeStart(runtime)
+			this.flush(runtime)
+		})
+		socket.addEventListener('message', event => this.onEvent(callId, runtime, messageText(event.data)))
+		socket.addEventListener('error', () => this.log(`[voice] ${callId} observer socket error`))
+		socket.addEventListener('close', () => {
+			if (this.runtimes.get(callId) !== runtime) return
+			this.forget(callId, runtime)
+			this.log(`[voice] ${callId} observer closed`)
+		})
+		this.maybeStart(runtime)
+	}
+
+	private send(runtime: Runtime, value: unknown): void {
+		if (runtime.socket.readyState !== 1) return
+		runtime.socket.send(JSON.stringify(value))
+	}
+
+	private forget(callId: string, runtime?: Runtime): void {
+		if (runtime && this.runtimes.get(callId) !== runtime) return
+		const existed = this.calls.delete(callId)
+		this.runtimes.delete(callId)
+		if (!existed) return
+		this.persist()
+		this.deps.onClose?.(callId)
+	}
+
+	private createResponse(runtime: Runtime): boolean {
+		if (runtime.responseActive || runtime.socket.readyState !== 1) return false
+		runtime.responseActive = true
+		runtime.responseDone = false
+		runtime.responseHadTool = false
+		this.send(runtime, { type: 'response.create' })
+		return true
+	}
+
+	private maybeStart(runtime: Runtime): void {
+		if (!runtime.open || !runtime.ready || !runtime.toolsReady || runtime.started) return
+		runtime.started = this.createResponse(runtime)
+	}
+
+	private flush(runtime: Runtime): void {
+		if (!runtime.toolsReady || !runtime.greeted || runtime.responseActive || runtime.socket.readyState !== 1) return
+		const text = runtime.pending.shift()
+		if (!text) return
+		this.send(runtime, {
+			type: 'conversation.item.create',
+			item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
+		})
+		this.createResponse(runtime)
+	}
+
+	/** OpenAI may finish the response before or after its tool calls. Both are a barrier. */
+	private continueAfterTools(runtime: Runtime): void {
+		if (!runtime.responseDone || !runtime.responseHadTool || runtime.pendingTools.size) return
+		runtime.responseDone = false
+		runtime.responseHadTool = false
+		this.createResponse(runtime)
+	}
+
+	private finishTool(callId: string, runtime: Runtime, event: Record<string, unknown>): void {
+		const item = (event.item ?? {}) as Record<string, unknown>
+		const id = typeof event.item_id === 'string' ? event.item_id : typeof item.id === 'string' ? item.id : null
+		const started = id ? runtime.toolStarted.get(id) : undefined
+		if (id) {
+			runtime.toolStarted.delete(id)
+			runtime.pendingTools.delete(id)
+		}
+		const name = typeof item.name === 'string' ? item.name : (id ?? 'unknown tool')
+		const latency = started === undefined ? 'unknown latency' : `${this.now() - started}ms`
+		this.log(`[voice] ${callId} tool ${name}: ${latency}`)
+		runtime.responseHadTool = true
+		// Remote MCP results do not automatically continue, but OpenAI requires the
+		// original response *and every MCP call in it* to finish before the next one.
+		this.continueAfterTools(runtime)
+	}
+
+	private startFunction(callId: string, runtime: Runtime, event: Record<string, unknown>): void {
+		if (runtime.mode !== 'function') return
+		const item = (event.item ?? {}) as Record<string, unknown>
+		const invocationId =
+			typeof event.call_id === 'string' ? event.call_id : typeof item.call_id === 'string' ? item.call_id : null
+		const name = typeof event.name === 'string' ? event.name : typeof item.name === 'string' ? item.name : null
+		const encodedArgs =
+			typeof event.arguments === 'string' ? event.arguments : typeof item.arguments === 'string' ? item.arguments : '{}'
+		if (!invocationId || !name || runtime.handledTools.has(invocationId)) return
+		runtime.handledTools.add(invocationId)
+		runtime.pendingTools.add(invocationId)
+		runtime.toolStarted.set(invocationId, this.now())
+		runtime.responseHadTool = true
+
+		void (async () => {
+			let output: string
+			try {
+				const parsed: unknown = JSON.parse(encodedArgs)
+				if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+					throw new Error('tool arguments must be an object')
+				const tool = this.deps.tools?.(callId).find(candidate => candidate.name === name)
+				if (!tool) throw new Error(`tool ${name} is not available in this call`)
+				output = await tool.run(parsed as Record<string, unknown>)
+			} catch (error) {
+				output = JSON.stringify({
+					status: 'error',
+					spoken: `The relay could not run that action: ${error instanceof Error ? error.message : String(error)}`
+				})
+			}
+			this.send(runtime, {
+				type: 'conversation.item.create',
+				item: { type: 'function_call_output', call_id: invocationId, output }
+			})
+			const started = runtime.toolStarted.get(invocationId)
+			runtime.toolStarted.delete(invocationId)
+			runtime.pendingTools.delete(invocationId)
+			const latency = started === undefined ? 'unknown latency' : `${this.now() - started}ms`
+			this.log(`[voice] ${callId} tool ${name}: ${latency}`)
+			this.continueAfterTools(runtime)
+		})()
+	}
+
+	private logUsage(callId: string, usage: RealtimeUsage): void {
+		const input = safeNumber(usage.input_tokens)
+		const output = safeNumber(usage.output_tokens)
+		const detailedInput =
+			safeNumber(usage.input_token_details?.text_tokens) + safeNumber(usage.input_token_details?.audio_tokens)
+		const detailedOutput =
+			safeNumber(usage.output_token_details?.text_tokens) + safeNumber(usage.output_token_details?.audio_tokens)
+		const tokens = safeNumber(usage.total_tokens) || input + output || detailedInput + detailedOutput
+		const cost = estimateRealtimeCost(this.deps.model, usage)
+		this.log(`[voice] ${callId} ${tokens} tokens${cost === null ? '' : `, estimated $${cost.toFixed(4)}`}`)
+	}
+
+	private onEvent(callId: string, runtime: Runtime, raw: string): void {
+		let event: Record<string, unknown>
+		try {
+			event = JSON.parse(raw) as Record<string, unknown>
+		} catch {
+			this.log(`[voice] ${callId} sent an unreadable observer event`)
+			return
+		}
+		const type = event.type
+		if (type === 'mcp_list_tools.completed') {
+			if (runtime.mode !== 'mcp') return
+			runtime.toolsReady = true
+			this.maybeStart(runtime)
+			this.flush(runtime)
+			return
+		}
+		if (type === 'mcp_list_tools.failed') {
+			this.log(`[voice] ${callId} could not import the scoped voice tools`)
+			return
+		}
+		if (type === 'response.created') {
+			// Server VAD can start a response without this sideband having sent
+			// `response.create`; broker nudges must not collide with it.
+			runtime.responseActive = true
+			return
+		}
+		if (type === 'response.mcp_call.in_progress' && typeof event.item_id === 'string') {
+			runtime.responseHadTool = true
+			runtime.pendingTools.add(event.item_id)
+			runtime.toolStarted.set(event.item_id, this.now())
+			return
+		}
+		if (type === 'response.function_call_arguments.done') {
+			this.startFunction(callId, runtime, event)
+			return
+		}
+		if (type === 'response.output_item.done' && (event.item as { type?: unknown } | undefined)?.type === 'mcp_call') {
+			this.finishTool(callId, runtime, event)
+			return
+		}
+		if (
+			type === 'response.output_item.done' &&
+			(event.item as { type?: unknown } | undefined)?.type === 'function_call'
+		) {
+			this.startFunction(callId, runtime, event)
+			return
+		}
+		if (type === 'response.mcp_call.failed') {
+			this.finishTool(callId, runtime, event)
+			return
+		}
+		if (type === 'response.done') {
+			runtime.responseActive = false
+			runtime.responseDone = true
+			const response = (event.response ?? {}) as {
+				usage?: RealtimeUsage | null
+				output?: Record<string, unknown>[]
+			}
+			if (response.usage) this.logUsage(callId, response.usage)
+			for (const item of response.output ?? []) {
+				if (item.type === 'mcp_call') runtime.responseHadTool = true
+				if (item.type === 'function_call') this.startFunction(callId, runtime, { item })
+			}
+			if (runtime.responseHadTool) {
+				this.continueAfterTools(runtime)
+				return
+			}
+			runtime.responseDone = false
+			if (!runtime.greeted) {
+				runtime.greeted = true
+				const call = this.calls.get(callId)
+				if (call) {
+					call.greeted = true
+					this.persist()
+				}
+			}
+			this.flush(runtime)
+		}
+	}
+
+	/** Attach the relay sideband before the browser receives its SDP answer. */
+	registerWebRtc(callId: string): void {
+		this.calls.set(callId, {
+			callId,
+			acceptedAt: this.now(),
+			mode: 'function',
+			ready: false,
+			greeted: false
+		})
+		this.persist()
+		this.attach(callId)
+	}
+
+	/** The browser calls this only after it has installed the remote SDP answer. */
+	beginWebRtc(callId: string): boolean {
+		const call = this.calls.get(callId)
+		if (call?.mode !== 'function') return false
+		call.ready = true
+		this.persist()
+		const runtime = this.runtimes.get(callId)
+		if (runtime) {
+			runtime.ready = true
+			this.maybeStart(runtime)
+		}
+		return true
+	}
+
+	/** End only a relay-created browser call; SIP calls remain owned by their phone leg. */
+	async hangupWebRtc(callId: string): Promise<boolean> {
+		const call = this.calls.get(callId)
+		if (call?.mode !== 'function') return false
+		const response = await this.fetcher(`${this.apiOrigin}/v1/realtime/calls/${encodeURIComponent(callId)}/hangup`, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${this.deps.apiKey}` }
+		})
+		const runtime = this.runtimes.get(callId)
+		try {
+			runtime?.socket.close()
+		} finally {
+			this.forget(callId, runtime)
+		}
+		if (!response.ok) throw new Error(`OpenAI call hangup returned ${response.status}: ${await response.text()}`)
+		return true
+	}
+
+	/** Queue a broker-authored line; it cannot overtake tool import or the call's greeting. */
+	inject(callId: string, text: string): boolean {
+		const runtime = this.runtimes.get(callId)
+		if (!runtime) return false
+		runtime.pending.push(text)
+		this.flush(runtime)
+		return true
+	}
+}

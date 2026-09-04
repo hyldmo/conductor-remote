@@ -65,7 +65,16 @@ import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.
 import { SendOnce } from './sendonce.ts'
 import { SessionPoller } from './session-poller.ts'
 import { readSettings, writeSettings } from './settings.ts'
-import { responseErrorMessage, VIEWING_HEADER, withoutWindowEvidence } from './shared.ts'
+import {
+	isOpenAIRealtimeVoice,
+	isVoiceLanguage,
+	OPENAI_REALTIME_VOICES,
+	type OpenAIRealtimeVoice,
+	responseErrorMessage,
+	VIEWING_HEADER,
+	type VoiceLanguage,
+	withoutWindowEvidence
+} from './shared.ts'
 import {
 	discardStagedAttachment,
 	materializeStagedAttachments,
@@ -75,6 +84,15 @@ import {
 } from './staged-attachments.ts'
 import { driftWarningLines, readExposeMode, tailscaleBin } from './tailscale.ts'
 import { renderTranscript, transcriptMessage, transcriptThrough } from './transcript.ts'
+import { VoiceBriefBoard } from './voice/brief.ts'
+import { VoiceBroker } from './voice/broker.ts'
+import { openAIOriginForSipHost, readVoiceConfig, voicePort } from './voice/config.ts'
+import { createVoiceGateway } from './voice/gateway.ts'
+import { PreviewStore } from './voice/preview.ts'
+import { createVoiceServer } from './voice/server.ts'
+import { mintSipTicket, missingTicketConfig } from './voice/ticket.ts'
+import { createVoiceTools } from './voice/tools.ts'
+import { createWebRtcCall, MAX_SDP_CHARS } from './voice/webrtc.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
 import type {
 	Attachment,
@@ -229,6 +247,91 @@ const mcpTools = createTools(async <T>(route: string, opts: CallOptions = {}): P
 		throw new Error(`${responseErrorMessage(payload.error, `HTTP ${res.status}`)}${busy}`)
 	}
 	return payload as T
+})
+
+// The voice process surface shares this process (and therefore the one UI lock) but not
+// this server's port. Only its three scoped routes are mounted through Funnel.
+const voiceConfig = readVoiceConfig()
+// Stable but useless outside this OpenAI abuse-control header. Hashing the relay
+// bearer means neither that bearer nor a device identifier leaves the Mac.
+const voiceSafetyIdentifier = crypto.createHash('sha256').update(`conductor-remote:${cfg.token}`).digest('hex')
+const voiceBoards = new Map<string, VoiceBriefBoard>()
+const voicePreviews = new PreviewStore(path.join(stateDir(), 'voice-previews.json'))
+const voiceBroker = voiceConfig.openaiKey
+	? new VoiceBroker({
+			apiKey: voiceConfig.openaiKey,
+			apiOrigin: openAIOriginForSipHost(voiceConfig.sipHost),
+			model: voiceConfig.model,
+			voice: voiceConfig.voice,
+			mcpUrl: voiceConfig.publicBaseUrl ? `${voiceConfig.publicBaseUrl}/mcp` : null,
+			mcpToken: voiceConfig.mcpToken,
+			stateFile: path.join(stateDir(), 'voice-calls.json'),
+			tools: callId => voiceToolsForCall(callId),
+			onClose: callId => voiceBoards.delete(callId)
+		})
+	: null
+
+function voiceBoard(callId: string): VoiceBriefBoard {
+	let board = voiceBoards.get(callId)
+	if (board) return board
+	board = new VoiceBriefBoard({ reads, locked: async () => (await screenLocked()) === true, readPrefs, writePrefs })
+	voiceBoards.set(callId, board)
+	return board
+}
+
+async function dispatchVoicePreview(preview: {
+	workspaceId: string
+	sessionId: string
+	text: string
+	token: string
+}): Promise<{ ok: boolean; parked?: boolean; error?: string }> {
+	const host = !cfg.host || cfg.host === '0.0.0.0' || cfg.host === '::' ? '127.0.0.1' : cfg.host
+	const timeoutMs = 75_000
+	const res = await fetch(`http://${host}:${cfg.port}${routes.sendPrompt.path(preview.sessionId)}`, {
+		method: routes.sendPrompt.method,
+		signal: AbortSignal.timeout(timeoutMs),
+		headers: {
+			authorization: `Bearer ${cfg.token}`,
+			'content-type': 'application/json',
+			'x-relay-client': 'voice',
+			'x-client-timeout-ms': String(timeoutMs)
+		},
+		body: JSON.stringify({
+			workspaceId: preview.workspaceId,
+			text: preview.text,
+			clientId: preview.token
+		})
+	})
+	const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; parked?: boolean; error?: string }
+	return {
+		ok: payload.ok === true,
+		parked: payload.parked === true,
+		error: payload.error ?? (!res.ok ? `HTTP ${res.status}` : undefined)
+	}
+}
+
+function voiceToolsForCall(callId: string) {
+	return createVoiceTools({
+		callId,
+		board: voiceBoard(callId),
+		previews: voicePreviews,
+		findSession: sessionId => reads.listSessionStates().find(state => state.sessionId === sessionId) ?? null,
+		dispatch: dispatchVoicePreview,
+		announce: spoken => {
+			if (!voiceBroker?.inject(callId, spoken)) console.warn(`[voice] ${callId} could not receive a delivery nudge`)
+		}
+	})
+}
+
+const voiceGateway = createVoiceGateway({
+	config: () => voiceConfig,
+	broker: () => voiceBroker,
+	rpc: (callId, request) => handleRpc(voiceToolsForCall(callId), request)
+})
+const voiceServer = createVoiceServer({
+	routes: voiceGateway,
+	mcpToken: () => voiceConfig.mcpToken,
+	log: line => console.warn(line)
 })
 
 // A windowless Conductor that ignores reopen *and* a Dock click can only be fixed
@@ -1696,6 +1799,75 @@ const server = http.createServer(async (req, res) => {
 				})
 			}
 
+			// POST /api/voice/ticket — the native app presents the same relay bearer as
+			// the PWA, and receives only a two-minute SIP URI. The OpenAI key, webhook
+			// secret and marker key never leave this Mac.
+			if (isRoute(routes.voiceTicket, req.method, pathname)) {
+				const missing = missingTicketConfig(voiceConfig)
+				if (missing.length || !voiceBroker) {
+					return json(req, res, 503, {
+						error: 'voice calls are not fully configured on this relay',
+						missing
+					})
+				}
+				return json(req, res, 200, mintSipTicket(voiceConfig))
+			}
+
+			// POST /api/voice/calls — the PWA sends its SDP offer to this authenticated
+			// relay. The relay combines it with the global orchestrator session and
+			// keeps OpenAI's permanent key and every function tool on the Mac.
+			if (isRoute(routes.voiceCall, req.method, pathname)) {
+				if (!voiceConfig.openaiKey || !voiceBroker)
+					return json(req, res, 503, { error: 'voice needs an OpenAI API key on this relay' })
+				const raw = await readBody(req)
+				if (raw.length > MAX_SDP_CHARS * 2) return json(req, res, 413, { error: 'WebRTC offer is too large' })
+				const body = JSON.parse(raw || '{}') as { sdp?: unknown; voice?: unknown; language?: unknown }
+				if (typeof body.sdp !== 'string' || !body.sdp.trim())
+					return json(req, res, 400, { error: 'WebRTC offer is required' })
+				if (body.sdp.length > MAX_SDP_CHARS) return json(req, res, 413, { error: 'WebRTC offer is too large' })
+				if (!isOpenAIRealtimeVoice(body.voice))
+					return json(req, res, 400, { error: `voice must be one of ${OPENAI_REALTIME_VOICES.join(', ')}` })
+				if (!isVoiceLanguage(body.language)) return json(req, res, 400, { error: 'unsupported voice language' })
+				try {
+					const call = await createWebRtcCall(
+						voiceConfig.openaiKey,
+						openAIOriginForSipHost(voiceConfig.sipHost),
+						body.sdp,
+						{
+							model: voiceConfig.model,
+							voice: body.voice as OpenAIRealtimeVoice,
+							language: body.language as VoiceLanguage
+						},
+						voiceSafetyIdentifier
+					)
+					voiceBroker.registerWebRtc(call.callId)
+					return json(req, res, 200, call)
+				} catch (err) {
+					console.warn('[voice] could not create WebRTC orchestrator call:', err)
+					return json(req, res, 502, { error: err instanceof Error ? err.message : 'voice call failed' })
+				}
+			}
+
+			const readyVoiceCall = routeParam(routes.voiceCallReady, req.method, pathname)
+			if (readyVoiceCall) {
+				if (!voiceBroker) return json(req, res, 503, { error: 'voice is not configured on this relay' })
+				if (!voiceBroker.beginWebRtc(readyVoiceCall)) return json(req, res, 404, { error: 'voice call not found' })
+				return json(req, res, 200, { ok: true })
+			}
+
+			const endedVoiceCall = routeParam(routes.voiceCallEnd, req.method, pathname)
+			if (endedVoiceCall) {
+				if (!voiceBroker) return json(req, res, 503, { error: 'voice is not configured on this relay' })
+				try {
+					if (!(await voiceBroker.hangupWebRtc(endedVoiceCall)))
+						return json(req, res, 404, { error: 'voice call not found' })
+					return json(req, res, 200, { ok: true })
+				} catch (err) {
+					console.warn('[voice] could not hang up WebRTC orchestrator call:', err)
+					return json(req, res, 502, { error: err instanceof Error ? err.message : 'voice hangup failed' })
+				}
+			}
+
 			// GET /api/settings — relay preferences plus what the phone needs to edit them:
 			// the SSIDs this Mac already holds credentials for, so the picker offers a choice
 			// instead of asking someone to type a network name from memory on a phone keyboard.
@@ -2907,6 +3079,10 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(cfg.port, cfg.host, () => {
+	voiceServer.listen(voicePort(), '127.0.0.1', () => {
+		console.info(`  voice:      127.0.0.1:${voicePort()}${voiceBroker ? '' : ' (waiting for OpenAI config)'}`)
+		void voiceBroker?.restore()
+	})
 	// Under `yarn dev` the app comes from Vite and only /api comes from here, so the URL worth
 	// printing is Vite's — carrying the token, which Vite itself has no way to print.
 	const dev = cfg.devWebPort !== undefined

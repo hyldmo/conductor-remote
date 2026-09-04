@@ -70,6 +70,17 @@ it alone and mounts the relay on the next free port instead, so the phone URL ca
 read `https://<node>:8787/`. `service status` and `config` report whichever
 port is live; a mapping already in place is kept wherever it is.
 
+**Voice (optional).** The phone button immediately left of **+** opens one
+fleet-wide control-room call over WebRTC. Its orchestrator can give a fresh,
+paged summary of current workspace progress, bring forward one decision at a
+time, and dispatch an exact prompt
+only after reading it back and hearing confirmation. The call survives
+workspace navigation, includes live captions and a typed fallback, and needs
+only a locally stored OpenAI key; it does not need SIP, Twilio, a webhook, or
+public ingress. A separate dial-in transport remains available for
+locked-screen/PSTN use. See
+[Voice setup](./docs/voice-setup.md).
+
 ## Architecture
 
 ```

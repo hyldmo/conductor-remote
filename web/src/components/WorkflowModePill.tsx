@@ -1,5 +1,6 @@
 import { Workflow } from 'lucide-react'
 import { cn } from '../lib/cn.ts'
+import { BetaBadge } from './BetaBadge.tsx'
 
 /** The reversible first-message mode switch; all agent controls around it may be disabled. */
 export function WorkflowModePill({ active, onChange }: { active: boolean; onChange: (active: boolean) => void }) {
@@ -17,6 +18,7 @@ export function WorkflowModePill({ active, onChange }: { active: boolean; onChan
 		>
 			<Workflow size={15} />
 			<span>Workflow</span>
+			<BetaBadge className="-mr-0.5" />
 		</button>
 	)
 }

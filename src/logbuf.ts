@@ -167,5 +167,8 @@ export function tailLogFile(name: string, limit: number): LogEntry[] {
  */
 export function redactSecrets(text: string, token: string): string {
 	const masked = token ? text.split(token).join('<token>') : text
-	return masked.replace(/(token=)[^\s&"'`]+/gi, '$1<token>')
+	return masked
+		.replace(/\bsk-[A-Za-z0-9_-]{8,}/g, '<openai-key>')
+		.replace(/\bwhsec_[A-Za-z0-9+/=_-]{8,}/g, '<webhook-secret>')
+		.replace(/(token=)[^\s&"'`]+/gi, '$1<token>')
 }

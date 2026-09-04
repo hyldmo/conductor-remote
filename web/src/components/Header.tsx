@@ -3,6 +3,16 @@ import type { ReactNode } from 'react'
 import { useApp } from '../store.ts'
 import { OfflineBanner } from './ui.tsx'
 
+/** Shared sticky header surface for rows that provide their own layout. */
+export function HeaderFrame({ children }: { children: ReactNode }) {
+	return (
+		<header className="pt-safe sticky top-0 z-10 border-b border-border-soft bg-bg/80 backdrop-blur-xl">
+			{children}
+			<OfflineBanner />
+		</header>
+	)
+}
+
 export function Header({
 	title,
 	subtitle,
@@ -17,7 +27,7 @@ export function Header({
 }) {
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	return (
-		<header className="pt-safe sticky top-0 z-10 border-b border-border-soft bg-bg/80 backdrop-blur-xl">
+		<HeaderFrame>
 			<div className="flex items-center gap-2 px-3 pb-2.5">
 				{menu ? (
 					<button
@@ -37,7 +47,6 @@ export function Header({
 				</div>
 				{right}
 			</div>
-			<OfflineBanner />
-		</header>
+		</HeaderFrame>
 	)
 }

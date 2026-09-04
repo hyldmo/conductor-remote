@@ -74,6 +74,14 @@ export const routes = {
 	updateModelDefaults: flat('PATCH', '/api/models/defaults'),
 	/** Rolling subscription limits, read without a model request from each provider CLI. */
 	planUsage: flat('GET', '/api/usage'),
+	/** Mint a short-lived OpenAI SIP URI for an authenticated native client. */
+	voiceTicket: flat('POST', '/api/voice/ticket'),
+	/** Negotiate one app-wide PWA orchestrator call through the relay. */
+	voiceCall: flat('POST', '/api/voice/calls'),
+	/** Start the greeting only after the browser has installed OpenAI's SDP answer. */
+	voiceCallReady: param('POST', '/api/voice/calls/:callId/ready'),
+	/** End one PWA-owned call. SIP calls remain owned by their phone leg. */
+	voiceCallEnd: param('DELETE', '/api/voice/calls/:callId'),
 	repoIcon: param('GET', '/api/repos/:repo/icon'),
 	/** A local image linked in chat Markdown, fetched with the phone's auth header. */
 	localImage: param('GET', '/api/local-images/:path'),

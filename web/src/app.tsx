@@ -3,6 +3,8 @@ import { Navigate, Outlet, Route, Routes, useMatch } from 'react-router'
 import { ReloadPrompt } from './components/ReloadPrompt.tsx'
 import { SessionView } from './components/SessionView.tsx'
 import { TokenGate } from './components/TokenGate.tsx'
+import { VoiceCallSheet } from './components/VoiceCallSheet.tsx'
+import { VoiceCallProvider } from './components/VoiceProvider.tsx'
 import { WorkspaceList } from './components/WorkspaceList.tsx'
 import { useEdgeSwipeDrawer, usePrefsSync, usePushRouting, usePushSync, useVisualViewportHeight } from './hooks.ts'
 import { cn } from './lib/cn.ts'
@@ -53,24 +55,27 @@ function Shell() {
 	// Durable read marks and drafts stay local-first, then reconcile with the host.
 	usePrefsSync()
 	return (
-		<div className="flex h-full overflow-hidden">
-			{sidebarOpen ? (
-				<div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} aria-hidden />
-			) : null}
-			<aside
-				ref={drawerRef}
-				className={cn(
-					'fixed inset-y-0 left-0 z-50 flex w-[85%] max-w-80 flex-col border-r border-border-soft bg-bg transition-transform duration-200 ease-out',
-					'md:static md:z-auto md:w-72 md:max-w-none md:shrink-0 md:translate-x-0 md:transition-none lg:w-80',
-					sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-				)}
-			>
-				<WorkspaceList selectedId={match?.params.workspaceId} />
-			</aside>
-			<main className="flex min-w-0 flex-1 flex-col">
-				<Outlet />
-			</main>
-		</div>
+		<VoiceCallProvider>
+			<div className="flex h-full overflow-hidden">
+				{sidebarOpen ? (
+					<div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} aria-hidden />
+				) : null}
+				<aside
+					ref={drawerRef}
+					className={cn(
+						'fixed inset-y-0 left-0 z-50 flex w-[85%] max-w-80 flex-col border-r border-border-soft bg-bg transition-transform duration-200 ease-out',
+						'md:static md:z-auto md:w-72 md:max-w-none md:shrink-0 md:translate-x-0 md:transition-none lg:w-80',
+						sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+					)}
+				>
+					<WorkspaceList selectedId={match?.params.workspaceId} />
+				</aside>
+				<main className="flex min-w-0 flex-1 flex-col">
+					<Outlet />
+				</main>
+			</div>
+			<VoiceCallSheet />
+		</VoiceCallProvider>
 	)
 }
 

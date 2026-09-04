@@ -14,7 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { installedServiceEnvironment, serviceEnvironmentWithSetting } from '../src/config.ts'
 import { packageRoot } from '../src/pkg-root.ts'
-import type { ExposeMode, RelayServeState } from '../src/tailscale.ts'
+import type { ExposeMode, RelayServeState, ServeStatus } from '../src/tailscale.ts'
 import {
 	driftWarningLines,
 	exposeStorePath,
@@ -29,6 +29,14 @@ import {
 	tailscaleBin,
 	writeUrlHost
 } from '../src/tailscale.ts'
+import { readVoiceConfig, setVoiceSetting, VOICE_SETTING_NAMES } from '../src/voice/config.ts'
+import {
+	inspectVoiceFunnel,
+	readVoiceFunnelReceipt,
+	type VoiceFunnelReceipt,
+	voiceFunnelReceiptPath,
+	writeVoiceFunnelReceipt
+} from '../src/voice/funnel.ts'
 import { qrLines } from './qr.ts'
 
 const LABEL = 'no.adluna.conductor-remote'
@@ -46,6 +54,7 @@ const domain = `gui/${uid}`
 const FLAG_ENV: Record<string, string> = {
 	'--expose': 'EXPOSE',
 	'--port': 'RELAY_PORT',
+	'--voice-port': 'VOICE_PORT',
 	'--host': 'RELAY_HOST',
 	'--hostname': 'RELAY_HOSTNAME',
 	'--token': 'RELAY_TOKEN',
@@ -168,6 +177,7 @@ function buildPlist(): string {
 	if (process.env.PREVENT_SCREEN_LOCK) envEntries.push(['PREVENT_SCREEN_LOCK', process.env.PREVENT_SCREEN_LOCK])
 	if (process.env.RELAY_HOST) envEntries.push(['RELAY_HOST', process.env.RELAY_HOST])
 	if (process.env.RELAY_PORT) envEntries.push(['RELAY_PORT', process.env.RELAY_PORT])
+	if (process.env.VOICE_PORT) envEntries.push(['VOICE_PORT', process.env.VOICE_PORT])
 	if (process.env.AUTO_UPDATE) envEntries.push(['AUTO_UPDATE', process.env.AUTO_UPDATE])
 	if (process.env.AUTO_UPDATE_INTERVAL_MINUTES)
 		envEntries.push(['AUTO_UPDATE_INTERVAL_MINUTES', process.env.AUTO_UPDATE_INTERVAL_MINUTES])
@@ -244,6 +254,7 @@ function persistPinnedToken(): void {
 }
 
 const RELAY_PORT = relayPort()
+const VOICE_PORT = String(process.env.VOICE_PORT ?? 8788)
 
 /**
  * Resolve the expose mode. Precedence: `EXPOSE` env (public|funnel / tailnet|serve|private) > persisted
@@ -284,6 +295,14 @@ function tailscaleState(bin: string, port: string = RELAY_PORT): RelayServeState
 		return relayServeState(parseServeStatus(out), port)
 	} catch {
 		return relayServeState({}, port)
+	}
+}
+
+function rawTailscaleStatus(bin: string): ServeStatus {
+	try {
+		return parseServeStatus(execFileSync(bin, ['serve', 'status', '--json'], { encoding: 'utf8', stdio: 'pipe' }))
+	} catch {
+		return {}
 	}
 }
 
@@ -482,6 +501,118 @@ function ensureTailscale(): void {
 	)
 }
 
+/**
+ * Give OpenAI the only public route it needs while keeping the control panel tailnet-only.
+ * Port-wide changes happen only when every live handler is either the relay root or the exact
+ * voice target named by our receipt; a foreign or merely manual mount is left untouched.
+ */
+function ensureVoiceFunnel(): void {
+	const voice = readVoiceConfig()
+	const bin = tailscaleBin()
+	if (!voice.publicBaseUrl) {
+		const receipt = readVoiceFunnelReceipt()
+		if (!bin || !receipt) return
+		const inspected = inspectVoiceFunnel(rawTailscaleStatus(bin), VOICE_PORT, RELAY_PORT, receipt)
+		if (!inspected.owned || inspected.relayAtRoot || inspected.conflicts.length) return
+		try {
+			execFileSync(bin, ['serve', '--yes', '--https=443', 'off'], { stdio: 'pipe' })
+			fs.rmSync(voiceFunnelReceiptPath())
+			console.info('✓ removed the receipt-owned voice Funnel mount')
+		} catch (error) {
+			console.info(
+				`  ⚠ could not remove the receipt-owned voice Funnel (${error instanceof Error ? error.message : error})`
+			)
+		}
+		return
+	}
+	if (!bin) {
+		console.info(`\n  ⚠ voice is configured but Tailscale is unavailable. Mount by hand:`)
+		console.info(`      tailscale funnel --bg --yes --https=443 --set-path=/voice ${VOICE_PORT}`)
+		return
+	}
+	const dns = magicDnsName(bin)
+	if (!dns) {
+		console.info('\n  ⚠ voice is configured but this node has no MagicDNS name; Funnel was not changed.')
+		return
+	}
+	let configuredHost: string
+	try {
+		configuredHost = new URL(voice.publicBaseUrl).hostname
+	} catch {
+		console.info('\n  ⚠ voice.public-url is invalid; Funnel was not changed.')
+		return
+	}
+	if (configuredHost !== dns) {
+		console.info(`\n  ⚠ voice.public-url names ${configuredHost}, but this node is ${dns}; Funnel was not changed.`)
+		console.info(`    Fix with: conductor-remote config set voice.public-url https://${dns}/voice`)
+		return
+	}
+
+	let status = rawTailscaleStatus(bin)
+	const oldReceipt = readVoiceFunnelReceipt()
+	let inspected = inspectVoiceFunnel(status, VOICE_PORT, RELAY_PORT, oldReceipt)
+	if (inspected.conflicts.length) {
+		console.info(`\n  ⚠ :443 carries ${inspected.conflicts.join(', ')}. It is not owned by this receipt; left as is.`)
+		return
+	}
+	if (inspected.owned && inspected.targetMatches && inspected.funnelOn && !inspected.relayAtRoot) {
+		console.info(`✓ voice Funnel already exposes https://${dns}/voice → 127.0.0.1:${VOICE_PORT}`)
+		return
+	}
+
+	if (inspected.relayAtRoot) {
+		const state = relayServeState(status, RELAY_PORT)
+		const candidates = [Number(RELAY_PORT), 8443, 10000].filter(
+			(port, index, all) => Number.isInteger(port) && port !== 443 && all.indexOf(port) === index
+		)
+		const destination = freeServePort(state, candidates)
+		if (destination === null) {
+			console.info(
+				`\n  ⚠ the relay must leave :443 for voice, but ${candidates.map(p => `:${p}`).join(', ')} are occupied.`
+			)
+			return
+		}
+		const failed = mountRelay(bin, 'serve', destination)
+		if (failed) {
+			console.info(`\n  ⚠ could not move the relay to tailnet-only :${destination} (${failed}). Voice was not changed.`)
+			return
+		}
+		try {
+			execFileSync(bin, ['serve', '--yes', '--https=443', 'off'], { stdio: 'pipe' })
+		} catch (error) {
+			console.info(
+				`\n  ⚠ relay moved, but :443 could not be cleared (${error instanceof Error ? error.message : error}).`
+			)
+			return
+		}
+		console.info(`✓ relay moved to https://${dns}:${destination}/ (tailnet-only) so voice can own :443`)
+	}
+
+	try {
+		execFileSync(bin, ['funnel', '--bg', '--yes', '--https=443', '--set-path=/voice', VOICE_PORT], {
+			stdio: 'pipe'
+		})
+	} catch (error) {
+		console.info(`\n  ⚠ could not mount voice Funnel (${error instanceof Error ? error.message : error}).`)
+		console.info(`    Run by hand: tailscale funnel --bg --yes --https=443 --set-path=/voice ${VOICE_PORT}`)
+		return
+	}
+	const receipt: VoiceFunnelReceipt = {
+		version: 1,
+		host: dns,
+		path: '/voice',
+		target: `http://127.0.0.1:${VOICE_PORT}`
+	}
+	status = rawTailscaleStatus(bin)
+	inspected = inspectVoiceFunnel(status, VOICE_PORT, RELAY_PORT, receipt)
+	if (!inspected.owned || !inspected.targetMatches || !inspected.funnelOn || inspected.relayAtRoot) {
+		console.info('\n  ⚠ Tailscale accepted the voice command, but the isolated public mount could not be verified.')
+		return
+	}
+	writeVoiceFunnelReceipt(receipt)
+	console.info(`✓ voice Funnel exposes https://${dns}/voice → 127.0.0.1:${VOICE_PORT} (receipt recorded)`)
+}
+
 function funnelRefused(error: string): void {
 	console.info(`\n  ⚠ could not enable Funnel (${error}).`)
 	console.info('    Funnel must be enabled for this tailnet: open the URL Tailscale printed above, or add the')
@@ -497,7 +628,7 @@ function printQr(url: string): void {
 	}
 }
 
-function printUrl(): void {
+function printUrl(loopbackPort: string = RELAY_PORT): void {
 	const token = currentToken()
 	const frag = `#token=${token ?? '<starts on first run>'}`
 	const bin = tailscaleBin()
@@ -506,7 +637,7 @@ function printUrl(): void {
 		if (drift.length) console.info(`\n${drift.join('\n')}`)
 	}
 	const dns = bin ? magicDnsName(bin) : null
-	const state = bin ? tailscaleState(bin) : relayServeState({}, RELAY_PORT)
+	const state = bin ? tailscaleState(bin, loopbackPort) : relayServeState({}, loopbackPort)
 	if (dns && state.port !== null) {
 		const scope = state.funnelOn ? 'public — any browser, token-gated' : 'same Tailnet only'
 		const url = `${serveUrl(dns, state.port)}${frag}`
@@ -518,10 +649,30 @@ function printUrl(): void {
 		return
 	}
 	// Nothing fronting yet — the relay is only on loopback.
-	console.info(`\n  Local URL:\n    http://127.0.0.1:${RELAY_PORT}/${frag}`)
+	console.info(`\n  Local URL:\n    http://127.0.0.1:${loopbackPort}/${frag}`)
 	console.info(
-		`\n  ⚠ Not reachable from your phone yet. Run \`yarn deploy\` (it picks a free port), or by hand \`tailscale funnel --bg ${RELAY_PORT}\` (public) / \`tailscale serve --bg ${RELAY_PORT}\` (tailnet)${dns ? ` → https://${dns}/` : ''}, then \`yarn service status\`.`
+		`\n  ⚠ Not reachable from your phone yet. Run \`yarn deploy\` (it picks a free port), or by hand \`tailscale funnel --bg ${loopbackPort}\` (public) / \`tailscale serve --bg ${loopbackPort}\` (tailnet)${dns ? ` → https://${dns}/` : ''}, then \`yarn service status\`.`
 	)
+}
+
+/** Report the public voice path independently of the relay's tailnet-only phone URL. */
+function printVoiceRoute(loopbackPort: string, listenerPort: string): void {
+	const voice = readVoiceConfig()
+	if (!voice.publicBaseUrl) {
+		console.info('voice:     disabled (set voice.public-url to enable)')
+		return
+	}
+	const bin = tailscaleBin()
+	if (!bin) {
+		console.info(`voice:     configured at ${voice.publicBaseUrl}, but Tailscale is unavailable`)
+		return
+	}
+	const inspected = inspectVoiceFunnel(rawTailscaleStatus(bin), listenerPort, loopbackPort, readVoiceFunnelReceipt())
+	if (inspected.owned && inspected.targetMatches && inspected.funnelOn && !inspected.relayAtRoot) {
+		console.info(`voice:     ${voice.publicBaseUrl} (public) → 127.0.0.1:${listenerPort}`)
+		return
+	}
+	console.info(`voice:     ${voice.publicBaseUrl} configured, but its isolated Funnel mount is not live`)
 }
 
 /** npx unpacks into a throwaway cache that gets purged; a LaunchAgent baked against it would rot. */
@@ -547,14 +698,36 @@ function install(): void {
 	// the daemon starts with an explicit EXPOSE in its own environment rather than racing the file
 	// ensureTailscale() writes further down. Folding it back into process.env is how every other knob
 	// travels here (see applyFlags), and it keeps ensureTailscale()'s own resolve a no-op re-read.
-	process.env.EXPOSE = resolveExposeMode()
+	const requestedExpose = resolveExposeMode()
+	if (readVoiceConfig().publicBaseUrl) {
+		if (requestedExpose !== 'tailnet')
+			console.info('  voice requires the relay itself to stay tailnet-only; forcing EXPOSE=tailnet.')
+		process.env.EXPOSE = 'tailnet'
+		try {
+			fs.mkdirSync(path.dirname(exposeStorePath()), { recursive: true })
+			fs.writeFileSync(exposeStorePath(), 'tailnet')
+		} catch {
+			// The plist still carries the safe posture; this file is only the next install's default.
+		}
+	} else {
+		process.env.EXPOSE = requestedExpose
+	}
 	fs.mkdirSync(path.dirname(plistPath), { recursive: true })
 	fs.mkdirSync(logDir, { recursive: true })
 	fs.writeFileSync(plistPath, buildPlist())
 	reloadAgent()
 	const changedSetting = process.env.CONDUCTOR_REMOTE_CONFIG_SET
 	if (changedSetting) {
-		if (changedSetting === 'expose' || changedSetting === 'port' || changedSetting === 'hostname') ensureTailscale()
+		if (
+			changedSetting === 'expose' ||
+			changedSetting === 'port' ||
+			changedSetting === 'voice-port' ||
+			changedSetting === 'hostname' ||
+			changedSetting.startsWith('voice.')
+		) {
+			ensureTailscale()
+			ensureVoiceFunnel()
+		}
 		console.info(`✓ set ${changedSetting}; the relay restarted with the new value.`)
 		console.info('  Check it with: conductor-remote config')
 		return
@@ -564,6 +737,7 @@ function install(): void {
 	console.info(`  logs:  ${logDir}/relay.log`)
 	console.info(`  node:  ${process.execPath}`)
 	ensureTailscale()
+	ensureVoiceFunnel()
 	printUrl()
 	console.info(
 		'\n  Note: a node version change (nvm) invalidates the baked path — re-run `yarn deploy` after upgrading node.'
@@ -586,7 +760,10 @@ function uninstall(): void {
 function restart(): void {
 	launchctl('kickstart', '-k', `${domain}/${LABEL}`)
 	console.info(`✓ restarted ${LABEL}`)
-	printUrl()
+	const env = readPlistEnv()
+	const relayPort = env.RELAY_PORT ?? '8787'
+	printUrl(relayPort)
+	printVoiceRoute(relayPort, env.VOICE_PORT ?? '8788')
 }
 
 /**
@@ -633,6 +810,7 @@ const KNOBS: Knob[] = [
 		fallbackSource: () => (fs.existsSync(exposeStorePath()) ? 'expose file' : 'default')
 	},
 	{ name: 'port', env: 'RELAY_PORT', fallback: () => '8787' },
+	{ name: 'voice-port', env: 'VOICE_PORT', fallback: () => '8788' },
 	{ name: 'host', env: 'RELAY_HOST', fallback: () => '127.0.0.1' },
 	{ name: 'write-strategy', env: 'WRITE_STRATEGY', fallback: () => 'applescript' },
 	{ name: 'prevent-screen-lock', env: 'PREVENT_SCREEN_LOCK', fallback: () => 'on' },
@@ -666,8 +844,27 @@ function setConfig(args: string[]): void {
 		console.error('usage: conductor-remote config set <setting> <value>')
 		process.exit(1)
 	}
+	if (name && (VOICE_SETTING_NAMES as readonly string[]).includes(name)) {
+		try {
+			setVoiceSetting(name, value)
+		} catch (error) {
+			console.error(`config set: ${error instanceof Error ? error.message : error}`)
+			process.exit(1)
+		}
+		if (!fs.existsSync(plistPath)) {
+			console.info(`✓ set ${name}. Install the service to start the voice listener.`)
+			return
+		}
+		const childEnv = { ...process.env, ...readPlistEnv(), CONDUCTOR_REMOTE_CONFIG_SET: name }
+		const cli = path.join(projectDir, 'bin', 'cli.js')
+		const result = spawnSync(process.execPath, [cli, 'service', 'install'], { env: childEnv, stdio: 'inherit' })
+		if (result.error) console.error(`config set: could not restart the service (${result.error.message})`)
+		process.exit(result.status ?? 1)
+	}
 	if (!envKey) {
-		console.error(`config set: unknown setting "${name}"\n  known: ${[...CONFIG_KEYS.keys()].join(', ')}`)
+		console.error(
+			`config set: unknown setting "${name}"\n  known: ${[...CONFIG_KEYS.keys(), ...VOICE_SETTING_NAMES].join(', ')}`
+		)
 		process.exit(1)
 	}
 	if (name === 'prevent-screen-lock' && value !== 'on' && value !== 'off') {
@@ -734,6 +931,23 @@ function config(): void {
 		// no token file yet
 	}
 	rows.push({ name: 'token', value: token, source: 'token file' })
+	const voice = readVoiceConfig()
+	rows.push(
+		{ name: 'voice.openai-key', value: voice.openaiKey ? '(set)' : '(unset)', source: 'voice file' },
+		{ name: 'voice.webhook-secret', value: voice.webhookSecret ? '(set)' : '(unset)', source: 'voice file' },
+		{ name: 'voice.twilio-auth-token', value: voice.twilioAuthToken ? '(set)' : '(unset)', source: 'voice file' },
+		{
+			name: 'voice.allowed-callers',
+			value: voice.allowedCallers.length ? `${voice.allowedCallers.length} set` : '(unset)',
+			source: 'voice file'
+		},
+		{ name: 'voice.pin', value: voice.pin ? '(set)' : '(unset)', source: 'voice file' },
+		{ name: 'voice.project-id', value: voice.projectId ? '(set)' : '(unset)', source: 'voice file' },
+		{ name: 'voice.public-url', value: voice.publicBaseUrl ?? '(unset)', source: 'voice file' },
+		{ name: 'voice.model', value: voice.model, source: 'voice file' },
+		{ name: 'voice.voice', value: voice.voice, source: 'voice file' },
+		{ name: 'voice.sip-host', value: voice.sipHost, source: 'voice file' }
+	)
 	// The HTTPS port is a live Tailscale fact, not a plist knob: :443 by default, elsewhere once another
 	// service holds :443 (see ensureServeOnly), and the phone URL carries whichever it is. Read against the
 	// daemon's own port, since this shell's RELAY_PORT is not the one the relay listens on.
@@ -800,7 +1014,10 @@ function status(): void {
 	} catch {
 		console.info('state:     loaded but not running (check logs)')
 	}
-	printUrl()
+	const env = readPlistEnv()
+	const relayPort = env.RELAY_PORT ?? '8787'
+	printUrl(relayPort)
+	printVoiceRoute(relayPort, env.VOICE_PORT ?? '8788')
 }
 
 /**

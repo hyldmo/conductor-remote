@@ -42,6 +42,7 @@ import type { Workspace as ReadWorkspace, RepoRow, SearchWorkspace, SessionRow }
 import type { DevRunConfig } from './run-configs.ts'
 import type { IndexStatus, SearchResult as SearchEvidence } from './search.ts'
 import type { Settings } from './settings.ts'
+import type { OpenAIRealtimeVoice, VoiceLanguage } from './shared.ts'
 import type { TranscriptEntry } from './transcript.ts'
 import type { ActuatorInfo, SendResult as ActuatorSendResult } from './writes.ts'
 
@@ -67,6 +68,7 @@ export type {
 	LogEntry,
 	LogFileInfo,
 	NoSleepState,
+	OpenAIRealtimeVoice,
 	/** What the phone can change about a chat's agent. */
 	ParkedAgentPatch as AgentPatch,
 	PlanUsageBucket,
@@ -81,7 +83,8 @@ export type {
 	Settings as RelaySettings,
 	SyncedDraft,
 	TranscriptEntry,
-	UpdateStatus
+	UpdateStatus,
+	VoiceLanguage
 }
 
 // ── delegated roles ─────────────────────────────────────────────────────────────
@@ -273,6 +276,20 @@ export interface SearchResponse {
 /** GET /api/repos */
 export interface ReposResponse {
 	repos: RepoRow[]
+}
+
+/** POST /api/voice/ticket — a fresh, short-lived URI; all permanent secrets stay on the relay. */
+export interface VoiceTicketResponse {
+	uri: string
+	expiresAt: string
+}
+
+/** POST /api/voice/calls — OpenAI's answer plus the sideband call receipt. */
+export interface VoiceCallResponse {
+	/** Opaque OpenAI call id used only for ready/end requests to this relay. */
+	callId: string
+	/** SDP answer installed as the WebRTC peer's remote description. */
+	sdp: string
 }
 
 /** GET /api/files/:reference — a bounded source preview for a chat file link. */
