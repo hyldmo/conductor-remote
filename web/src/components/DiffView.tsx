@@ -1,11 +1,11 @@
-import { ChevronLeft, ChevronRight, Folder, FolderOpen, List } from 'lucide-react'
+import { ChevronLeft, ChevronRight, List } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useFilePreview } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import type { DiffFileScope, DiffFileTreeNode } from '../lib/diff.ts'
 import { buildDiffFileTree, filesForScope, filesInFlatOrder, filesInTreeOrder, patchForFile } from '../lib/diff.ts'
 import type { DiffFile, Workspace, WorkspaceDiff, WorkspaceFileDiff, WorkspaceFilesResponse } from '../lib/types.ts'
-import { FileIcon } from './FileIcon.tsx'
+import { FileIcon, FolderIcon } from './FileIcon.tsx'
 import { MergeBanner } from './MergeBanner.tsx'
 import { Patch } from './Patch.tsx'
 import { SourceLines } from './SourceLines.tsx'
@@ -212,11 +212,7 @@ export function DiffFileList({
 								size={14}
 								className={cn('shrink-0 text-faint transition-transform', expanded && 'rotate-90')}
 							/>
-							{expanded ? (
-								<FolderOpen size={15} className={cn('shrink-0 text-faint', onSelectedPath && 'text-accent')} />
-							) : (
-								<Folder size={15} className={cn('shrink-0 text-faint', onSelectedPath && 'text-accent')} />
-							)}
+							<FolderIcon path={node.path} expanded={expanded} />
 							<span className={cn('truncate', onSelectedPath ? 'text-text' : 'text-muted')}>{node.name}</span>
 							<span className="shrink-0 text-[10px] tabular-nums text-faint">{node.fileCount}</span>
 						</span>

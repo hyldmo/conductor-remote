@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { and, asc, desc, eq, notInArray } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, notInArray } from 'drizzle-orm'
 import { drizzle, type NodeSQLiteDatabase } from 'drizzle-orm/node-sqlite'
 import {
 	ORCHESTRATION_BOOTSTRAP_SQL,
@@ -3059,6 +3059,48 @@ export class OrchestrationDb {
 			.orderBy(desc(workflowRuns.updatedAt))
 			.all()
 			.map(row => this.projectRun(this.decodeRun(row)))
+	}
+
+	/**
+	 * The sidebar keeps the identity of the newest Workflow that touched each live
+	 * workspace after that run reaches a terminal phase. Limit the query to the
+	 * workspaces on screen and project only one run per workspace: terminal history
+	 * is unbounded, while `/api/state` is polled every few seconds.
+	 */
+	listLatestWorkflowProjectionsForWorkspaces(workspaceIds: readonly string[]): WorkflowRunProjection[] {
+		const ids = [...new Set(workspaceIds.filter(Boolean))]
+		if (!ids.length) return []
+		const placeholders = ids.map(() => '?').join(', ')
+		const newest = this.db
+			.prepare(
+				`SELECT id FROM (
+					SELECT id, created_at, updated_at,
+						ROW_NUMBER() OVER (
+							PARTITION BY workspace_id
+							ORDER BY created_at DESC, updated_at DESC, id DESC
+						) AS ordinal
+					FROM workflow_runs
+					WHERE workspace_id IN (${placeholders})
+				) WHERE ordinal = 1
+				ORDER BY created_at DESC, updated_at DESC, id DESC`
+			)
+			.all(...ids) as unknown as Array<{ id: string }>
+		if (!newest.length) return []
+		const rows = this.orm
+			.select()
+			.from(workflowRuns)
+			.where(
+				inArray(
+					workflowRuns.id,
+					newest.map(row => row.id)
+				)
+			)
+			.all()
+		const byId = new Map(rows.map(row => [row.id, row]))
+		return newest.flatMap(({ id }) => {
+			const row = byId.get(id)
+			return row ? [this.projectRun(this.decodeRun(row))] : []
+		})
 	}
 
 	/**

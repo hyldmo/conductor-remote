@@ -28,10 +28,11 @@ const initialPrefs = loadLocalPrefs()
 export const WORKING_HINT_MS = 15_000
 
 /**
- * Sidebar view preferences. Workspace grouping and filtering mirror the desktop
- * app's popover, while row details and the file rail's folder layout are local
- * presentation choices. `recent` has no desktop equivalent: day buckets (Today /
- * Yesterday / …) for reaching the chat you left a minute ago.
+ * Global presentation preferences, persisted together in localStorage. Workspace
+ * grouping and filtering mirror the desktop app's popover, while row details and
+ * the file rail's folder layout are device-local choices shared by every workspace.
+ * `recent` has no desktop equivalent: day buckets (Today / Yesterday / …) for
+ * reaching the chat you left a minute ago.
  */
 export type GroupBy = 'status' | 'repo' | 'recent' | 'none'
 export type SortBy = 'updated' | 'created' | 'name'

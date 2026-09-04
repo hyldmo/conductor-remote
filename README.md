@@ -447,7 +447,10 @@ stays red and Start is refused before the relay opens a tab. The shipped
 so choose the exact one once. Start freezes all three roles for that run; editing a
 definition later affects only the next run. The root receives those frozen model labels
 and responsibilities in its first prompt; it does not need to call `list_roles`, whose
-output describes mutable defaults for later runs. In **New workspace** and the composer of
+output describes mutable defaults for later runs. In the sidebar, a Workflow workspace
+replaces the active model label with an ordered icon stack: Workflow, planning,
+exploration, then implementation; the frozen stack remains after completion. In
+**New workspace** and the composer of
 an untouched **+ New chat**, the **Workflow** pill is the kickoff switch. Its accepted
 state appears immediately from the top-level Workflow list, including before a new
 workspace is bound. The planning tuple is read-only, while the generic Plan control
