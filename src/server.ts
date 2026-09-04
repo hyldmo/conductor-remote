@@ -2264,9 +2264,9 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, 200, diff)
 			}
 
-			// GET /api/workspaces/:id/files — the worktree's own file list, which is what lets the
-			// phone link `tests/foo.ts` in a message: a mention becomes a link only when it names
-			// a file that is really there. A workspace with no worktree simply links nothing.
+			// GET /api/workspaces/:id/files — previewable worktree files for the diff window's
+			// All-files rail and for linking `tests/foo.ts` in a message only when it really exists.
+			// A workspace with no worktree has no list for either caller.
 			const filesOf = routeParam(routes.workspaceFiles, req.method, pathname)
 			if (filesOf) {
 				const ws = reads.getWorkspace(filesOf)

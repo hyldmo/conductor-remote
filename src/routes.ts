@@ -131,7 +131,7 @@ export const routes = {
 	sessions: param('GET', '/api/workspaces/:workspaceId/sessions'),
 	newChat: param('POST', '/api/workspaces/:workspaceId/sessions'),
 	diff: param('GET', '/api/workspaces/:workspaceId/diff'),
-	/** The worktree's own file list, which is what makes a chat's `src/foo.ts` a link. */
+	/** Previewable worktree files for chat links and the diff window's All-files rail. */
 	workspaceFiles: param('GET', '/api/workspaces/:workspaceId/files'),
 	merge: param('POST', '/api/workspaces/:workspaceId/merge'),
 	/** Keep this live workspace and its chats, but move its merged worktree onto a fresh branch. */

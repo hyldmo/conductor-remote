@@ -211,12 +211,13 @@ async function localState(worktree: string): Promise<{ dirty: boolean; unpushed:
 }
 
 /**
- * Every file in the worktree the phone may turn a chat mention into a link for.
+ * Every previewable source file in the worktree, shared by chat mention links and the
+ * diff window's All-files rail.
  *
- * Agents name files in prose all day — "updated `tests/foo.ts`" — and the phone
- * links a mention only when it matches a real file, so this is the list it matches
- * against. Tracked plus untracked-not-ignored: an agent that just wrote a file
- * names it in the same message, long before anything commits it.
+ * Agents name files in prose all day — "updated `tests/foo.ts`" — and the phone links
+ * a mention only when it matches a real file. The same list lets a reviewer browse
+ * source beyond the changed set. Tracked plus untracked-not-ignored: an agent that just
+ * wrote a file should appear in both places long before anything commits it.
  *
  * Two things keep the payload small. Only previewable extensions ship, because
  * `/api/files` refuses everything else anyway, and 20,000 paths is the ceiling — a

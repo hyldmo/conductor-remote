@@ -1660,7 +1660,8 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     exists; the misses are `scripts/dev.ts` in a worktree where it was deleted and
     `dev-forwards.json`, which lives in the relay's state dir. The list costs one
     request per workspace (143–746 paths here, 3–27 kB before gzip, previewable
-    extensions only) and is deliberately not polled.
+    extensions only). It is normally not polled; the diff window's All-files mode
+    refreshes it while open so newly-created source files join the navigator.
     An **absolute** path is the exception and links on shape alone: `/Users/…` may
     point at another workspace and `~/…` at a plan file, so there is no list to check
     it against — **the relay decides whether it may be opened**, exactly as it does for

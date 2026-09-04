@@ -311,12 +311,12 @@ export interface FilePreviewResponse {
 }
 
 /**
- * GET /api/workspaces/:id/files — worktree-relative paths, for linking file mentions.
+ * GET /api/workspaces/:id/files — previewable, worktree-relative source paths.
  *
- * The phone turns `` `tests/foo.ts` `` in a message into a source link only when it
- * names a file that is really there, and this is the list it checks against. Only
- * previewable extensions are listed; `truncated` says the worktree held more than
- * the relay will ship (src/git.ts ▸ `listSourceFiles`).
+ * The phone uses these for the diff window's All-files rail and turns
+ * `` `tests/foo.ts` `` in a message into a source link only when this list proves it
+ * exists. `truncated` says the worktree held more previewable paths than the relay
+ * will ship (src/git.ts ▸ `listSourceFiles`).
  */
 export interface WorkspaceFilesResponse {
 	files: string[]
