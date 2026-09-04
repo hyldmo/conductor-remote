@@ -162,8 +162,10 @@ export function ReloadPrompt() {
 		}, APPLY_FALLBACK)
 	}
 
+	// Modal sheets start at z-50. Keep this notice below them so a waiting update
+	// cannot cover a sheet's footer action; it reappears unchanged when the sheet closes.
 	return (
-		<div className="pb-safe fade-in fixed inset-x-0 bottom-0 z-[60] mx-auto flex max-w-sm items-center gap-3 rounded-t-2xl border border-border-soft bg-surface px-4 py-3 shadow-xl">
+		<div className="pb-safe fade-in fixed inset-x-0 bottom-0 z-40 mx-auto flex max-w-sm items-center gap-3 rounded-t-2xl border border-border-soft bg-surface px-4 py-3 shadow-xl">
 			<RefreshCw size={15} className="shrink-0 text-accent" />
 			<span className="flex-1 text-sm">New version ready</span>
 			<button type="button" onClick={snooze} className="rounded-lg px-2 py-1 text-xs text-muted active:bg-surface-2">
