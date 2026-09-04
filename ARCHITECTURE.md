@@ -28,9 +28,10 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   images for GET /api/tool-images/:reference (toolImageAt does that lookup)
   attachments.ts  writes a real Conductor attachment from outside Conductor: the file under
                   .context/attachments/<id>/, and the @⟦name⟧(path) token the composer parses
-  staged-attachments.ts  files picked before a worktree exists; the first-prompt queue moves
-                  them in before it sends the token that refers to them; a conservative sweep
-                  removes week-old files absent from both synced drafts and the delivery queue
+  staged-attachments.ts  files picked before a worktree exists; the ordinary first-prompt queue
+                  or Workflow root binder moves them in before sending their tokens; a conservative
+                  sweep removes week-old files absent from synced drafts, the ordinary delivery
+                  queue, and Workflow runs
   search.ts       main-thread facade/query grammar for chat search; folds chunk hits into workspaces
   search-worker.ts owns both synchronous SQLite handles for the FTS5 sidecar
                   (stateDir()/search.db), so backfill, lock waits and ranking cannot stall HTTP
@@ -41,7 +42,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   relay's matching regex, so the two cannot drift
   shared.ts       what both sides must compute identically (workspaceTitle, query tokens,
                   the locked-Mac phrase) — the one module web/ may import as a *value*
-  mcp-tools.ts    the 26 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
+  mcp-tools.ts    the 23 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
                   the relay through an injected `call`, so both transports share one path
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively
@@ -62,11 +63,12 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   pr.ts           the one read that leaves this box: GitHub PR state, cached and never awaited
                   by /api/state; conflicts are computed locally with `git merge-tree`
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
-  writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops;
+  writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
+                  locally and cooperates with the relay-wide cross-process SQLite lease;
                   merged-workspace Continue delegates the branch/store/chat transition to Conductor
   agent-config.ts two-pass cross-provider config: model-only write + DB receipt, then
-                  reacquired effort/fast controls + final receipt (generic Plan support stays
-                  available to existing callers but delegated roles never pass it)
+                  reacquired effort/fast controls + final receipt (generic Plan stays available
+                  to ordinary callers and remains outside Workflow role snapshots)
   model-cache.ts  the picker labels and starred default Conductor has shown us, keyed by
                   harness, so a workspace with no chat yet can still show the effective model
   conductor-settings.ts  surgical, atomic reads/writes of Claude/Codex new-chat effort
@@ -75,16 +77,29 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   concurrent, single-flight and cached (Cursor/OpenCode report unavailable)
   roles.ts        strict v1 global role config in stateDir()/roles.json; exact picker/provider
                   validation, immutable resolved snapshots, no Plan field
-  workflow.ts     validates/freezes the planning role and wraps a workflow's first objective
-                  with explicit delegation authority; emits no Plan setting
-  delegations.ts  strict worktree-local job/session-role codecs + guarded persisted queue;
-                  active jobs live under .context/delegations/ and successful jobs are removed
-                  after their Baton receipt while session role identity remains
-  session-poller.ts one two-second live-session read fanned out synchronously to notifications
-                  and delegation progress; async listener work cannot hold the clock
+  workflow.ts     validates/freezes all three Workflow roles and builds the root/child/Baton
+                  envelopes around the immutable objective; generic Plan is outside that snapshot
+  workflow-machine.ts pure phase/capability/barrier rules: exploration before implementation,
+                  delivered Batons before phase changes, and stable review
+  orchestration-schema.ts  Drizzle source of truth for the relay-owned SQLite schema,
+                  inferred row types, and derived Zod validators
+  orchestration-schema.generated.ts  checked-in STRICT bootstrap SQL generated from that schema
+  orchestration-db.ts  transactional state in stateDir()/orchestration.db: runs,
+                  jobs/attempts, effects/attempts, hashed capabilities, idempotency, events,
+                  relay identities, the cross-process UI lease, and ambiguity quarantine
+  workflow-effect-runner.ts starts external UI helpers behind a private persisted-before-GO gate;
+                  owns process-group identity and bounded termination for crash recovery
+  workflow-coordinator.ts  deterministic Workflow lifecycle, effect receipts/reconciliation,
+                  job ownership, recovery mutations, and secret-free phone projections
+  relay-processes.ts discovers compatible UI-capable relay processes by PID/start identity
+  delegations.ts  legacy worktree-local JSON job/session-role queue; accepted upgrade-era jobs
+                  may drain, but ordinary new delegation intake is rejected
+  session-poller.ts one two-second live-session read fanned out synchronously to notifications,
+                  legacy delegation progress, and Workflow receipt observation; async listener
+                  work cannot hold the clock
   sendonce.ts     the send memo: answers a repeated clientId with the first send's outcome
-  firstprompt.ts  persisted queue that tags a workflow root, applies its frozen settings, and
-                  delivers a new workspace's first prompt, from setup on
+  firstprompt.ts  persisted queue for ordinary new-workspace first prompts, from setup on;
+                  managed Workflow creation/effects belong to orchestration.db instead
   parked.ts       persisted queue for prompts that hit the lock screen — delivers on unlock, pushes the receipt
   dev-server.ts   URL-first Conductor Run previews + live cross-process advertisements +
                   per-port tailnet-only HTTPS forwards
@@ -114,11 +129,12 @@ web/              React PWA (Vite root)
   src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
   src/app.tsx     routes (/ list, /w/:id session) + token gate; mounts ReloadPrompt above the gate
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll) / useModels (model list, SWR)
-                  / useContextBreakdown (on demand) / useRoles; useSendPrompt applies staged agent settings, then sends
+                  / useContextBreakdown (on demand) / useRoles; dedicated Workflow start/recovery
+                  mutations; ordinary useSendPrompt applies staged agent settings, then sends
   src/lib/        api client, types (re-export of src/wire.ts), format helpers, cn, composer
                   drafts (draft.ts), ready attachments and staged agent settings (agentDraft.ts), local-first host
                   preference sync (prefs.ts), read marks (read.ts, the unread this phone has
-                  seen), pending sends (pending.ts, optimistic bubbles restored across a reload),
+                  seen), pending sends and stable Workflow mutation client ids (pending.ts),
                   push (permission/subscribe/reconcile), the unlock link a locked Mac gets
                   (lock.ts), transcript-merge (folds each tool result onto the call it answers,
                   identity intact), transcript-actions (where a Fork control may sit), highlight
@@ -140,7 +156,7 @@ web/              React PWA (Vite root)
                   windows and the fallback-network picker). Patch.tsx renders a unified diff for
                   both the workspace diff and an edit step's result
   src/store.ts    zustand: token + connection status + drafts (text + ready attachments)
-                  + staged agent settings + read marks
+                  + staged agent settings + Workflow attempt ids + read marks
                   + this device's push subscription
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see the PWA self-update trap in CLAUDE.md)
@@ -151,49 +167,75 @@ scripts/         gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/
                  + nosleep.ts (the `nosleep [duration|setup|status]` entrypoint)
                  + nosleep-setup.ts (installs the root helper + the scoped sudoers rule)
                  + check-{applescript,imports}.ts (repository source/toolchain validators)
+                 + generate-orchestration-schema.ts (snapshot-free Drizzle export; `yarn db:schema`)
 tests/           Vitest unit, contract, concurrency, filesystem and shell integration tests
 dist/            built PWA (gitignored) — what the relay serves
 dist-node/       compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball
 ```
 
-## Delegated role chats
+## Deterministic Workflow and legacy delegated chats
 
-Roles and jobs deliberately have different lifetimes. `roles.json` is global relay
-configuration. Intake requires one exact label from the deduplicated cached picker,
-derives its provider from that label, rejects the parent's provider, and freezes the
-complete role onto a job under the workspace worktree. Cache groups name the harness
-where a whole picker snapshot was observed; they do not claim ownership of its rows.
-Editing the role later therefore changes only future jobs.
+`roles.json` is global configuration, not run state. Workflow preflight resolves exact
+picker labels and freezes the complete planning, exploration, and implementation role
+snapshot—provider, model, effort, Fast, and private preamble—so later role edits affect
+only later runs. The two child roles must remain cross-provider from the planning role.
+Generic per-chat Plan controls are deliberately outside that snapshot: they remain
+visible and independent where Conductor supports them, and Workflow adds no special
+Plan policy or explanatory copy.
 
-The one `DelegationQueue` advances jobs through `queued → opening → configuring →
-sending → running → returning → returned`. UI stages are background-priority clients
-of the existing process-local `uiTurn`; there is no second scheduler. A locked screen
-or saturated UI queue costs no attempt, while three real failures leave an actionable
-`failed` file. Side effects are at-least-once across relay restarts. In particular, a
-queued Baton persists its pre-dispatch transcript cursor/text and subsequent ticks
-only seek that exact eventual user row instead of dispatching a second copy.
+The only start boundary is the authenticated PWA's `POST /api/workflows`. New workspace
+and pristine existing-chat targets use its tagged union; ordinary `POST /api/workspaces`
+and `POST /api/sessions/:id/prompt` carry no Workflow bit, and MCP exposes no start
+operation. Before any Conductor mutation, one SQLite transaction in
+`stateDir()/orchestration.db` records the immutable objective, client id plus canonical
+request hash, frozen roles, target/baseline evidence, prepared first effect, and a dormant
+logical `explore:0` job. This is a separate WAL database owned by the relay; the
+Conductor database stays read-only.
 
-Completion needs the child to be idle, have no process-gated background task, and
-contain a fresh assistant row after the delegated prompt. The same observation must
-survive two poll ticks. `error` is the only other outcome; a question is ordinary
-successful Baton prose for the parent to interpret. Conductor Plan mode is neither
-stored nor applied nor read as completion state by this subsystem.
+The coordinator advances
+`creating_workspace → binding_root → pending_root → exploring → planning → implementing → reviewing`.
+A delivered root receipt activates the dormant bootstrap explorer, so one tracked
+explorer is mechanical rather than a suggestion. The planner can request additional
+independent explorers. `delegate_task` is accepted only from that run's root with a
+hashed, causally delivered capability for its exact cycle, revision, phase, and next
+role. Every current exploration Baton must exist as a durable parent message—not merely
+an accepted outbox row—before implementation opens. Implementation Batons likewise
+lead to `reviewing`, which stays stable until the planner requests another permitted
+tracked pass or the phone explicitly marks the run complete.
 
-Successful job files disappear after the parent receipt. The worktree's separate
-`.context/delegations/sessions.json` remains, which is why role chips survive on both
-tabs until the workspace itself is archived.
+Jobs and UI effects keep logical identity across physical attempts. A process-local
+priority queue still orders calls inside one relay; a SQLite lease serializes UI access
+across relay processes. External helpers start behind a private gate only after their
+PID/start identity and the effect's `mayExecute` boundary are durable. A successor uses
+positive receipts and saved baselines to reconcile an abandoned effect. It may resume a
+provably pre-dispatch prepared effect; a deterministic blocked failure exposes phone
+Retry, while an effect that may have happened stays `blocked` rather than being guessed
+or replayed. Cancellation tombstones work without closing tabs or stopping turns; the
+durable wake query keeps only cancelled runs with unresolved dispatched effects, outbox
+receipts, or delivered child turns under observation. A later receipt or child result is
+recorded for audit without reopening the run, returning a Baton, or scheduling more work,
+including after a relay restart.
 
-Workflow mode is only an entry point into that same machinery. Both New workspace and
-an untouched `+` chat send `workflow: true` instead of any explicit
-model/effort/plan/fast patch. `workflow.ts` validates and freezes the global `planning`
-role and builds a root prompt that records the user's delegation authorization. For a
-new workspace that happens before the deep link creates anything; the first-prompt
-queue persists the role alongside the prompt, waits for the real session and worktree,
-writes the root assignment to `sessions.json`, then applies model/effort/fast and sends.
-For an existing pristine chat, the send route checks that it is idle and has no user
-row, writes the same assignment, then configures and sends inside the request's
-idempotent send intent. Both orderings make the planning chip durable before work
-becomes visible. Neither sets nor reads Conductor Plan mode.
+`WorkflowRunWire` exposes only the bounded, secret-free projection needed by the PWA:
+phase, frozen public roles, guaranteed/extra job counts, navigation ids, sanitized error,
+adoption candidates, and allowed actions. `StateResponse.workflows` carries accepted
+runs even before they bind to a workspace; a workspace projection is only a convenience
+after binding. The phone owns idempotent Retry, explicit candidate adoption, separately
+confirmed risky replay, non-destructive Cancel, and stable-review Complete (only after
+an implementation Baton and with no outstanding job). The pipeline uses explicit
+Workflow ids for child tabs; it never
+infers managed ownership from arbitrary role chips or delegation records.
+
+The planner's instruction forbids code edits and the phase gates ensure tracked
+implementation goes through the implementation role. That is an orchestration and
+prompt contract, not an OS sandbox: an ordinary Conductor root still has filesystem
+tools, and the relay cannot remove them from an already-running chat.
+
+`delegations.ts` now exists only for upgrade compatibility. Previously accepted JSON
+jobs under `.context/delegations/` may finish and retain their legacy role-chip/session
+metadata, but ordinary new delegation intake is rejected. New `delegate_task` requests
+must carry a valid Workflow id and phase capability and are persisted in
+`orchestration.db`, never in the legacy queue.
 
 ## Re-deriving Conductor internals (if a Conductor update breaks something)
 

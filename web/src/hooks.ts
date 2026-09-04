@@ -1,8 +1,9 @@
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { RefObject } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { ApiError, client } from './lib/api.ts'
+import { workflowStartFingerprint } from './lib/pending.ts'
 import { localPrefsGeneration, localPrefsSnapshot, mergeRemotePrefs, subscribeLocalPrefs } from './lib/prefs.ts'
 import type { PushSupport } from './lib/push.ts'
 import {
@@ -22,7 +23,13 @@ import type {
 	ModelDefaultsResponse,
 	RolesResponse,
 	Session,
-	TranscriptEntry
+	StartWorkflowRequest,
+	StateResponse,
+	TranscriptEntry,
+	UiQuarantineWire,
+	WorkflowAdoptionCandidate,
+	WorkflowRoleName,
+	WorkflowRunWire
 } from './lib/types.ts'
 import { useApp } from './store.ts'
 
@@ -352,6 +359,128 @@ export function useWorkspaces() {
 }
 
 /**
+ * Put an accepted/mutated run on screen before the next state poll. Bound runs
+ * own their workspace projection; the top-level list keeps pre-binding runs
+ * visible as well.
+ */
+function cacheWorkflowProjection(queryClient: QueryClient, workflow: WorkflowRunWire): void {
+	queryClient.setQueryData<StateResponse>(['state'], current => {
+		if (!current) return current
+		const workflows = [...(current.workflows ?? []).filter(run => run.id !== workflow.id), workflow]
+		const workspaces = current.workspaces.map(workspace =>
+			workspace.id === workflow.workspaceId ? { ...workspace, workflow } : workspace
+		)
+		return { ...current, workflows, workspaces }
+	})
+}
+
+/** Dedicated UI authorization boundary for Workflow intake. */
+export function useStartWorkflow() {
+	const queryClient = useQueryClient()
+	return useCallback(
+		async (request: StartWorkflowRequest) => {
+			const response = await client.startWorkflow(request)
+			cacheWorkflowProjection(queryClient, response.workflow)
+			void queryClient.invalidateQueries({ queryKey: ['state'] })
+			return response
+		},
+		[queryClient]
+	)
+}
+
+/**
+ * Phone-owned recovery controls. A failed network response keeps the operation's
+ * client id so a repeated tap cannot duplicate a mutation whose response was lost.
+ */
+export function useWorkflowActions() {
+	const queryClient = useQueryClient()
+	const workflowClientId = useApp(s => s.workflowClientId)
+	const finishWorkflowAttempt = useApp(s => s.finishWorkflowAttempt)
+
+	const mutate = useCallback(
+		async (key: string, request: (clientId: string) => Promise<{ workflow: WorkflowRunWire }>) => {
+			const clientId = workflowClientId(key, key)
+			const response = await request(clientId)
+			finishWorkflowAttempt(key, clientId)
+			cacheWorkflowProjection(queryClient, response.workflow)
+			void queryClient.invalidateQueries({ queryKey: ['state'] })
+			return response.workflow
+		},
+		[queryClient, workflowClientId, finishWorkflowAttempt]
+	)
+
+	return useMemo(
+		() => ({
+			retry: (workflow: WorkflowRunWire) =>
+				mutate(`retry:${workflow.id}:${workflow.adoption?.actionId ?? workflow.updatedAt}`, clientId =>
+					client.retryWorkflow(workflow.id, { clientId })
+				),
+			adopt: (workflow: WorkflowRunWire, candidate: WorkflowAdoptionCandidate) => {
+				const actionId = workflow.adoption?.actionId
+				if (!actionId) return Promise.reject(new Error('This Workflow has no action to adopt.'))
+				return mutate(`adopt:${workflow.id}:${actionId}:${candidate.id}`, clientId =>
+					client.adoptWorkflow(workflow.id, {
+						clientId,
+						actionId,
+						...(workflow.adoption?.kind === 'workspace' ? { workspaceId: candidate.id } : { sessionId: candidate.id })
+					})
+				)
+			},
+			replay: (workflow: WorkflowRunWire) => {
+				const actionId = workflow.adoption?.actionId
+				if (!actionId) return Promise.reject(new Error('This Workflow has no ambiguous action to replay.'))
+				return mutate(`replay:${workflow.id}:${actionId}`, clientId =>
+					client.replayWorkflow(workflow.id, { clientId, actionId, confirmDuplicateRisk: true })
+				)
+			},
+			complete: (workflow: WorkflowRunWire) =>
+				mutate(`complete:${workflow.id}`, clientId => client.completeWorkflow(workflow.id, { clientId })),
+			cancel: (workflow: WorkflowRunWire) =>
+				mutate(`cancel:${workflow.id}`, clientId => client.cancelWorkflow(workflow.id, { clientId }))
+		}),
+		[mutate]
+	)
+}
+
+function uiQuarantineFingerprint(quarantine: UiQuarantineWire): string {
+	return JSON.stringify([quarantine.createdAt, quarantine.actionId ?? '', quarantine.effectId ?? '', quarantine.reason])
+}
+
+/**
+ * A UI quarantine outlives any one Workflow, including cancellation. Keep the
+ * phone acknowledgement id stable across a lost response, then retire the
+ * banner optimistically only when it still describes the acknowledged hold.
+ */
+export function useConfirmUiStable() {
+	const queryClient = useQueryClient()
+	const workflowClientId = useApp(s => s.workflowClientId)
+	const finishWorkflowAttempt = useApp(s => s.finishWorkflowAttempt)
+
+	return useCallback(
+		async (quarantine: UiQuarantineWire) => {
+			const key = 'confirm-ui-stable'
+			const fingerprint = uiQuarantineFingerprint(quarantine)
+			const clientId = workflowClientId(key, fingerprint)
+			const response = await client.confirmUiStable({
+				clientId,
+				confirmStable: true,
+				createdAt: quarantine.createdAt,
+				...(quarantine.actionId ? { actionId: quarantine.actionId } : {}),
+				...(quarantine.effectId ? { effectId: quarantine.effectId } : {})
+			})
+			finishWorkflowAttempt(key, clientId)
+			queryClient.setQueryData<StateResponse>(['state'], current => {
+				if (!current?.uiQuarantine || uiQuarantineFingerprint(current.uiQuarantine) !== fingerprint) return current
+				return { ...current, uiQuarantine: undefined }
+			})
+			void queryClient.invalidateQueries({ queryKey: ['state'] })
+			return response
+		},
+		[queryClient, workflowClientId, finishWorkflowAttempt]
+	)
+}
+
+/**
  * Reconcile local-first PWA state with the host without putting the network in the
  * typing path. Local edits flush after a short idle; blur/background flush immediately,
  * and a small poll picks up another device's changes while this one stays open.
@@ -676,6 +805,27 @@ export function useRoles(enabled = true) {
 	})
 }
 
+const REQUIRED_WORKFLOW_ROLES = [
+	'planning',
+	'exploration',
+	'implementation'
+] as const satisfies readonly WorkflowRoleName[]
+
+export function useWorkflowRoleReadiness(enabled = true) {
+	const roles = useRoles(enabled)
+	const missing = roles.data ? REQUIRED_WORKFLOW_ROLES.find(name => !roles.data.roles[name]) : undefined
+	const issue = roles.data?.issues.find(candidate => REQUIRED_WORKFLOW_ROLES.some(name => name === candidate.role))
+	const problem = roles.isError
+		? 'Could not load delegated roles.'
+		: (roles.data?.warning ?? (missing ? `Workflow needs a configured ${missing} role.` : issue?.error.message))
+	return {
+		roles,
+		planningRole: roles.data?.roles.planning,
+		problem,
+		ready: REQUIRED_WORKFLOW_ROLES.every(name => !!roles.data?.roles[name]) && !problem
+	}
+}
+
 /**
  * Conductor's live model list, stale-while-revalidate through the relay cache.
  *
@@ -832,11 +982,15 @@ export function useTranscript(sessionId: string | null, poll = true): Transcript
  */
 export function useSendPrompt() {
 	const queryClient = useQueryClient()
+	const startWorkflow = useStartWorkflow()
 	const addPending = useApp(s => s.addPending)
 	const failPending = useApp(s => s.failPending)
 	const removePending = useApp(s => s.removePending)
 	const markWorking = useApp(s => s.markWorking)
 	const clearAgentDraft = useApp(s => s.clearAgentDraft)
+	const clearDraftContent = useApp(s => s.clearDraftContent)
+	const workflowClientId = useApp(s => s.workflowClientId)
+	const finishWorkflowAttempt = useApp(s => s.finishWorkflowAttempt)
 
 	return useCallback(
 		async (opts: {
@@ -850,8 +1004,14 @@ export function useSendPrompt() {
 		}): Promise<boolean> => {
 			const text = opts.text.trim()
 			if (!text) return false
-			const id = opts.id ?? crypto.randomUUID()
 			const { sessionId, workspaceId } = opts
+			const workflowTarget = { kind: 'existing_session' as const, workspaceId, sessionId }
+			const workflowAttemptKey = `workflow:existing:${workspaceId}:${sessionId}`
+			const id =
+				opts.id ??
+				(opts.workflow
+					? workflowClientId(workflowAttemptKey, workflowStartFingerprint(text, workflowTarget))
+					: crypto.randomUUID())
 			addPending({ id, sessionId, workspaceId, text, queue: opts.queue, workflow: opts.workflow })
 			try {
 				// Read at send time, not through the closure: the user may have changed the
@@ -861,12 +1021,30 @@ export function useSendPrompt() {
 				// `id` goes to the relay as well as into the bubble: it is the send's identity,
 				// so a Retry of this same bubble is answered rather than sent again. Which is
 				// the duplicate the chats here hold — the prompt landed, the answer didn't.
-				const r = await client.sendPrompt(sessionId, text, workspaceId, agent, id, opts.queue, opts.workflow)
+				if (opts.workflow) {
+					await startWorkflow({ clientId: id, objective: text, target: workflowTarget })
+					// This also covers an inline Retry after a failed start or a page reload:
+					// every accepted path retires the synced objective in one place.
+					clearDraftContent(sessionId)
+					finishWorkflowAttempt(workflowAttemptKey, id)
+					// Workflow freezes model/effort/fast from the server-owned role snapshot.
+					// Plan remains an independent generic Conductor choice and stays staged.
+					if (staged) {
+						const replaced = Object.fromEntries(
+							Object.entries(staged).filter(([key]) => key !== 'plan')
+						) as typeof staged
+						if (Object.keys(replaced).length) clearAgentDraft(sessionId, replaced)
+					}
+					removePending(id)
+					void queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
+					return true
+				}
+
+				const r = await client.sendPrompt(sessionId, text, workspaceId, agent, id, opts.queue)
 				if (r.ok || r.parked) {
-					const appliedDraft = opts.workflow ? staged : agent
+					const appliedDraft = agent
 					if (appliedDraft) {
-						// Ordinary choices were applied/parked; Workflow deliberately replaces them
-						// with its planning role. Either way they are no longer staged.
+						// Ordinary choices were applied or parked with the prompt.
 						clearAgentDraft(sessionId, appliedDraft)
 						queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
 					}
@@ -886,7 +1064,18 @@ export function useSendPrompt() {
 			}
 			return false
 		},
-		[addPending, failPending, removePending, markWorking, clearAgentDraft, queryClient]
+		[
+			addPending,
+			failPending,
+			removePending,
+			markWorking,
+			clearAgentDraft,
+			clearDraftContent,
+			queryClient,
+			startWorkflow,
+			workflowClientId,
+			finishWorkflowAttempt
+		]
 	)
 }
 
@@ -1118,8 +1307,8 @@ export function usePushRouting(): void {
  * this also runs when a turn ends here — which is the one case the relay's own
  * suppression can miss, its claim having gone stale while the app was away.
  */
-// biome-ignore lint/correctness/useExhaustiveDependencies: `at` re-runs this when a turn lands here; the body doesn't read it
 export function useClearChatNotification(sessionId: string | null, at: string | undefined): void {
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `at` re-runs this when a turn lands here; the body doesn't read it
 	useEffect(() => {
 		if (!sessionId) return
 		const clear = () => {

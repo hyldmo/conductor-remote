@@ -2,7 +2,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
-import { DEFAULT_ROLES, RoleStore, resolveRole, roleModelIssues } from '../src/roles.ts'
+import {
+	DEFAULT_ROLES,
+	newestModelSnapshot,
+	ROLE_CONTROL_CAPABILITIES,
+	RoleStore,
+	resolveRole,
+	roleModelIssues
+} from '../src/roles.ts'
 
 const temporaryDirs: string[] = []
 
@@ -49,6 +56,18 @@ describe('delegated role store', () => {
 		expect(fs.readdirSync(path.dirname(file))).toEqual(['roles.json'])
 	})
 
+	test('invalidates its process cache when roles.json changes outside this process', () => {
+		const { store, file } = testStore()
+		expect(store.write({ version: 1, roles: { planning: { model: 'Fable 5' } } }).ok).toBe(true)
+		expect(store.read().config.roles.planning.model).toBe('Fable 5')
+
+		fs.writeFileSync(file, JSON.stringify({ version: 1, roles: { planning: { model: 'Fable 5.1' } } }))
+		const changed = new Date(Date.now() + 2000)
+		fs.utimesSync(file, changed, changed)
+
+		expect(store.read().config.roles.planning.model).toBe('Fable 5.1')
+	})
+
 	test("refuses controls Conductor doesn't render for an OpenCode role", () => {
 		const groups = [
 			{
@@ -71,6 +90,12 @@ describe('delegated role store', () => {
 				error: { code: 'invalid_request' }
 			})
 		}
+	})
+
+	test('uses the versioned verified-control table instead of provider guesses', () => {
+		expect(ROLE_CONTROL_CAPABILITIES.version).toBe(1)
+		expect(ROLE_CONTROL_CAPABILITIES.providers.codex.efforts).toContain('none')
+		expect(ROLE_CONTROL_CAPABILITIES.providers.claude.efforts).not.toContain('none')
 	})
 
 	test('rejects unknown fields, including Plan, without replacing the last good value', () => {
@@ -103,13 +128,16 @@ describe('delegated role store', () => {
 
 	test('reports unavailable, ambiguous, and unknown-provider models without changing them', () => {
 		const groups = [
-			{ agentType: 'claude', models: ['Fable 5'], updatedAt: 1 },
 			{
-				agentType: 'acp',
-				models: ['opencode-go/muse-spark-1.3-contributor', 'opencode/muse-spark-1.3-contributor-free'],
-				updatedAt: 1
-			},
-			{ agentType: 'codex', models: ['5.6 Sol'], updatedAt: 1 }
+				agentType: 'codex',
+				models: [
+					'Fable 5',
+					'opencode-go/muse-spark-1.3-contributor',
+					'opencode/muse-spark-1.3-contributor-free',
+					'5.6 Sol'
+				],
+				updatedAt: 3
+			}
 		]
 		const issues = roleModelIssues(DEFAULT_ROLES, groups)
 
@@ -158,6 +186,22 @@ describe('delegated role store', () => {
 		expect(resolveRole(config, 'implementation', groups)).toMatchObject({
 			ok: true,
 			role: { model: '5.6 Sol', agentType: 'codex' }
+		})
+	})
+
+	test('uses only the newest non-empty whole-picker snapshot', () => {
+		const groups = [
+			{ agentType: 'claude', models: ['Fable 5', '5.6 Sol'], updatedAt: 10 },
+			{ agentType: 'codex', models: ['5.6 Sol'], snapshotAt: null, updatedAt: 30 },
+			{ agentType: 'codex', models: ['Fable 5.1', '5.6 Sol'], updatedAt: 20 }
+		]
+		expect(newestModelSnapshot(groups)?.updatedAt).toBe(20)
+		expect(resolveRole({ version: 1, roles: { planning: { model: 'Fable 5' } } }, 'planning', groups)).toMatchObject({
+			ok: false,
+			error: { code: 'model_missing' }
+		})
+		expect(resolveRole({ version: 1, roles: { planning: { model: 'Fable 5.1' } } }, 'planning', groups)).toMatchObject({
+			ok: true
 		})
 	})
 

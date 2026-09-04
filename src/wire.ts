@@ -143,6 +143,14 @@ export type DelegationErrorCode =
 	| 'send_failed'
 	| 'completion_failed'
 	| 'return_failed'
+	| 'workflow_required'
+	| 'workflow_authorization_failed'
+	| 'workflow_phase_invalid'
+	| 'workflow_role_frozen'
+	| 'workflow_incompatible_relay'
+	| 'workflow_blocked'
+	| 'idempotency_conflict'
+	| 'ambiguous_effect'
 
 export interface DelegationError {
 	code: DelegationErrorCode
@@ -169,12 +177,19 @@ export type DelegationOutcome =
 export interface SessionRoleAssignment {
 	role: string
 	delegationId?: string
+	workflowId?: string
 	assignedAt: number
 }
 
 /** Active/failed job shape projected into `/api/state` and list responses. */
 export interface DelegationProjection {
 	id: string
+	/** Present for coordinator-owned jobs; absent on legacy JSON delegation jobs. */
+	workflowId?: string
+	/** Stable identity across retries of one logical Workflow job. */
+	logicalKey?: string
+	/** The guaranteed first explorer created with the Workflow run. */
+	bootstrap?: boolean
 	workspaceId: string
 	parentSessionId: string
 	childSessionId?: string
@@ -190,35 +205,180 @@ export interface DelegationProjection {
 	failure?: DelegationError
 }
 
-/** The live workspace enriched by relay-owned orchestration state. */
-export type Workspace = ReadWorkspace & {
-	delegations?: DelegationProjection[]
-	session_roles?: Record<string, SessionRoleAssignment>
-	/** A malformed/unsupported worktree file is preserved and reported here. */
-	delegation_warning?: string
+// ── deterministic Workflows ─────────────────────────────────────────────────────
+
+export type WorkflowPhase =
+	| 'creating_workspace'
+	| 'binding_root'
+	| 'pending_root'
+	| 'exploring'
+	| 'planning'
+	| 'implementing'
+	| 'reviewing'
+	| 'blocked'
+	| 'completed'
+	| 'cancelled'
+
+export type WorkflowRoleName = 'planning' | 'exploration' | 'implementation'
+export type WorkflowChildRoleName = Exclude<WorkflowRoleName, 'planning'>
+
+/** Frozen role data safe to expose; preambles and capability material never cross this boundary. */
+export interface PublicFrozenRole {
+	model: string
+	agentType: string
+	effort?: AgentEffort
+	fast?: boolean
 }
 
-/** POST `/api/sessions/:id/delegate`; the path identifies the parent session. */
-export interface DelegateTaskRequest {
-	role: string
-	prompt: string
+export interface WorkflowJobCounts {
+	requested: number
+	running: number
+	returned: number
+	failed: number
+}
+
+export interface WorkflowAdoptionCandidate {
+	id: string
+	title: string
+	repo: string
+	createdAt: number
+}
+
+/** Bounded public recovery evidence. Raw window/process evidence remains relay-private. */
+export interface WorkflowAdoption {
+	actionId: string
+	kind: 'workspace' | 'session'
+	candidates: WorkflowAdoptionCandidate[]
+}
+
+/** The deliberately small, secret-free Workflow projection returned by `/api/state`. */
+export interface WorkflowRunWire {
+	id: string
 	workspaceId?: string
-	throughRowid?: number
-	includeThinking?: boolean
-	returnMode?: DelegationReturnMode
+	rootSessionId?: string
+	phase: WorkflowPhase
+	objectiveExcerpt: string
+	roles: Record<WorkflowRoleName, PublicFrozenRole>
+	jobs: {
+		exploration: WorkflowJobCounts
+		implementation: WorkflowJobCounts
+	}
+	error?: { code: string; message: string; retryable: boolean }
+	adoption?: WorkflowAdoption
+	actions: {
+		canRetry: boolean
+		canAdopt: boolean
+		canReplayAmbiguous: boolean
+		canCancel: boolean
+		canComplete: boolean
+	}
+	createdAt: number
+	updatedAt: number
 }
 
-export type DelegateTaskResult =
+export type StartWorkflowRequest =
+	| {
+			clientId: string
+			objective: string
+			target: { kind: 'new_workspace'; repo: string; sendImmediately: boolean }
+	  }
+	| {
+			clientId: string
+			objective: string
+			target: { kind: 'existing_session'; workspaceId: string; sessionId: string }
+	  }
+
+export interface StartWorkflowResponse {
+	workflow: WorkflowRunWire
+}
+
+/** Strict MCP-to-relay contract. Unknown/override fields are rejected by the handler. */
+export interface WorkflowDelegateRequest {
+	workflow_id: string
+	phase_capability: string
+	session_id: string
+	role: WorkflowChildRoleName
+	prompt: string
+}
+
+export type WorkflowDelegateResult =
 	| {
 			ok: true
+			workflowId: string
 			delegationId: string
-			role: string
+			role: WorkflowChildRoleName
 			model: string
 	  }
 	| {
 			ok: false
 			error: DelegationError
 	  }
+
+/** Transitional names retained for shared callers while legacy JSON jobs drain. */
+export type DelegateTaskRequest = WorkflowDelegateRequest
+export type DelegateTaskResult = WorkflowDelegateResult
+
+export interface WorkflowRetryRequest {
+	clientId: string
+}
+
+export type WorkflowAdoptRequest = {
+	clientId: string
+	actionId: string
+} & ({ workspaceId: string; sessionId?: never } | { workspaceId?: never; sessionId: string })
+
+export interface WorkflowReplayRequest {
+	clientId: string
+	actionId: string
+	confirmDuplicateRisk: true
+}
+
+export interface WorkflowCompleteRequest {
+	clientId: string
+}
+
+export interface WorkflowCancelRequest {
+	clientId: string
+}
+
+export interface WorkflowMutationResponse {
+	workflow: WorkflowRunWire
+}
+
+/**
+ * Global UI hold after a relay died past the durable may-execute boundary.
+ * Process identity and raw diagnostics deliberately stay on the relay.
+ */
+export interface UiQuarantineWire {
+	active: true
+	reason: string
+	createdAt: number
+	actionId?: string
+	effectId?: string
+}
+
+/** Explicit phone acknowledgement; `true` prevents an accidental generic POST from clearing the hold. */
+export interface ConfirmUiStableRequest {
+	clientId: string
+	confirmStable: true
+	/** Compare-and-clear fingerprint from the exact banner the person inspected. */
+	createdAt: number
+	actionId?: string
+	effectId?: string
+}
+
+export interface ConfirmUiStableResponse {
+	ok: true
+}
+
+/** The live workspace enriched by relay-owned orchestration state. */
+export type Workspace = ReadWorkspace & {
+	delegations?: DelegationProjection[]
+	session_roles?: Record<string, SessionRoleAssignment>
+	workflow?: WorkflowRunWire
+	/** A malformed/unsupported worktree file is preserved and reported here. */
+	delegation_warning?: string
+}
 
 export interface RolesResponse extends RolesConfig {
 	/** Invalid templates stay editable and visible instead of being silently replaced. */
@@ -253,6 +413,12 @@ export type PendingPrompt = FirstPrompt & Partial<Omit<ParkedPrompt, keyof First
 /** GET /api/state — the sidebar, plus what the Connect sheet shows about this relay. */
 export interface StateResponse {
 	workspaces: Workspace[]
+	/** Active/reviewing/blocked runs, including accepted runs not bound to a workspace yet. */
+	workflows?: WorkflowRunWire[]
+	/** Global and independent of run lifetime: a cancelled Workflow may still have left the UI ambiguous. */
+	uiQuarantine?: UiQuarantineWire
+	/** Scrubbed blocking reason when orchestration state cannot safely be projected or mutated. */
+	workflowWarning?: string
 	actuator: ActuatorInfo
 	/** Relay version this daemon is running. */
 	version?: string
@@ -436,8 +602,6 @@ export interface CreateWorkspaceRequest extends ParkedAgentPatch {
 	send?: boolean
 	sendImmediately?: boolean
 	attachmentIds?: string[]
-	/** Configure and tag the first chat from the `planning` role; excludes explicit agent settings. */
-	workflow?: boolean
 }
 
 export interface CreateWorkspaceResult {
@@ -448,8 +612,6 @@ export interface CreateWorkspaceResult {
 	pendingPrompt?: string
 	/** The model requested for the new chat. The relay applies it before the first prompt. */
 	model?: string
-	/** Present when the first chat was accepted as a configured workflow root. */
-	workflow?: { role: string; model: string }
 	sent?: boolean
 	/** True when `send: true` waited for initial agent settings to finish. */
 	configured?: boolean
@@ -476,8 +638,6 @@ export interface SendPromptRequest {
 	agent?: ParkedAgentPatch
 	clientId?: string
 	queue?: boolean
-	/** Expand this first message into a configured planning root; mutually exclusive with agent/queue. */
-	workflow?: boolean
 }
 
 export interface SendResult extends ActuatorSendResult {

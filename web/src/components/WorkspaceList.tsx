@@ -24,6 +24,7 @@ import { type RepoSelection, selectedRepos, workspaceFilterSummary } from '../li
 import { type GroupBy, type SortBy, useApp, type ViewPrefs, WORKING_HINT_MS } from '../store.ts'
 import { ChangeStats } from './ChangeStats.tsx'
 import { ConnectSheet } from './ConnectSheet.tsx'
+import { WorkflowSummary } from './DelegationPipeline.tsx'
 import { HeaderFrame } from './Header.tsx'
 import { LogsSheet } from './LogsSheet.tsx'
 import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
@@ -108,6 +109,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const [searchOpen, setSearchOpen] = useState(false)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
+	const unboundWorkflows = (data?.workflows ?? []).filter(workflow => !workflow.workspaceId)
 	// Conductor's own names for the models these rows run on, read once for the whole
 	// list: the catalog is a single cached request, while a hook per card would be one
 	// subscription per row on a list that re-reads every 2.5s. It costs no UI trip —
@@ -259,13 +261,21 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 				) : null}
 			</div>
 			<nav className="pb-safe min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
+				{unboundWorkflows.length ? (
+					<section className="mb-3 space-y-2" aria-label="Accepted workflows waiting for a workspace">
+						<div className="px-1 text-xs font-semibold text-muted">Accepted workflows</div>
+						{unboundWorkflows.map(workflow => (
+							<WorkflowSummary key={workflow.id} workflow={workflow} compact />
+						))}
+					</section>
+				) : null}
 				{isLoading && !data ? (
 					<Spinner label="Loading workspaces…" />
 				) : isError ? (
 					<RelayUnreachable error={error} />
-				) : workspaces.length === 0 ? (
+				) : workspaces.length === 0 && !unboundWorkflows.length ? (
 					<Empty>No active workspaces. Start one in Conductor and it’ll appear here.</Empty>
-				) : shown.length === 0 ? (
+				) : workspaces.length > 0 && shown.length === 0 ? (
 					<Empty>
 						{repoFiltered
 							? selectedRepoNames.length

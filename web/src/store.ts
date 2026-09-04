@@ -1,7 +1,14 @@
 import { create } from 'zustand'
 import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
 import { offlineDelay } from './lib/online.ts'
-import { loadPending, type PendingMessage, writePending } from './lib/pending.ts'
+import {
+	loadPending,
+	loadWorkflowClientAttempts,
+	type PendingMessage,
+	type WorkflowClientAttempt,
+	writePending,
+	writeWorkflowClientAttempts
+} from './lib/pending.ts'
 import {
 	type LocalPrefsProjection,
 	loadLocalPrefs,
@@ -125,6 +132,8 @@ interface AppState {
 	 * its draft and the relay confirming, this is the only copy of the text.
 	 */
 	pending: PendingMessage[]
+	/** Stable PWA idempotency identities for Workflow mutations whose outcome is still uncertain. */
+	workflowClientAttempts: Record<string, WorkflowClientAttempt>
 	/** Unsent composer text per chat, mirrored to localStorage (see lib/draft.ts). */
 	drafts: Record<string, string>
 	/** Ready host-side files carried atomically with each composer draft. */
@@ -181,6 +190,10 @@ interface AppState {
 	}) => void
 	failPending: (id: string, error: string) => void
 	removePending: (id: string) => void
+	/** Reuse an uncertain attempt; rotate only when the canonical target/objective changes. */
+	workflowClientId: (key: string, fingerprint: string) => string
+	/** Forget an attempt only after the relay returned its authoritative mutation response. */
+	finishWorkflowAttempt: (key: string, clientId: string) => void
 	setDraft: (chatId: string, text: string) => void
 	addDraftAttachment: (chatId: string, attachment: DraftAttachment) => void
 	removeDraftAttachment: (chatId: string, path: string) => void
@@ -222,6 +235,7 @@ export const useApp = create<AppState>((set, get) => {
 		update: null,
 		workingHints: {},
 		pending: loadPending(),
+		workflowClientAttempts: loadWorkflowClientAttempts(),
 		drafts: initialPrefs.drafts,
 		draftAttachments: initialPrefs.draftAttachments,
 		agentDrafts: initialPrefs.agentDrafts,
@@ -271,6 +285,24 @@ export const useApp = create<AppState>((set, get) => {
 		failPending: (id, error) =>
 			savePending(get().pending.map(p => (p.id === id ? { ...p, status: 'error', error } : p))),
 		removePending: id => savePending(get().pending.filter(p => p.id !== id)),
+		workflowClientId: (key, fingerprint) => {
+			const current = get().workflowClientAttempts[key]
+			if (current?.fingerprint === fingerprint) return current.clientId
+			const next = {
+				...get().workflowClientAttempts,
+				[key]: { key, fingerprint, clientId: crypto.randomUUID(), createdAt: Date.now() }
+			}
+			writeWorkflowClientAttempts(next)
+			set({ workflowClientAttempts: next })
+			return next[key].clientId
+		},
+		finishWorkflowAttempt: (key, clientId) => {
+			const current = get().workflowClientAttempts[key]
+			if (!current || current.clientId !== clientId) return
+			const { [key]: _finished, ...next } = get().workflowClientAttempts
+			writeWorkflowClientAttempts(next)
+			set({ workflowClientAttempts: next })
+		},
 		setDraft: (chatId, text) => {
 			const saved = setLocalDraft(chatId, text, get().agentDrafts[chatId] ?? {})
 			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })

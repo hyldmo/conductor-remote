@@ -1,10 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, LoaderCircle, Paperclip, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Check, ChevronDown, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { modelAgentType } from '../../../src/shared.ts'
-import { useModelCatalog, useModelDefaults, useRepos, useRoles } from '../hooks.ts'
+import { useModelCatalog, useModelDefaults, useRepos, useStartWorkflow, useWorkflowRoleReadiness } from '../hooks.ts'
 import {
 	defaultEffortForModel,
 	nextEffortOverride,
@@ -17,26 +17,22 @@ import { cn } from '../lib/cn.ts'
 import { NEW_WORKSPACE_DRAFT } from '../lib/draft.ts'
 import { enterSubmits } from '../lib/keys.ts'
 import { type NewWorkspaceRepoStatus, newWorkspaceDisabledReason } from '../lib/new-workspace.ts'
+import { workflowStartFingerprint } from '../lib/pending.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
 import type { AgentPatch, DraftAttachment } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentControls } from './AgentControls.tsx'
+import {
+	AttachmentPickerButton,
+	AttachmentTray,
+	EMPTY_ATTACHMENTS,
+	useAttachmentUploads
+} from './AttachmentUploads.tsx'
 import { RepoAvatar } from './ui.tsx'
 import { WorkflowModePill } from './WorkflowModePill.tsx'
 
 /** The "Send immediately" choice, remembered for next time — a preference, not state. */
 const SEND_NOW_KEY = 'conductor-remote-send-immediately'
-
-type PendingAttachment = {
-	id: string
-	name: string
-	status: 'uploading' | 'error'
-	error?: string
-}
-
-type DisplayAttachment = (DraftAttachment & { id: string; status: 'ready'; error?: never }) | PendingAttachment
-
-const NO_ATTACHMENTS: DraftAttachment[] = []
 
 function loadSendNow(): boolean {
 	try {
@@ -82,14 +78,14 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const { data } = reposQuery
 	const modelCatalog = useModelCatalog()
 	const modelDefaults = useModelDefaults()
-	const roles = useRoles()
+	const { roles, planningRole, problem: workflowProblem, ready: workflowReady } = useWorkflowRoleReadiness()
 	const lastNewWorkspaceRepo = useApp(s => s.lastNewWorkspaceRepo)
 	const setLastNewWorkspaceRepo = useApp(s => s.setLastNewWorkspaceRepo)
 	const [repo, setRepo] = useState(lastNewWorkspaceRepo)
 	// The prompt is a draft in the store, not state here: this sheet unmounts the
 	// moment it is closed, and the text has to outlive that (see lib/draft.ts).
 	const prompt = useApp(s => s.drafts[NEW_WORKSPACE_DRAFT] ?? '')
-	const draftAttachments = useApp(s => s.draftAttachments[NEW_WORKSPACE_DRAFT] ?? NO_ATTACHMENTS)
+	const draftAttachments = useApp(s => s.draftAttachments[NEW_WORKSPACE_DRAFT] ?? EMPTY_ATTACHMENTS)
 	// Only pre-workspace uploads can seed a new worktree. Ignore a malformed or
 	// legacy descriptor without its staging id rather than drawing a pill we cannot send.
 	const readyAttachments = useMemo(
@@ -103,6 +99,8 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const addDraftAttachment = useApp(s => s.addDraftAttachment)
 	const removeDraftAttachment = useApp(s => s.removeDraftAttachment)
 	const clearDraftContent = useApp(s => s.clearDraftContent)
+	const workflowClientId = useApp(s => s.workflowClientId)
+	const finishWorkflowAttempt = useApp(s => s.finishWorkflowAttempt)
 	const setFocusedDraft = useApp(s => s.setFocusedDraft)
 	const setPrompt = (text: string) => setDraft(NEW_WORKSPACE_DRAFT, text)
 	const [agent, setAgent] = useState<AgentPatch>({})
@@ -111,14 +109,20 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const [sendNow, setSendNow] = useState(loadSendNow)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
-	const fileInput = useRef<HTMLInputElement>(null)
-	const cancelledUploads = useRef(new Set<string>())
-	const dragDepth = useRef(0)
-	const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
-	const [draggingFiles, setDraggingFiles] = useState(false)
 	const navigate = useNavigate()
 	const queryClient = useQueryClient()
+	const startWorkflow = useStartWorkflow()
 	const online = useApp(s => s.online)
+	const attachmentUploads = useAttachmentUploads({
+		draftKey: NEW_WORKSPACE_DRAFT,
+		ready: readyAttachments,
+		enabled: online,
+		upload: async (_draftKey, file) => (await client.stageAttachment(file)).attachment,
+		accept: addDraftAttachment,
+		removeReady: removeDraftAttachment,
+		discard: attachment => discardAttachment(attachment.stageId)
+	})
+	const cancelPendingUploads = attachmentUploads.cancelPending
 
 	useEffect(
 		() => () => {
@@ -137,25 +141,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 		if (repos.length && !repos.some(r => r.name === repo)) setRepo(repos[0].name)
 	}, [repo, repos])
 
-	const attachments: DisplayAttachment[] = [
-		...readyAttachments.map(attachment => ({ ...attachment, id: attachment.path, status: 'ready' as const })),
-		...pendingAttachments
-	]
-	const uploading = pendingAttachments.some(attachment => attachment.status === 'uploading')
-	const attachmentError = pendingAttachments.some(attachment => attachment.status === 'error')
+	const uploading = attachmentUploads.uploading
+	const attachmentError = attachmentUploads.hasError
 	const hasInitialPrompt = !!prompt.trim() || readyAttachments.length > 0
 	const models = modelCatalog.data?.groups.flatMap(group => group.models) ?? []
 	const defaultModel = modelCatalog.data?.defaultModel
-	const planningRole = roles.data?.roles.planning
-	const planningIssue = roles.data?.issues.find(issue => issue.role === 'planning')
-	const workflowProblem = roles.isError
-		? 'Could not load delegated roles.'
-		: roles.data?.warning
-			? roles.data.warning
-			: roles.data && !planningRole
-				? 'Workflow mode needs a configured planning role.'
-				: planningIssue?.error.message
-	const workflowReady = !!planningRole && !workflowProblem
 	const repoStatus: NewWorkspaceRepoStatus = selected
 		? 'selected'
 		: reposQuery.isLoading
@@ -198,98 +188,24 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 
 	// A user can enable Plan on Claude and then pick another provider. Remove the
 	// now-hidden choice so workspace creation never carries an option Conductor
-	// cannot apply.
+	// cannot apply. Workflow leaves that ordinary composer choice staged and
+	// independent while its own frozen planning tuple is on screen.
 	useEffect(() => {
+		if (workflowMode) return
 		if (!planAvailable && agent.plan !== undefined) stageAgent({ plan: undefined })
-	}, [planAvailable, agent.plan, stageAgent])
+	}, [workflowMode, planAvailable, agent.plan, stageAgent])
 
 	useEffect(() => {
 		if (!effortAvailable && agent.effort !== undefined) stageAgent({ effort: undefined })
 		if (!fastAvailable && agent.fast !== undefined) stageAgent({ fast: undefined })
 	}, [agent.effort, agent.fast, effortAvailable, fastAvailable, stageAgent])
 
-	const removeAttachment = (id: string) => {
-		const attachment = readyAttachments.find(current => current.path === id)
-		if (attachment) {
-			removeDraftAttachment(NEW_WORKSPACE_DRAFT, attachment.path)
-			// Keep the bytes through the sync window: another offline/focused device may
-			// still hold this revision. The relay reclaims an unreferenced copy after a week.
-			return
-		}
-		cancelledUploads.current.add(id)
-		setPendingAttachments(current => current.filter(attachment => attachment.id !== id))
-	}
-
-	const addFiles = async (picked: FileList | File[]) => {
-		if (!online) return
-		for (const file of Array.from(picked)) {
-			const id = crypto.randomUUID()
-			setPendingAttachments(current => [...current, { id, name: file.name || 'attachment', status: 'uploading' }])
-			try {
-				const uploaded = await client.stageAttachment(file)
-				if (cancelledUploads.current.delete(id)) {
-					discardAttachment(uploaded.attachment.stageId)
-					continue
-				}
-				addDraftAttachment(NEW_WORKSPACE_DRAFT, uploaded.attachment)
-				setPendingAttachments(current => current.filter(attachment => attachment.id !== id))
-			} catch (err) {
-				if (cancelledUploads.current.delete(id)) continue
-				setPendingAttachments(current =>
-					current.map(attachment =>
-						attachment.id === id
-							? { ...attachment, status: 'error', error: err instanceof Error ? err.message : 'Upload failed' }
-							: attachment
-					)
-				)
-			}
-		}
-	}
-
-	const chooseFiles = (files: FileList | null) => {
-		if (files?.length) void addFiles(files)
-	}
-
-	const isFileDrag = (event: React.DragEvent<HTMLElement>) => Array.from(event.dataTransfer.types).includes('Files')
-
-	const dragEnter = (event: React.DragEvent<HTMLElement>) => {
-		if (!isFileDrag(event)) return
-		event.preventDefault()
-		dragDepth.current += 1
-		setDraggingFiles(true)
-	}
-
-	const dragLeave = (event: React.DragEvent<HTMLElement>) => {
-		if (!isFileDrag(event)) return
-		dragDepth.current -= 1
-		if (dragDepth.current <= 0) {
-			dragDepth.current = 0
-			setDraggingFiles(false)
-		}
-	}
-
-	const dragOver = (event: React.DragEvent<HTMLElement>) => {
-		if (!isFileDrag(event)) return
-		event.preventDefault()
-		event.dataTransfer.dropEffect = 'copy'
-	}
-
-	const drop = (event: React.DragEvent<HTMLElement>) => {
-		if (!isFileDrag(event)) return
-		event.preventDefault()
-		dragDepth.current = 0
-		setDraggingFiles(false)
-		chooseFiles(event.dataTransfer.files)
-	}
-
 	// Ready files are part of the synced draft and survive this sheet. An upload still
 	// in flight has no durable reference yet, so cancel it and discard its late result.
 	const close = useCallback(() => {
-		for (const attachment of pendingAttachments) {
-			cancelledUploads.current.add(attachment.id)
-		}
+		cancelPendingUploads()
 		onClose()
-	}, [pendingAttachments, onClose])
+	}, [cancelPendingUploads, onClose])
 
 	const create = async () => {
 		const text = prompt.trim()
@@ -297,12 +213,26 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 		setBusy(true)
 		setError(null)
 		try {
+			if (workflowMode) {
+				const objective = [...readyAttachments.map(attachment => attachment.token), text].filter(Boolean).join('\n')
+				const target = { kind: 'new_workspace' as const, repo, sendImmediately: sendNow }
+				const attemptKey = 'workflow:new-workspace'
+				const clientId = workflowClientId(attemptKey, workflowStartFingerprint(objective, target))
+				const response = await startWorkflow({ clientId, objective, target })
+				// A 202 means the relay durably owns the objective and staged attachment
+				// references. Until then this synced draft remains the only safe copy.
+				clearDraftContent(NEW_WORKSPACE_DRAFT)
+				finishWorkflowAttempt(attemptKey, clientId)
+				onClose()
+				if (response.workflow.workspaceId) navigate(`/w/${response.workflow.workspaceId}`)
+				return
+			}
 			const r = await client.createWorkspace({
 				repo,
 				prompt: text,
 				sendImmediately: sendNow,
 				attachmentIds: readyAttachments.flatMap(attachment => (attachment.stageId ? [attachment.stageId] : [])),
-				...(workflowMode ? { workflow: true } : agent)
+				...agent
 			})
 			if (!r.ok || !r.workspaceId) {
 				setError(r.error ?? 'could not create the workspace')
@@ -389,51 +319,13 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				</div>
 				<fieldset
 					aria-label="First message"
-					onDragEnter={dragEnter}
-					onDragLeave={dragLeave}
-					onDragOver={dragOver}
-					onDrop={drop}
+					{...attachmentUploads.dropTargetProps}
 					className={cn(
 						'relative m-0 min-w-0 rounded-2xl border border-border bg-surface p-2 has-[textarea:focus]:border-accent/60',
-						draggingFiles && 'border-accent bg-accent-soft'
+						attachmentUploads.dragging && 'border-accent bg-accent-soft'
 					)}
 				>
-					<input
-						ref={fileInput}
-						type="file"
-						multiple
-						className="hidden"
-						onChange={event => {
-							chooseFiles(event.target.files)
-							event.target.value = ''
-						}}
-					/>
-					{attachments.length ? (
-						<div className="flex flex-wrap gap-1 px-2 pb-1">
-							{attachments.map(attachment => (
-								<div
-									key={attachment.id}
-									title={attachment.error ?? attachment.name}
-									className="flex max-w-full items-center gap-1 rounded-lg bg-surface-2 py-1 pl-2 pr-1 text-xs text-muted"
-								>
-									{attachment.status === 'uploading' ? (
-										<LoaderCircle size={12} className="shrink-0 animate-spin" />
-									) : null}
-									<span className="truncate">
-										{attachment.status === 'error' ? `${attachment.name}: ${attachment.error}` : attachment.name}
-									</span>
-									<button
-										type="button"
-										onClick={() => removeAttachment(attachment.id)}
-										aria-label={`Remove ${attachment.name}`}
-										className="flex size-5 shrink-0 items-center justify-center rounded active:bg-surface"
-									>
-										<X size={13} />
-									</button>
-								</div>
-							))}
-						</div>
-					) : null}
+					<AttachmentTray uploads={attachmentUploads} />
 					<textarea
 						value={prompt}
 						onChange={e => setPrompt(e.target.value)}
@@ -448,12 +340,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 						autoFocus
 						// text-base or iOS auto-zooms on focus and won't zoom back out (see Composer).
 						className="block w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint"
-						onPaste={event => {
-							const files = event.clipboardData.files
-							if (!files.length) return
-							event.preventDefault()
-							chooseFiles(files)
-						}}
+						onPaste={attachmentUploads.onPaste}
 						// The same rule as the chat composer (lib/keys.ts): Enter creates on a
 						// hardware keyboard, breaks the line on a touch one, and an IME's own
 						// Enter (picking a candidate) never creates the workspace.
@@ -475,12 +362,13 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							defaultModel={defaultModel}
 							fast={workflowMode ? planningRole?.fast : agent.fast}
 							effort={displayedEffort}
-							plan={workflowMode ? undefined : agent.plan}
+							plan={agent.plan}
+							planAvailable={planAvailable}
 							showEmptyEffort
 							modelStaged={!workflowMode && agent.model !== undefined}
 							fastStaged={!workflowMode && agent.fast !== undefined}
 							effortStaged={!workflowMode && agent.effort !== undefined}
-							planStaged={!workflowMode && agent.plan !== undefined}
+							planStaged={agent.plan !== undefined}
 							onModelChange={model =>
 								stageAgent({ model: model === (agent.model ?? defaultModel) ? undefined : model })
 							}
@@ -491,8 +379,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							onPlanChange={() =>
 								stageAgent({ plan: agent.plan === undefined ? true : agent.plan ? false : undefined })
 							}
-							disabled={workflowMode}
-							hidePlan={workflowMode}
+							freezeAgent={workflowMode}
 							beforeModel={
 								<WorkflowModePill
 									active={workflowMode}
@@ -505,31 +392,18 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							status={
 								workflowMode
 									? workflowReady
-										? 'Planning root · delegates configured roles into sibling chats'
+										? 'Planning role frozen for this Workflow'
 										: roles.isLoading
-											? 'Loading the planning role…'
+											? 'Loading Workflow roles…'
 											: undefined
 									: anyAgentChoice
 										? 'Applies when the workspace opens'
 										: undefined
 							}
 						/>
-						<button
-							type="button"
-							onClick={() => fileInput.current?.click()}
-							disabled={!online}
-							aria-label="Attach files"
-							className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:text-faint"
-						>
-							<Paperclip size={17} />
-						</button>
+						<AttachmentPickerButton uploads={attachmentUploads} disabled={!online} />
 					</div>
 					{workflowMode && workflowProblem ? <div className="px-2 pb-1 text-xs text-del">{workflowProblem}</div> : null}
-					{draggingFiles ? (
-						<div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-xl border border-dashed border-accent bg-accent-soft/90 text-sm font-medium text-accent">
-							Drop files to attach
-						</div>
-					) : null}
 				</fieldset>
 				{/* A real checkbox behind a drawn one: the whole row is the tap target, and the
 				    box keeps its keyboard and VoiceOver behaviour. Disabled with no first message

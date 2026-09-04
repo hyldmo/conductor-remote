@@ -6,7 +6,8 @@ import {
 	agentTypeCanExposeEffort,
 	agentTypeCanExposeFastMode,
 	modelAgentType,
-	modelCatalogIncludes
+	modelCatalogIncludes,
+	newestModelSnapshot
 } from '../../../src/shared.ts'
 import { useModelCatalog, useRoles } from '../hooks.ts'
 import { EFFORT_LABELS } from '../lib/agent.ts'
@@ -53,7 +54,10 @@ export function roleWithModel(role: DelegatedRole, model: string): DelegatedRole
 }
 
 export function roleModelProblem(role: DelegatedRole, groups: CachedModelGroup[]): string | null {
-	if (!modelCatalogIncludes(role.model, groups)) return 'Choose an exact model from Conductor’s picker.'
+	const snapshot = newestModelSnapshot(groups)
+	if (!snapshot || !modelCatalogIncludes(role.model, [snapshot])) {
+		return 'Choose an exact model from Conductor’s newest picker snapshot.'
+	}
 	const agentType = modelAgentType(role.model)
 	if (!agentType) return 'This model label does not identify a supported provider.'
 	if (role.effort !== undefined && !agentTypeCanExposeEffort(agentType)) {
@@ -68,7 +72,8 @@ export function roleModelProblem(role: DelegatedRole, groups: CachedModelGroup[]
 
 /** Each cache group is a whole-menu snapshot; provider identity comes from the exact label. */
 export function roleAgentType(role: DelegatedRole, groups: CachedModelGroup[]): string | null {
-	if (!modelCatalogIncludes(role.model, groups)) return null
+	const snapshot = newestModelSnapshot(groups)
+	if (!snapshot || !modelCatalogIncludes(role.model, [snapshot])) return null
 	return modelAgentType(role.model) ?? null
 }
 
@@ -216,7 +221,7 @@ export function RolesSettings({ onClose }: { onClose: () => void }) {
 	}, [rolesQuery.data, dirty])
 
 	const groups = modelCatalog.data?.groups
-	const models = useMemo(() => groups?.flatMap(group => group.models) ?? [], [groups])
+	const models = useMemo(() => newestModelSnapshot(groups ?? [])?.models ?? [], [groups])
 	const remoteIssues = new Map(rolesQuery.data?.issues.map(issue => [issue.role, issue.error.message]) ?? [])
 	const config = draft
 	const invalid = new Map<string, string>()
@@ -377,12 +382,11 @@ export function RolesSettings({ onClose }: { onClose: () => void }) {
 							{addError ? <p className="mt-1.5 px-1 text-xs text-del">{addError}</p> : null}
 						</div>
 						{invalid.size ? (
-							<p className="text-xs text-del">Choose the missing picker models before saving or delegating.</p>
+							<p className="text-xs text-del">Choose the missing picker models before starting a Workflow.</p>
 						) : null}
 						{error ? <p className="rounded-xl border border-del/40 bg-del/5 p-3 text-xs text-del">{error}</p> : null}
 						<p className="px-1 text-[11px] leading-relaxed text-faint">
-							Roles configure ordinary chats. Changes apply only to future jobs; accepted jobs keep their frozen model
-							and effort.
+							Roles configure future Workflow runs. Accepted jobs keep their frozen model and effort.
 						</p>
 					</div>
 				) : null}

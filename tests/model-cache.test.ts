@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { ModelCache } from '../src/model-cache.ts'
+import { newestModelSnapshot } from '../src/shared.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -40,5 +41,21 @@ describe('model cache', () => {
 		expect(cache.defaultModel()).toBeUndefined()
 		cache.remember('codex', ['5.6 Sol', '5.6 Terra'], '5.6 Sol')
 		expect(cache.defaultModel()).toBe('5.6 Sol')
+	})
+
+	test('does not let a single learned model shadow the newest complete picker snapshot', () => {
+		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-model-cache-'))
+		temporaryDirectories.push(directory)
+		const file = path.join(directory, 'models.json')
+		const cache = new ModelCache(file)
+
+		cache.remember('claude', ['Fable 5.1', '5.6 Sol', '5.6 Terra'])
+		cache.rememberModel('codex', '5.6 Sol')
+		cache.rememberModel('codex', '5.6 Terra')
+
+		const groups = cache.list()
+		expect(groups.find(entry => entry.agentType === 'codex')?.snapshotAt).toBeNull()
+		expect(newestModelSnapshot(groups)?.models).toEqual(['5.6 Sol', '5.6 Terra', 'Fable 5.1'])
+		expect(newestModelSnapshot(new ModelCache(file).list())?.models).toEqual(['5.6 Sol', '5.6 Terra', 'Fable 5.1'])
 	})
 })

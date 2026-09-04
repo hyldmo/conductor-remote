@@ -9,7 +9,7 @@
  * plain-text rows. Never render an SDK user frame as a user bubble.
  */
 
-import { isToolResult } from './shared.ts'
+import { isToolResult, scrubWorkflowSecrets } from './shared.ts'
 
 export interface TranscriptEntry {
 	id: string
@@ -103,6 +103,16 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s
 
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
 
+/** One exit for every human-readable string parseMessage can expose. */
+function scrubEntry(entry: TranscriptEntry): TranscriptEntry {
+	const scrubbed = { ...entry }
+	for (const key of ['text', 'detail', 'output', 'subagentLabel', 'tool'] as const) {
+		const value = scrubbed[key]
+		if (typeof value === 'string') scrubbed[key] = scrubWorkflowSecrets(value)
+	}
+	return scrubbed
+}
+
 /**
  * Turn Conductor's outbox payload into the same user entry its eventual
  * `session_messages` row will become. Outbox rows have no transcript rowid yet;
@@ -122,7 +132,7 @@ export function parseOutboxMessage(row: OutboxMessageRow): TranscriptEntry | nul
 		id: row.message_id,
 		rowid: 0,
 		role: 'user',
-		text,
+		text: scrubWorkflowSecrets(text),
 		ts: row.created_at,
 		queued: true
 	}
@@ -289,14 +299,14 @@ export function parseMessage(row: RawRow, worktree: string | null = null): Trans
 	// Plain user prompt (not SDK JSON) — the only source of real user bubbles.
 	if (!content.startsWith('{')) {
 		if (!content.trim()) return []
-		return [{ ...base, id: row.id, role: 'user', text: content }]
+		return [scrubEntry({ ...base, id: row.id, role: 'user', text: content })]
 	}
 
 	let parsed: SdkFrame
 	try {
 		parsed = JSON.parse(content)
 	} catch {
-		return [{ ...base, id: row.id, role: 'system', text: clip(content, 200) }]
+		return [scrubEntry({ ...base, id: row.id, role: 'system', text: clip(content, 200) })]
 	}
 	const parentToolUseId = str(parsed.parent_tool_use_id)
 	const frameBase = { ...base, ...(parentToolUseId ? { parentToolUseId } : {}) }
@@ -312,19 +322,19 @@ export function parseMessage(row: RawRow, worktree: string | null = null): Trans
 	// already plain, and inventing a phrase here would drift from what the desktop shows.
 	if (parsed.type === 'error') {
 		const said = str((parsed as { content?: unknown }).content)
-		if (said) return [{ ...frameBase, id: row.id, role: 'system', text: clip(said, 200) }]
+		if (said) return [scrubEntry({ ...frameBase, id: row.id, role: 'system', text: clip(said, 200) })]
 	}
 
 	const blocks = parsed.message?.content
 	if (!Array.isArray(blocks)) {
 		if (parsed.type === 'user' || parsed.type === 'assistant') return []
 		// Unknown frame shape — keep a dim raw dump so Conductor drift stays visible.
-		return [{ ...frameBase, id: row.id, role: 'system', text: clip(content, 200) }]
+		return [scrubEntry({ ...frameBase, id: row.id, role: 'system', text: clip(content, 200) })]
 	}
 
 	const entries: TranscriptEntry[] = []
 	const push = (e: Pick<TranscriptEntry, 'role' | 'text'> & Partial<TranscriptEntry>) =>
-		entries.push({ ...frameBase, ...e, id: `${row.id}:${entries.length}` })
+		entries.push(scrubEntry({ ...frameBase, ...e, id: `${row.id}:${entries.length}` }))
 
 	// Images are numbered per row, because that is all a reference needs to find one again
 	// (`toolImageAt`) and a row may hold several results.
@@ -418,8 +428,8 @@ const HEADINGS: Record<TranscriptEntry['role'], string> = {
 
 /** One tool row per line, the shape `read_chat` prints: what it did, then what it did it to. */
 function toolLine(e: TranscriptEntry): string {
-	if (e.error) return `- [error] ${e.text}`
-	return `- [${e.tool ?? 'tool'}] ${e.text}${e.detail ? ` — \`${e.detail}\`` : ''}`
+	if (e.error) return `- [error] ${scrubWorkflowSecrets(e.text)}`
+	return `- [${scrubWorkflowSecrets(e.tool ?? 'tool')}] ${scrubWorkflowSecrets(e.text)}${e.detail ? ` — \`${scrubWorkflowSecrets(e.detail)}\`` : ''}`
 }
 
 function plural(n: number, one: string): string {
@@ -525,7 +535,7 @@ export function renderTranscript(
 			heading = want
 		}
 		flushElisions()
-		out.push(e.role === 'tool' ? toolLine(e) : e.text)
+		out.push(e.role === 'tool' ? toolLine(e) : scrubWorkflowSecrets(e.text))
 		kept++
 	}
 	// Anything dropped after the last kept entry still has to be admitted to.

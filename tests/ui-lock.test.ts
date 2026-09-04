@@ -1,5 +1,13 @@
-import { describe, expect, test } from 'vitest'
-import { UiBusyError, uiQueueDepth, uiTurn, withUiPriority } from '../src/writes.ts'
+import { afterEach, describe, expect, test } from 'vitest'
+import {
+	configureSharedUiLeaseProvider,
+	UiBusyError,
+	uiQueueDepth,
+	uiTurn,
+	withGatedUiCommand,
+	withUiDispatchHook,
+	withUiPriority
+} from '../src/writes.ts'
 
 const order: string[] = []
 const hold = (name: string, ms: number) => (): Promise<string> =>
@@ -11,6 +19,8 @@ const hold = (name: string, ms: number) => (): Promise<string> =>
 	})
 
 const idle = (): boolean => uiQueueDepth().waiting === 0 && !uiQueueDepth().busy
+
+afterEach(() => configureSharedUiLeaseProvider(null))
 
 describe.sequential('UI lock', () => {
 	test('serializes operations in arrival order', async () => {
@@ -62,6 +72,140 @@ describe.sequential('UI lock', () => {
 		await Promise.all(runs)
 		expect(idle()).toBe(true)
 		await uiTurn(hold('recovered', 1))
+		expect(idle()).toBe(true)
+	})
+
+	test('holds one shared lease through every operation and the durable effect callback', async () => {
+		const events: string[] = []
+		configureSharedUiLeaseProvider({
+			acquire: async request => {
+				events.push(`acquire:${request.priority}:${request.actionId}`)
+				return {
+					markMayExecute: async () => {
+						events.push('may-execute')
+					},
+					release: async () => {
+						events.push('release')
+					}
+				}
+			}
+		})
+
+		await withUiDispatchHook(
+			async () => {
+				events.push('dispatched')
+			},
+			async () => {
+				await uiTurn(async () => events.push('first operation'))
+				await uiTurn(async () => events.push('second operation'))
+				events.push('effect committed')
+			},
+			'effect-1'
+		)
+
+		expect(events).toEqual([
+			'acquire:interactive:effect-1',
+			'dispatched',
+			'may-execute',
+			'first operation',
+			'may-execute',
+			'second operation',
+			'effect committed',
+			'release'
+		])
+		expect(idle()).toBe(true)
+	})
+
+	test('does not mark or execute an effect when shared lease acquisition fails', async () => {
+		const events: string[] = []
+		configureSharedUiLeaseProvider({
+			acquire: async () => {
+				throw new Error('shared lease unavailable')
+			}
+		})
+
+		await expect(
+			withUiDispatchHook(
+				async () => {
+					events.push('dispatched')
+				},
+				() => uiTurn(async () => events.push('operation')),
+				'effect-2'
+			)
+		).rejects.toThrow('shared lease unavailable')
+		expect(events).toEqual([])
+		expect(idle()).toBe(true)
+	})
+
+	test('awaits the shared release before resolving and freeing the local lock', async () => {
+		let released = false
+		configureSharedUiLeaseProvider({
+			acquire: async () => ({
+				markMayExecute: () => undefined,
+				release: async () => {
+					await Promise.resolve()
+					released = true
+				}
+			})
+		})
+
+		await uiTurn(async () => 'done')
+		expect(released).toBe(true)
+		expect(idle()).toBe(true)
+	})
+
+	test('persists each gated wrapper identity before sequential external commands execute', async () => {
+		const events: string[] = []
+		const effectPids: number[] = []
+		const leasePids: number[] = []
+		configureSharedUiLeaseProvider({
+			acquire: async () => {
+				events.push('acquire')
+				return {
+					markMayExecute: process => {
+						leasePids.push(process?.pid ?? 0)
+						events.push('lease-may-execute')
+					},
+					release: () => {
+						events.push('release')
+					}
+				}
+			}
+		})
+
+		const output = await withUiDispatchHook(
+			async () => {
+				events.push('dispatched')
+			},
+			() =>
+				withGatedUiCommand(
+					async process => {
+						effectPids.push(process.pid)
+						events.push('effect-may-execute')
+					},
+					execute =>
+						uiTurn(async () => {
+							const first = (await execute('/usr/bin/printf', ['gated'])).stdout
+							const second = await uiTurn(async () => (await execute('/usr/bin/printf', [' twice'])).stdout)
+							return first + second
+						})
+				),
+			'effect-gated'
+		)
+
+		expect(output).toBe('gated twice')
+		expect(effectPids).toHaveLength(2)
+		expect(effectPids.every(pid => pid > 1)).toBe(true)
+		expect(leasePids).toEqual(effectPids)
+		expect(events).toEqual([
+			'acquire',
+			'dispatched',
+			'effect-may-execute',
+			'lease-may-execute',
+			'effect-may-execute',
+			'lease-may-execute',
+			'release'
+		])
 		expect(idle()).toBe(true)
 	})
 })

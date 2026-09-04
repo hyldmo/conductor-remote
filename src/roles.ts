@@ -9,14 +9,18 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from './config.ts'
-import {
-	agentTypeCanExposeEffort,
-	agentTypeCanExposeFastMode,
-	modelAgentType,
-	modelCatalogIncludes,
-	modelPickerLabel
-} from './shared.ts'
-import type { CachedModelGroup, DelegatedRole, DelegationError, ResolvedDelegatedRole, RolesConfig } from './wire.ts'
+import { modelAgentType, modelCatalogIncludes, modelPickerLabel, newestModelSnapshot } from './shared.ts'
+
+export { newestModelSnapshot } from './shared.ts'
+
+import type {
+	AgentEffort,
+	CachedModelGroup,
+	DelegatedRole,
+	DelegationError,
+	ResolvedDelegatedRole,
+	RolesConfig
+} from './wire.ts'
 
 const EFFORTS = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'])
 const ROLE_NAME = /^[a-z][a-z0-9_-]{0,63}$/
@@ -24,6 +28,31 @@ const MAX_ROLES = 32
 const MAX_MODEL_LENGTH = 256
 const MAX_PREAMBLE_LENGTH = 50_000
 const ROLE_FIELDS = new Set(['model', 'effort', 'fast', 'preamble'])
+
+/**
+ * Controls verified against Conductor's provider-specific composer UI.
+ *
+ * This is intentionally versioned and deliberately contains only providers whose
+ * controls have been measured. A provider recognized from its model label but absent
+ * here can still be used with its defaults; role configuration must omit controls we
+ * cannot prove Conductor can apply and read back.
+ */
+export const ROLE_CONTROL_CAPABILITIES = {
+	version: 1,
+	providers: {
+		claude: {
+			efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'],
+			fast: true
+		},
+		codex: {
+			efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'],
+			fast: true
+		}
+	}
+} as const satisfies {
+	version: 1
+	providers: Record<string, { efforts: readonly AgentEffort[]; fast: boolean }>
+}
 
 const batonPreamble = (role: string): string =>
 	`You are the ${role} agent for this workspace. End your final answer with a \`## Baton\` section: Decision, Evidence, Files changed, Risks, Suggested next role.`
@@ -106,19 +135,20 @@ function issue(code: DelegationError['code'], message: string): DelegationError 
 }
 
 function controlIssue(name: string, role: DelegatedRole, agentType: string): DelegationError | null {
-	if (role.effort !== undefined && !agentTypeCanExposeEffort(agentType)) {
+	const controls = ROLE_CONTROL_CAPABILITIES.providers[agentType as keyof typeof ROLE_CONTROL_CAPABILITIES.providers]
+	if (role.effort !== undefined && !controls) {
 		return issue(
 			'invalid_request',
-			`Role ${name} cannot set effort because Conductor exposes no reasoning control for this provider.`
+			`Role ${name} must omit effort because this provider's Conductor reasoning control is not verified.`
 		)
 	}
-	if (role.effort === 'none' && agentType !== 'codex') {
-		return issue('invalid_request', `Role ${name} can use None effort only with a Codex model.`)
+	if (role.effort !== undefined && controls && !controls.efforts.includes(role.effort as never)) {
+		return issue('invalid_request', `Role ${name} cannot use ${role.effort} effort with its configured provider.`)
 	}
-	if (role.fast !== undefined && !agentTypeCanExposeFastMode(agentType)) {
+	if (role.fast !== undefined && !controls?.fast) {
 		return issue(
 			'invalid_request',
-			`Role ${name} cannot set Fast mode because Conductor exposes no Fast control for this provider.`
+			`Role ${name} must omit Fast mode because this provider's Conductor Fast control is not verified.`
 		)
 	}
 	return null
@@ -130,11 +160,15 @@ export function roleModelIssues(
 	groups: CachedModelGroup[]
 ): Array<{ role: string; error: DelegationError }> {
 	const issues: Array<{ role: string; error: DelegationError }> = []
+	const snapshot = newestModelSnapshot(groups)
 	for (const [name, role] of Object.entries(config.roles)) {
-		if (!modelCatalogIncludes(role.model, groups)) {
+		if (!snapshot || !modelCatalogIncludes(role.model, [snapshot])) {
 			issues.push({
 				role: name,
-				error: issue('model_missing', `Role ${name} needs an exact model from Conductor's current picker.`)
+				error: issue(
+					'model_missing',
+					`Role ${name} needs an exact model from Conductor's newest picker snapshot; update it in the role editor.`
+				)
 			})
 			continue
 		}
@@ -158,10 +192,14 @@ export type ResolveRoleResult = { ok: true; role: ResolvedDelegatedRole } | { ok
 export function resolveRole(config: RolesConfig, name: string, groups: CachedModelGroup[]): ResolveRoleResult {
 	const role = config.roles[name]
 	if (!role) return { ok: false, error: issue('role_not_found', `Unknown delegated role ${name}.`) }
-	if (!modelCatalogIncludes(role.model, groups)) {
+	const snapshot = newestModelSnapshot(groups)
+	if (!snapshot || !modelCatalogIncludes(role.model, [snapshot])) {
 		return {
 			ok: false,
-			error: issue('model_missing', `Role ${name} needs an exact model from Conductor's current picker.`)
+			error: issue(
+				'model_missing',
+				`Role ${name} needs an exact model from Conductor's newest picker snapshot; update it in the role editor.`
+			)
 		}
 	}
 	const agentType = modelAgentType(role.model)
@@ -180,13 +218,36 @@ export function resolveRole(config: RolesConfig, name: string, groups: CachedMod
 export class RoleStore {
 	private readonly file: string
 	private cache: RoleStoreRead | null = null
+	private cacheStamp: string | null | undefined
 
 	constructor(file = path.join(stateDir(), 'roles.json')) {
 		this.file = file
 	}
 
+	private fileStamp(): string | null {
+		try {
+			const stat = fs.statSync(this.file)
+			return `${stat.mtimeMs}:${stat.size}:${stat.ino}`
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+			throw err
+		}
+	}
+
 	read(): RoleStoreRead {
-		if (this.cache) return { ...this.cache, config: cloneConfig(this.cache.config) }
+		let stamp: string | null
+		try {
+			stamp = this.fileStamp()
+		} catch (err) {
+			stamp = null
+			this.cache = {
+				config: cloneConfig(DEFAULT_ROLES),
+				warning: `Could not inspect roles.json: ${err instanceof Error ? err.message : String(err)}`
+			}
+			this.cacheStamp = undefined
+			return { ...this.cache, config: cloneConfig(this.cache.config) }
+		}
+		if (this.cache && this.cacheStamp === stamp) return { ...this.cache, config: cloneConfig(this.cache.config) }
 		try {
 			this.cache = { config: decodeRoles(JSON.parse(fs.readFileSync(this.file, 'utf8'))) }
 		} catch (err) {
@@ -198,6 +259,7 @@ export class RoleStore {
 				}
 			}
 		}
+		this.cacheStamp = stamp
 		return { ...this.cache, config: cloneConfig(this.cache.config) }
 	}
 
@@ -222,6 +284,7 @@ export class RoleStore {
 			return { ok: false, error: `could not persist roles: ${err instanceof Error ? err.message : String(err)}` }
 		}
 		this.cache = { config }
+		this.cacheStamp = this.fileStamp()
 		return { ok: true, config: cloneConfig(config) }
 	}
 }

@@ -26,6 +26,7 @@ export function AgentControls({
 	fast,
 	effort,
 	plan,
+	planAvailable,
 	showEmptyEffort = false,
 	modelStaged = false,
 	fastStaged = false,
@@ -36,7 +37,7 @@ export function AgentControls({
 	onEffortChange,
 	onPlanChange,
 	disabled = false,
-	hidePlan = false,
+	freezeAgent = false,
 	beforeModel,
 	status
 }: {
@@ -54,6 +55,8 @@ export function AgentControls({
 	fast?: boolean
 	effort?: string
 	plan?: boolean
+	/** Override Plan visibility when another mode is displaying a frozen model tuple. */
+	planAvailable?: boolean
 	/** Keep the control visible while a new workspace's inherited effort is unavailable. */
 	showEmptyEffort?: boolean
 	modelStaged?: boolean
@@ -66,13 +69,13 @@ export function AgentControls({
 	onPlanChange: () => void
 	/** Prevent every agent-setting write while another mode owns the configuration. */
 	disabled?: boolean
-	/** Workflow mode never exposes or applies Conductor Plan mode. */
-	hidePlan?: boolean
+	/** Freeze the provider/model/effort/fast tuple while leaving generic Plan independent. */
+	freezeAgent?: boolean
 	/** A mode switch placed before the agent settings it controls. */
 	beforeModel?: ReactNode
 	status?: ReactNode
 }) {
-	const planAvailable = supportsPlanMode(agentType, providerModel)
+	const showPlan = planAvailable ?? supportsPlanMode(agentType, providerModel)
 	const effortAvailable = supportsEffortControl(agentType, providerModel)
 	const fastAvailable = supportsFastMode(agentType, providerModel)
 
@@ -96,7 +99,7 @@ export function AgentControls({
 						renderTrigger={({ picking, toggle }) => (
 							<button
 								type="button"
-								disabled={disabled}
+								disabled={disabled || freezeAgent}
 								onClick={toggle}
 								aria-label={`Change model, currently ${model}`}
 								aria-haspopup="menu"
@@ -115,7 +118,7 @@ export function AgentControls({
 				{fastAvailable ? (
 					<button
 						type="button"
-						disabled={disabled}
+						disabled={disabled || freezeAgent}
 						onClick={onFastChange}
 						aria-label={`Fast mode ${fast === undefined ? 'default' : fast ? 'on' : 'off'}`}
 						aria-pressed={fast === true}
@@ -131,7 +134,7 @@ export function AgentControls({
 				{effortAvailable && (effort || showEmptyEffort) ? (
 					<button
 						type="button"
-						disabled={disabled}
+						disabled={disabled || freezeAgent}
 						onClick={onEffortChange}
 						aria-label={`Reasoning effort: ${effort ? EFFORT_LABELS[effort] : 'default'}`}
 						className={cn(
@@ -143,7 +146,7 @@ export function AgentControls({
 						<span className="max-[340px]:hidden">{effort ? EFFORT_LABELS[effort] : 'Effort'}</span>
 					</button>
 				) : null}
-				{planAvailable && !hidePlan ? (
+				{showPlan ? (
 					<button
 						type="button"
 						disabled={disabled}

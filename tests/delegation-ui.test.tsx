@@ -1,6 +1,7 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test, vi } from 'vitest'
-import type { DelegationProjection, Session } from '../src/wire.ts'
+import type { DelegationProjection, Session, WorkflowRunWire } from '../src/wire.ts'
 
 Object.defineProperty(globalThis, 'location', { configurable: true, value: { hash: '', pathname: '/', search: '' } })
 Object.defineProperty(globalThis, 'localStorage', {
@@ -10,7 +11,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
 const [
-	{ DelegationPipeline },
+	{ DelegationPipeline, UiQuarantineBanner, WorkflowWarningBanner },
 	{ QueueBubble },
 	{ RoleChip, RoleEditorCard, roleAgentType, roleDraftCanSave, roleModelProblem, roleWithModel }
 ] = await Promise.all([
@@ -51,6 +52,38 @@ const completedChild: Session = {
 	prompt_cache_ttl_ms: null,
 	turn_started_at: '2026-09-03 10:01:00',
 	background_tasks: []
+}
+
+const blockedWorkflow: WorkflowRunWire = {
+	id: 'workflow-1',
+	workspaceId: 'workspace-1',
+	rootSessionId: 'parent-1',
+	phase: 'blocked',
+	objectiveExcerpt: 'Fix deterministic orchestration.',
+	roles: {
+		planning: { model: 'Fable 5.1', agentType: 'claude', effort: 'max' },
+		exploration: { model: '5.6 Terra', agentType: 'codex', effort: 'high', fast: false },
+		implementation: { model: 'Composer 2.5', agentType: 'cursor' }
+	},
+	jobs: {
+		exploration: { requested: 3, running: 1, returned: 1, failed: 1 },
+		implementation: { requested: 0, running: 0, returned: 0, failed: 0 }
+	},
+	error: { code: 'ambiguous_effect', message: 'The child tab may already exist.', retryable: false },
+	adoption: {
+		actionId: 'open:explore:0',
+		kind: 'session',
+		candidates: [{ id: 'candidate-1', title: 'Explorer', repo: 'conductor-remote', createdAt: 3 }]
+	},
+	actions: {
+		canRetry: false,
+		canAdopt: true,
+		canReplayAmbiguous: true,
+		canCancel: true,
+		canComplete: false
+	},
+	createdAt: 1,
+	updatedAt: 2
 }
 
 describe('delegation phone surfaces', () => {
@@ -106,6 +139,99 @@ describe('delegation phone surfaces', () => {
 		expect(html).toContain('bg-surface-2')
 	})
 
+	test('renders managed state only from WorkflowRunWire and keeps legacy tabs distinct', () => {
+		const managedJob = { ...running, workflowId: blockedWorkflow.id, bootstrap: true }
+		const withoutProjection = renderToStaticMarkup(<DelegationPipeline jobs={[managedJob]} onSelectSession={vi.fn()} />)
+		expect(withoutProjection).toBe('')
+
+		const html = renderToStaticMarkup(
+			<QueryClientProvider client={new QueryClient()}>
+				<DelegationPipeline workflow={blockedWorkflow} jobs={[managedJob, running]} onSelectSession={vi.fn()} />
+			</QueryClientProvider>
+		)
+		expect(html).toContain('Blocked')
+		expect(html).toContain('Guaranteed explorer')
+		expect(html).toContain('2 extra explorers')
+		expect(html).toContain('Fable 5.1')
+		expect(html).toContain('The child tab may already exist.')
+		expect(html).toContain('Review risky replay')
+		expect(html).toContain('Cancel workflow')
+		expect(html).toContain('Legacy')
+	})
+
+	test('keeps review stable until the phone explicitly marks it complete', () => {
+		const html = renderToStaticMarkup(
+			<QueryClientProvider client={new QueryClient()}>
+				<DelegationPipeline
+					workflow={{
+						...blockedWorkflow,
+						phase: 'reviewing',
+						error: undefined,
+						adoption: undefined,
+						actions: {
+							canRetry: false,
+							canAdopt: false,
+							canReplayAmbiguous: false,
+							canCancel: true,
+							canComplete: true
+						}
+					}}
+					jobs={[]}
+					onSelectSession={vi.fn()}
+				/>
+			</QueryClientProvider>
+		)
+		expect(html).toContain('Reviewing')
+		expect(html).toContain('Mark complete')
+	})
+
+	test('shows the global UI stability acknowledgement independently of a cancelled Workflow', () => {
+		const html = renderToStaticMarkup(
+			<QueryClientProvider client={new QueryClient()}>
+				<UiQuarantineBanner
+					quarantine={{
+						active: true,
+						reason: 'A dispatched child-open action lost its owner.',
+						createdAt: 1,
+						actionId: 'open-child',
+						effectId: 'effect-1'
+					}}
+				/>
+				<DelegationPipeline
+					workflow={{
+						...blockedWorkflow,
+						phase: 'cancelled',
+						error: undefined,
+						adoption: undefined,
+						actions: {
+							canRetry: false,
+							canAdopt: false,
+							canReplayAmbiguous: false,
+							canCancel: false,
+							canComplete: false
+						}
+					}}
+					jobs={[]}
+					onSelectSession={vi.fn()}
+				/>
+			</QueryClientProvider>
+		)
+		expect(html).toContain('Automated Conductor UI writes are paused')
+		expect(html).toContain('A dispatched child-open action lost its owner.')
+		expect(html).toContain('Action · open-child')
+		expect(html).toContain('Effect · effect-1')
+		expect(html).toContain('I checked — Conductor is stable')
+		expect(html).toContain('Cancelled')
+	})
+
+	test('shows a blocking Workflow warning even when no run can be projected', () => {
+		const html = renderToStaticMarkup(
+			<WorkflowWarningBanner warning="The orchestration database uses an unsupported future schema." />
+		)
+		expect(html).toContain('Workflow is unavailable')
+		expect(html).toContain('unsupported future schema')
+	})
+
 	test('role identity survives independently of an active job', () => {
 		const html = renderToStaticMarkup(<RoleChip name="planning" />)
 		expect(html).toContain('planning')
@@ -134,17 +260,17 @@ describe('delegation phone surfaces', () => {
 		expect(roleDraftCanSave(true, false, [], 1)).toBe(false)
 	})
 
-	test('takes a role provider from the model after deduplicating whole-picker caches', () => {
-		const models = ['Fable 5.1', '5.6 Sol', 'opencode-go/muse-spark-1.3-contributor']
+	test('uses only the newest whole-picker snapshot for role validation', () => {
+		const currentModels = ['5.6 Sol', 'opencode-go/muse-spark-1.3-contributor']
 		const groups = [
-			{ agentType: 'claude', models, updatedAt: 1 },
-			{ agentType: 'codex', models, updatedAt: 2 }
+			{ agentType: 'claude', models: ['Fable 5.1'], updatedAt: 1 },
+			{ agentType: 'codex', models: currentModels, updatedAt: 2 }
 		]
 
-		expect(roleAgentType({ model: 'Fable 5.1' }, groups)).toBe('claude')
+		expect(roleAgentType({ model: 'Fable 5.1' }, groups)).toBeNull()
 		expect(roleAgentType({ model: '5.6 Sol' }, groups)).toBe('codex')
 		expect(roleAgentType({ model: 'opencode-go/muse-spark-1.3-contributor' }, groups)).toBe('acp')
-		expect(roleModelProblem({ model: 'Fable 5.1' }, groups)).toBeNull()
+		expect(roleModelProblem({ model: 'Fable 5.1' }, groups)).toContain('newest picker snapshot')
 		expect(roleModelProblem({ model: 'unknown-model' }, groups)).toContain('exact model')
 	})
 

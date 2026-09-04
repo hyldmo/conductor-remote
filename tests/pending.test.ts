@@ -2,10 +2,13 @@ import { beforeEach, describe, expect, test } from 'vitest'
 import {
 	isUnconfirmed,
 	loadPending,
+	loadWorkflowClientAttempts,
 	type PendingMessage,
 	pendingMatchesTranscript,
 	promptIndicator,
-	writePending
+	workflowStartFingerprint,
+	writePending,
+	writeWorkflowClientAttempts
 } from '../web/src/lib/pending.ts'
 
 /**
@@ -147,5 +150,22 @@ describe('pending prompt indicator', () => {
 
 	test('has no override when there is no pending prompt', () => {
 		expect(promptIndicator([])).toBeNull()
+	})
+})
+
+describe('Workflow start identities', () => {
+	test('fingerprints the tagged target and persists an uncertain client id', () => {
+		const target = {
+			kind: 'existing_session' as const,
+			workspaceId: 'w1',
+			sessionId: 's1'
+		}
+		const fingerprint = workflowStartFingerprint('Ship it.', target)
+		const attempt = { key: 'workflow:existing:w1:s1', fingerprint, clientId: 'client-1', createdAt: Date.now() }
+
+		writeWorkflowClientAttempts({ [attempt.key]: attempt })
+		expect(loadWorkflowClientAttempts()).toEqual({ [attempt.key]: attempt })
+		expect(workflowStartFingerprint('Ship it.', target)).toBe(fingerprint)
+		expect(workflowStartFingerprint('Ship something else.', target)).not.toBe(fingerprint)
 	})
 })

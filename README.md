@@ -34,8 +34,8 @@ registers the service):
 curl -fsSL https://raw.githubusercontent.com/hyldmo/conductor-remote/main/install.sh | bash
 ```
 
-The published package is **dependency-free** — no build step and no native addons
-on your machine, so `npm i -g` finishes in about a second. `service install`
+The published package needs no local build toolchain or native addons, so installation
+is still a plain `npm i -g`. `service install`
 prints a phone URL with an embedded token; open it and **Add to Home Screen**.
 Manage the service with `conductor-remote service status|restart|uninstall`.
 
@@ -92,6 +92,7 @@ locked-screen/PSTN use. See
                                       ├─ writes: Actuator ⟶ Conductor
                                       │          ├─ applescript (default): osascript ⟶ focused session
                                       │          └─ sidecar (opt-in):      unix socket ⟶ exact session
+                                      ├─ workflow: orchestration.db ⟷ coordinator ⟶ tracked UI effects
                                       ├─ dev:    Run/Stop ⟶ CONDUCTOR_PORT ⟶ tailnet-only HTTPS
                                       └─ push:   turn ended ⟶ Web Push ⟶ your lock screen
 ```
@@ -106,6 +107,10 @@ locked-screen/PSTN use. See
   caches the result for a minute. Cursor/OpenCode say why no plan quota is available.
 - **Writes are the one fragile nerve** and are isolated behind a swappable
   `Actuator` (`src/writes.ts`).
+- **Workflow orchestration is relay-owned.** A separate WAL SQLite database
+  records frozen roles, jobs, capabilities, UI effects, receipts, and recovery;
+  a cross-process lease prevents two compatible relays from driving the shared
+  Conductor window at once.
 - **Notifications ride the durable side.** The relay watches the same SQLite for
   turns ending and sends a Web Push straight to the phone — no Conductor process
   involved, and it works with the app closed.
@@ -113,8 +118,8 @@ locked-screen/PSTN use. See
 ## Stack
 
 React 19 · React Router 7 · Vite 7 · Tailwind v4 · `vite-plugin-pwa` · TanStack
-Query · Zustand · Biome · lucide. The relay is dependency-free Node 24
-(`node:sqlite` + native TS type-stripping).
+Query · Zustand · Biome · lucide. The relay is Node 24 (`node:sqlite` + native TS
+type-stripping), with Drizzle and Zod defining and validating its owned database.
 
 ## Requirements
 
@@ -291,35 +296,42 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 - ✅ **Attach images and files** — tap the paperclip or paste an image into the
   composer. Files up to 25 MB are stored in Conductor's own attachment layout
   before the prompt is sent.
-- ✅ **Cross-provider delegated roles** — configure picker-backed roles from the
-  phone, then turn on **Workflow** beside the model picker in New workspace or an
-  untouched **+ New chat**. The first message starts as the configured planning role
-  and may call `delegate_task`, which opens a real sibling chat, attaches the parent
-  transcript, applies the frozen model/effort/fast settings, and returns a Baton when
-  the child is stably finished. Role chips and a live pipeline remain visible on the
-  phone. Workflow roles are ordinary chats and never enable or depend on Conductor
-  Plan mode.
+- ✅ **Deterministic cross-provider Workflow** — configure exact picker-backed
+  planning, exploration, and implementation roles, then turn on **Workflow** in
+  New workspace or an untouched **+ New chat**. The PWA calls the UI-only
+  `POST /api/workflows`; a `202` means the immutable objective, all three frozen
+  role snapshots, the prepared target effect, and a dormant bootstrap explorer
+  are durable before Conductor is touched. One tracked explorer is guaranteed,
+  the planner may request independent extras, every current exploration Baton must
+  be delivered before implementation opens, and review stays visible until another
+  tracked pass or an explicit completion. The phone shows phase, frozen roles, child
+  tabs, exact sanitized failures, and Retry/Adopt/confirmed Replay/Cancel/Complete actions.
+  Model, effort, and Fast are frozen for active roots and children. Generic Plan
+  remains its ordinary independent control; Workflow adds no Plan-specific policy
+  or copy. The planner's no-edit boundary is an instruction plus orchestration gates,
+  not an OS sandbox around its filesystem tools.
 - ✅ **Push notifications** when an agent finishes its turn or hits an error —
   see below.
 
 ## MCP: let your agents drive Conductor
 
-`conductor-remote mcp` is an MCP server on stdio. It gives a coding agent the same
-control the phone has, over the same relay.
+`conductor-remote mcp` is an MCP server on stdio. It gives a coding agent
+relay-backed reads and ordinary Conductor controls. Workflow Start, recovery, and
+role editing deliberately remain authenticated phone UI operations.
 
-Two transports, same 26 tools.
+Two transports, same 23 tools.
 
 | | |
 |---|---|
 | `search_chats` · `read_chat` | full-text search every chat on this Mac, archived included, then read one |
 | `list_workspaces` · `list_chats` · `workspace_diff` · `list_repos` | what is running, and what it changed |
 | `plan_usage` | prompt-free Claude/Codex subscription allowances and reset times |
-| `create_workspace` | start work in a repo, with an optional first prompt and model/effort/plan/fast choices, or `workflow: true` to use the configured planning root and authorize delegation without Plan mode. Creation uses a deep link; selected settings apply before the prompt |
+| `create_workspace` | start ordinary work in a repo, with an optional first prompt and model/effort/plan/fast choices. Creation uses a deep link; selected settings apply before the prompt |
 | `dev_server` | inspect, start, forward or stop a workspace's configured Conductor Run task; use this instead of launching a long-lived server from an agent shell |
 | `send_prompt` · `stop_turn` · `close_chat` | talk to a running agent, cancel its turn, or hide a chat tab |
 | `split_chat` | move a tangent into a fresh tab, or set `new_workspace` to carry the transcript and current code into a separate worktree |
-| `list_roles` · `set_role` | inspect or edit exact-picker delegated roles (model, effort, fast, and preamble; no Plan setting) |
-| `delegate_task` · `list_delegations` · `dismiss_delegation` | run a task in a real sibling chat on another provider, observe its persisted queue, or dismiss a failed job |
+| `list_roles` | inspect exact-picker Workflow role definitions and validation issues; role editing remains a phone UI action |
+| `delegate_task` · `list_delegations` | from an already-authorized Workflow root, request a capability-scoped tracked child or observe active/failed jobs; neither tool can start or recover a Workflow |
 | `list_models` · `set_agent_options` · `set_default_model` | cached model labels (including the starred default), model, effort, plan, fast; starring a default also selects it for the target chat, matching Conductor |
 | `set_workspace_status` | move a workspace between the sidebar's status groups |
 | `archive_workspace` | put a finished workspace away (Conductor's ⌘⇧A) — deletes the worktree, keeps the chat |
@@ -330,7 +342,7 @@ Two transports, same 26 tools.
 **Name it `conductor-remote`, not `conductor`.** Conductor injects an MCP server of its
 own into every agent it runs, and that one is already called `conductor`. Register this
 under the same name and inside a Conductor workspace the two collide: Conductor's tools
-win, these 26 vanish, and the only trace left is this server's instructions text —
+win, these 23 vanish, and the only trace left is this server's instructions text —
 so it reads as if the tools should be there.
 
 **stdio** — for an agent running on this Mac. The client spawns it as a child process;
@@ -375,14 +387,12 @@ of the time.
 | `list_workspaces` | what is running right now, with status and model |
 | `list_chats` | the chat tabs in a workspace |
 | `list_roles` | picker-backed cross-provider role definitions and validation issues |
-| `set_role` | add or change one delegated role without touching Conductor's UI |
-| `delegate_task` | enqueue a cross-provider sibling chat and return immediately with its job id |
+| `delegate_task` | enqueue a tracked child only for the caller's existing Workflow id/current phase capability, then return its job id |
 | `list_delegations` | active and failed delegated jobs |
-| `dismiss_delegation` | remove one failed job while retaining both chats and their role chips |
 | `workspace_diff` | a workspace's diff against its target branch |
 | `list_repos` | repos a workspace can be created in |
 | `plan_usage` | Claude/Codex rolling subscription limits, without sending a prompt |
-| `create_workspace` | start a new workspace, optionally with a first prompt and agent settings, or as a configured delegated workflow |
+| `create_workspace` | start an ordinary new workspace, optionally with a first prompt and agent settings |
 | `dev_server` | inspect/start/stop the configured Run task and its tailnet preview (`status` is read-only; start/stop drive the real UI) |
 | `send_prompt` | send into an existing chat (drives the real UI) |
 | `stop_turn` | cancel a running answer (drives the real UI) |
@@ -390,15 +400,18 @@ of the time.
 | `set_workspace_status` | set the sidebar status (drives the real UI) |
 | `archive_workspace` | archive a workspace (drives the real UI, deletes the worktree) |
 
-Search, transcript, workspace/chat, diff, repo, role, delegation-status, dismiss,
+Search, transcript, workspace/chat, diff, repo, role, delegation-status,
 dev-server status, keep-awake-status, and log reads touch no Conductor UI. `create_workspace` opens a
 Conductor deep link, so creation itself needs no Accessibility and steals no focus;
 requested model, effort, plan, and fast settings are applied later before the first
-prompt. Its `workflow` option instead freezes the configured `planning` role, tags the
-first chat as that role, and explicitly authorizes that root to use `delegate_task`;
-it cannot be combined with explicit agent settings and never touches Plan mode. `delegate_task`
-persists and returns immediately, then its background queue opens/configures/sends
-through the same serialized UI path as phone writes. It never changes Plan mode.
+prompt. Neither `create_workspace` nor `send_prompt` can start or join a Workflow.
+Workflow Start is deliberately PWA-only: the relay first accepts `POST /api/workflows`,
+then its durable coordinator performs the workspace/root effects. `delegate_task`
+requires the Workflow id, root session, role, and opaque capability delivered for the
+current phase; it persists and returns immediately while the coordinator later
+opens/configures/sends the child. MCP cannot start, retry, adopt, replay, cancel,
+complete, edit roles, or dismiss a managed failure. Generic Plan remains independent
+on the ordinary agent-option routes and is not part of Workflow's frozen tuple.
 Agents are explicitly told to use `dev_server` instead of starting a long-lived server
 from their shell. Its start and stop actions go through Conductor's Run controls, which
 preserves the workspace's allocated ports, run-mode policy and process-group cleanup;
@@ -410,11 +423,13 @@ session either. A request carrying an `Origin` header is refused outright — a 
 client sends none and a browser cannot omit one, which closes the DNS-rebinding hole
 without the relay having to know its own hostname behind Tailscale's TLS.
 
-**Two agents cannot collide.** Conductor has one window, so every UI write in the
-relay is serialized by a single process-local lock — which is exactly why these
-tools call the relay instead of driving AppleScript themselves. Agents are marked
-background priority, so they always yield to whoever is holding the phone, and past
-four queued operations a caller is refused with "busy, retry shortly" rather than
+**Two agents—or two compatible relay processes—cannot intentionally overlap UI
+writes.** Conductor has one window, so a priority lock serializes work inside each
+process and a lease in `orchestration.db` serializes cooperating processes. Workflow
+effects persist their dispatch boundary and external PID/start identity before they
+may execute, so a successor reconciles positive evidence instead of blindly repeating
+an abandoned action. Agents remain background priority behind the phone, and past four
+locally queued operations a caller is refused with "busy, retry shortly" rather than
 joining a line it would only time out waiting in.
 
 Worth knowing before you wire it up: `send_prompt` into a chat that is already
@@ -425,16 +440,20 @@ the desktop's own warning. The tool descriptions surface each of those choices.
 
 The workflow icon in either workspace header opens **Roles**. Models there are
 choices previously read from Conductor's real picker; a missing or ambiguous label
-stays red and delegation is refused before the relay opens a tab. The shipped
+stays red and Start is refused before the relay opens a tab. The shipped
 `exploration` placeholder is intentionally invalid when several Spark rows exist,
-so choose the exact one once. Accepted jobs keep a frozen copy of the role even if
-you edit its definition later. In **New workspace** and the composer of an untouched
-**+ New chat**, the **Workflow** pill beside the model picker is the kickoff switch:
-while active, the planning role's settings are shown read-only and the generic Plan
-control disappears. The first send creates or claims and tags the root before its
-prompt is delivered. Its root instruction starts tracked sibling-chat delegation and
-explicitly rules out provider-native Task/subagent machinery as well as Conductor Plan
-mode. Once a chat has a first message or any delegated role, the kickoff pill is gone.
+so choose the exact one once. Start freezes all three roles for that run; editing a
+definition later affects only the next run. In **New workspace** and the composer of
+an untouched **+ New chat**, the **Workflow** pill is the kickoff switch. Its accepted
+state appears immediately from the top-level Workflow list, including before a new
+workspace is bound. The planning tuple is read-only, while the generic Plan control
+keeps its normal availability and meaning. A delivered root prompt activates the
+already-recorded bootstrap explorer. The planner can request extras only through its
+Workflow-scoped `delegate_task` phase
+capability. Once a chat has a first message or belongs to an active Workflow, the
+kickoff pill is gone. Blocked runs remain visible for phone-owned recovery, and
+reviewing runs remain until **Mark complete**; Cancel stops orchestration without
+deleting worktrees, chats, or turns.
 
 ## Notifications
 

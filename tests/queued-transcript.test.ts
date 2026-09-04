@@ -13,6 +13,7 @@ type MessageRow = {
 	created_at: string
 	sent_at: string | null
 	queue_order: number | null
+	turn_id: string | null
 }
 
 type OutboxRow = {
@@ -23,7 +24,7 @@ type OutboxRow = {
 	created_at: string
 }
 
-const message = (rowid: number, id: string, content: string): MessageRow => ({
+const message = (rowid: number, id: string, content: string, turnId: string | null = `turn-${rowid}`): MessageRow => ({
 	rowid,
 	id,
 	role: 'user',
@@ -31,7 +32,13 @@ const message = (rowid: number, id: string, content: string): MessageRow => ({
 	full_message: null,
 	created_at: `2026-09-03T12:00:${String(rowid).padStart(2, '0')}.000Z`,
 	sent_at: `2026-09-03T12:00:${String(rowid).padStart(2, '0')}.000Z`,
-	queue_order: null
+	queue_order: null,
+	turn_id: turnId
+})
+
+const assistantMessage = (rowid: number, id: string, text: string, turnId: string): MessageRow => ({
+	...message(rowid, id, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } }), turnId),
+	role: 'assistant'
 })
 
 const outbox = (messageId: string, text: string, queueOrder: number, mode = 'queue'): OutboxRow => ({
@@ -46,6 +53,7 @@ class FakeDb {
 	messages: MessageRow[] = []
 	outbox: OutboxRow[] = []
 	hasOutbox = true
+	promoteOnOutboxRead = false
 
 	query<T>(sql: string, params: unknown[] = []): T[] {
 		if (sql.includes('sqlite_master') && sql.includes('session_messages_outbox')) {
@@ -59,13 +67,37 @@ class FakeDb {
 				...this.outbox.map(row => ({ rowid, message_id: row.message_id, session_id: sessionId }))
 			] as T[]
 		}
+		if (sql.includes("'message' AS kind") && sql.includes('UNION ALL') && sql.includes('session_messages_outbox')) {
+			const messageId = String(params[1] ?? '')
+			const durable = this.messages.find(row => row.id === messageId)
+			if (durable) {
+				return [{ kind: 'message', id: durable.id, rowid: durable.rowid, turn_id: durable.turn_id }] as T[]
+			}
+			const accepted = this.outbox.find(row => row.message_id === messageId)
+			return (accepted ? [{ kind: 'outbox', id: accepted.message_id, rowid: null, turn_id: null }] : []) as T[]
+		}
 		if (sql.includes('FROM session_messages_outbox')) {
+			if (this.promoteOnOutboxRead) {
+				this.promoteOnOutboxRead = false
+				const promoted = this.outbox.shift()
+				if (promoted) {
+					const text = (JSON.parse(promoted.delivery_payload) as { message: string }).message
+					this.messages.push(message(99, promoted.message_id, text, 'turn-promoted'))
+				}
+			}
 			const rows = sql.includes("mode = 'queue'") ? this.outbox.filter(row => row.mode === 'queue') : this.outbox
 			return [...rows].sort((a, b) => a.queue_order - b.queue_order) as T[]
 		}
+		if (sql.includes('FROM session_messages') && sql.includes("role = 'user'") && sql.includes('AND id = ?')) {
+			const id = String(params[1] ?? '')
+			return this.messages.filter(row => row.id === id) as T[]
+		}
 		if (sql.includes('FROM session_messages') && sql.includes('rowid >')) {
 			const after = Number(params[1] ?? 0)
-			return this.messages.filter(row => row.rowid > after).sort((a, b) => a.rowid - b.rowid) as T[]
+			const turnId = sql.includes('turn_id = ?') ? String(params[2] ?? '') : null
+			return this.messages
+				.filter(row => row.rowid > after && (turnId === null || row.turn_id === turnId))
+				.sort((a, b) => a.rowid - b.rowid) as T[]
 		}
 		if (sql.includes('MAX(rowid)') && sql.includes('FROM session_messages')) {
 			return [{ rowid: this.messages.reduce((max, row) => Math.max(max, row.rowid), 0) }] as T[]
@@ -87,6 +119,20 @@ const entry = (id: string, queued = false): TranscriptEntry => ({
 })
 
 describe('Conductor message outbox', () => {
+	test('reads one exact turn without absorbing a later manual answer', () => {
+		const db = new FakeDb()
+		db.messages = [
+			message(10, 'managed-task', 'managed task', 'turn-managed'),
+			assistantMessage(11, 'managed-answer', 'managed answer', 'turn-managed'),
+			message(12, 'manual-task', 'manual follow-up', 'turn-manual'),
+			assistantMessage(13, 'manual-answer', 'manual answer', 'turn-manual')
+		]
+
+		expect(readsFrom(db).getMessagesForTurn('chat-1', 'turn-managed', 10).entries).toMatchObject([
+			{ role: 'assistant', text: 'managed answer', rowid: 11 }
+		])
+	})
+
 	test('returns queue-mode outbox messages as an ordered queued snapshot', () => {
 		const db = new FakeDb()
 		db.messages = [message(10, 'sent-1', 'already sent')]
@@ -193,5 +239,122 @@ describe('queued messages as send receipts', () => {
 
 		db.messages.push(message(2, 'new-id', 'same words'))
 		expect(reads.promptDeliveredSince('chat-1', 'same words', before)).toBe(true)
+	})
+
+	test('preserves the tagged outbox receipt as the same id becomes a durable turn', () => {
+		const db = new FakeDb()
+		const reads = readsFrom(db)
+		const before = reads.deliveryCursor('chat-1')
+		db.outbox = [outbox('receipt-id', 'managed prompt', 1)]
+
+		expect(reads.deliveryReceiptSince('chat-1', 'managed prompt', before)).toEqual({
+			kind: 'outbox',
+			id: 'receipt-id'
+		})
+		expect(reads.deliveryReceiptForId('chat-1', 'receipt-id')).toEqual({
+			kind: 'outbox',
+			id: 'receipt-id'
+		})
+
+		db.outbox = []
+		db.messages = [message(11, 'receipt-id', 'managed prompt', 'turn-managed')]
+		expect(reads.deliveryReceiptForId('chat-1', 'receipt-id')).toEqual({
+			kind: 'message',
+			id: 'receipt-id',
+			rowid: 11,
+			turnId: 'turn-managed'
+		})
+	})
+
+	test('prefers the durable receipt in one snapshot while a stale outbox row still exists', () => {
+		const db = new FakeDb()
+		db.outbox = [outbox('receipt-id', 'managed prompt', 1)]
+		db.messages = [message(11, 'receipt-id', 'managed prompt', 'turn-managed')]
+
+		expect(readsFrom(db).deliveryReceiptForId('chat-1', 'receipt-id')).toEqual({
+			kind: 'message',
+			id: 'receipt-id',
+			rowid: 11,
+			turnId: 'turn-managed'
+		})
+	})
+
+	test('returns a delivered tagged receipt immediately when no outbox stage is observed', () => {
+		const db = new FakeDb()
+		const reads = readsFrom(db)
+		const before = reads.deliveryCursor('chat-1')
+		db.messages = [message(12, 'direct-id', 'direct prompt', 'turn-direct')]
+
+		expect(reads.deliveryReceiptSince('chat-1', 'direct prompt', before)).toEqual({
+			kind: 'message',
+			id: 'direct-id',
+			rowid: 12,
+			turnId: 'turn-direct'
+		})
+	})
+
+	test('closes the snapshot gap when an outbox row promotes after the first durable read', () => {
+		const db = new FakeDb()
+		const reads = readsFrom(db)
+		const before = reads.deliveryCursor('chat-1')
+		db.outbox = [outbox('promoted-id', 'promoted prompt', 1)]
+		db.promoteOnOutboxRead = true
+
+		expect(reads.deliveryReceiptSince('chat-1', 'promoted prompt', before)).toEqual({
+			kind: 'message',
+			id: 'promoted-id',
+			rowid: 99,
+			turnId: 'turn-promoted'
+		})
+	})
+
+	test('recovers an orphaned Workflow send by its private correlation marker', () => {
+		const db = new FakeDb()
+		const reads = readsFrom(db)
+		const before = reads.deliveryCursor('chat-1')
+		const marker = '[conductor-remote workflow:run-1 action:send-root]'
+
+		db.outbox = [outbox('workflow-id', `objective\n${marker}`, 1)]
+		expect(reads.deliveryReceiptContainingSince('chat-1', marker, before)).toEqual({
+			kind: 'outbox',
+			id: 'workflow-id'
+		})
+
+		db.outbox = []
+		db.messages = [message(13, 'workflow-id', `objective\n${marker}`, 'workflow-turn')]
+		expect(reads.deliveryReceiptContainingSince('chat-1', marker, before)).toEqual({
+			kind: 'message',
+			id: 'workflow-id',
+			rowid: 13,
+			turnId: 'workflow-turn'
+		})
+	})
+
+	test('closes the same promotion gap for Workflow correlation markers', () => {
+		const db = new FakeDb()
+		const reads = readsFrom(db)
+		const before = reads.deliveryCursor('chat-1')
+		const marker = '[conductor-remote workflow:run action:send-root]'
+		db.outbox = [outbox('promoted-workflow-id', `objective\n${marker}`, 1)]
+		db.promoteOnOutboxRead = true
+
+		expect(reads.deliveryReceiptContainingSince('chat-1', marker, before)).toEqual({
+			kind: 'message',
+			id: 'promoted-workflow-id',
+			rowid: 99,
+			turnId: 'turn-promoted'
+		})
+	})
+
+	test('does not recover a marker that existed before the Workflow effect cursor', () => {
+		const db = new FakeDb()
+		const marker = '[conductor-remote workflow:run-1 action:return]'
+		db.outbox = [outbox('old-workflow-id', marker, 1)]
+		const reads = readsFrom(db)
+		const before = reads.deliveryCursor('chat-1')
+
+		db.outbox = []
+		db.messages = [message(14, 'old-workflow-id', marker, 'old-workflow-turn')]
+		expect(reads.deliveryReceiptContainingSince('chat-1', marker, before)).toBeNull()
 	})
 })

@@ -23,7 +23,7 @@ export function newWorkspaceDisabledReason(state: NewWorkspaceCreateState): stri
 	if (state.attachmentError) return 'Remove failed attachments to continue.'
 	if (!state.workflowMode) return null
 	if (!state.hasInitialPrompt) return 'Describe what the workflow should accomplish.'
-	if (state.workflowLoading) return 'Loading the planning role…'
-	if (!state.workflowReady) return state.workflowProblem ?? 'The planning role is unavailable.'
+	if (state.workflowLoading) return 'Loading Workflow roles…'
+	if (!state.workflowReady) return state.workflowProblem ?? 'Workflow roles are unavailable.'
 	return null
 }

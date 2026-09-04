@@ -1,29 +1,23 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUp, GitFork, Info, LoaderCircle, Paperclip, Snowflake, Square, WifiOff, X } from 'lucide-react'
+import { ArrowUp, GitFork, Info, LoaderCircle, Snowflake, Square, WifiOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useContextBreakdown, useRoles, useSendPrompt } from '../hooks.ts'
+import { useContextBreakdown, useSendPrompt, useWorkflowRoleReadiness } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { contextRingSegments } from '../lib/context.ts'
 import { enterSubmits } from '../lib/keys.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
 import { coldPromptCache } from '../lib/prompt-cache.ts'
-import type { ActuatorInfo, DraftAttachment, Session } from '../lib/types.ts'
+import type { ActuatorInfo, Session, WorkflowRoleName, WorkflowRunWire } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentBar } from './AgentBar.tsx'
+import {
+	AttachmentPickerButton,
+	AttachmentTray,
+	EMPTY_ATTACHMENTS,
+	useAttachmentUploads
+} from './AttachmentUploads.tsx'
 import { UnlockLink } from './ui.tsx'
-
-type PendingAttachment = {
-	id: string
-	sessionId: string
-	name: string
-	status: 'uploading' | 'error'
-	error?: string
-}
-
-type DisplayAttachment = (DraftAttachment & { id: string; status: 'ready'; error?: never }) | PendingAttachment
-
-const NO_ATTACHMENTS: DraftAttachment[] = []
 
 /**
  * The draft lives in the store (persisted per chat — see lib/draft.ts), not in
@@ -50,6 +44,8 @@ export function Composer({
 	onFork,
 	onContext,
 	workflowStarted = false,
+	workflow,
+	workflowRole,
 	focusDraft = false,
 	onDraftFocused
 }: {
@@ -64,15 +60,19 @@ export function Composer({
 	onFork?: (prompt: string) => Promise<void>
 	/** Open the active chat's context composition and fork-size breakdown. */
 	onContext?: () => void
-	/** The relay already owns this chat as a workflow root (or delegated child). */
+	/** Another durable delivery already owns this otherwise-pristine composer. */
 	workflowStarted?: boolean
+	/** Explicit workspace-owned run projection; never inferred from arbitrary jobs. */
+	workflow?: WorkflowRunWire
+	/** This session's frozen role inside `workflow`, when it is the root or a tracked child. */
+	workflowRole?: WorkflowRoleName
 	/** A newly forked chat asks to continue from the end of its staged handoff. */
 	focusDraft?: boolean
 	onDraftFocused?: () => void
 }) {
 	const draftKey = sessionId ?? workspaceId
 	const text = useApp(s => s.drafts[draftKey] ?? '')
-	const readyAttachments = useApp(s => s.draftAttachments[draftKey] ?? NO_ATTACHMENTS)
+	const readyAttachments = useApp(s => s.draftAttachments[draftKey] ?? EMPTY_ATTACHMENTS)
 	const setDraft = useApp(s => s.setDraft)
 	const addDraftAttachment = useApp(s => s.addDraftAttachment)
 	const removeDraftAttachment = useApp(s => s.removeDraftAttachment)
@@ -94,36 +94,31 @@ export function Composer({
 	const workflowMode = workflowChoice.sessionId === sessionId && workflowChoice.active
 	const setWorkflowMode = (active: boolean) => setWorkflowChoice({ sessionId, active })
 	const ref = useRef<HTMLTextAreaElement>(null)
-	const fileInput = useRef<HTMLInputElement>(null)
-	const cancelledUploads = useRef(new Set<string>())
-	const dragDepth = useRef(0)
-	const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
-	const [draggingFiles, setDraggingFiles] = useState(false)
-	const activePendingAttachments = pendingAttachments.filter(attachment => attachment.sessionId === sessionId)
-	const activeAttachments: DisplayAttachment[] = [
-		...readyAttachments.map(attachment => ({ ...attachment, id: attachment.path, status: 'ready' as const })),
-		...activePendingAttachments
-	]
-	const uploading = activePendingAttachments.some(attachment => attachment.status === 'uploading')
+	const attachmentUploads = useAttachmentUploads({
+		draftKey,
+		ready: readyAttachments,
+		enabled: !!sessionId && online,
+		upload: async (key, file) => (await client.uploadAttachment(key, workspaceId, file)).attachment,
+		accept: addDraftAttachment,
+		removeReady: removeDraftAttachment
+	})
+	const uploading = attachmentUploads.uploading
 	const prompt = [...readyAttachments.map(attachment => attachment.token), text.trim()].filter(Boolean).join('\n')
 	const workflowSendPending = useApp(s => s.pending.some(p => p.sessionId === sessionId && !!p.workflow))
 	const workflowPristine =
-		!!session && !session.last_user_message_at && !working && !workflowStarted && !workflowSendPending
+		!!session && !session.last_user_message_at && !working && !workflowStarted && !workflow && !workflowSendPending
 	const workflowVisible = workflowMode || workflowPristine
-	const roles = useRoles(workflowVisible)
-	const planningRole = roles.data?.roles.planning
-	const planningIssue = roles.data?.issues.find(issue => issue.role === 'planning')
+	const {
+		roles,
+		planningRole,
+		problem: workflowRoleProblem,
+		ready: workflowRolesReady
+	} = useWorkflowRoleReadiness(workflowVisible)
 	const workflowProblem =
 		session?.permission_mode === 'plan'
 			? 'Workflow needs ordinary chat mode. Turn Plan off first.'
-			: roles.isError
-				? 'Could not load delegated roles.'
-				: roles.data?.warning
-					? roles.data.warning
-					: roles.data && !planningRole
-						? 'Workflow mode needs a configured planning role.'
-						: planningIssue?.error.message
-	const workflowReady = !!planningRole && !workflowProblem
+			: workflowRoleProblem
+	const workflowReady = workflowRolesReady && !workflowProblem
 
 	// Before chats had tabs, drafts used their workspace id. Move one across when
 	// that workspace first opens a chat, so an upgrade keeps text the user had typed.
@@ -162,8 +157,9 @@ export function Composer({
 		onDraftFocused?.()
 	}, [focusDraft, onDraftFocused])
 
-	// Fire-and-forget: the optimistic bubble (and its inline error on failure) is the
-	// feedback now, so we clear the box immediately instead of awaiting the send.
+	// Ordinary sends hand the only copy to their persisted optimistic bubble and
+	// clear immediately. A Workflow start is different: its draft stays authoritative
+	// until the dedicated route returns the 202 durable-acceptance receipt.
 	const send = (queue = false) => {
 		if (
 			!prompt ||
@@ -185,10 +181,15 @@ export function Composer({
 		}).then(accepted => {
 			if (accepted && startingWorkflow) {
 				setWorkflowChoice(current => (current.sessionId === sessionId ? { ...current, active: false } : current))
+				// The hook clears the synced draft after the 202, including when this
+				// acceptance came from the transcript's persisted Retry control.
+				attachmentUploads.clearPending()
 			}
 		})
-		clearDraftContent(draftKey)
-		setPendingAttachments(current => current.filter(attachment => attachment.sessionId !== sessionId))
+		if (!startingWorkflow) {
+			clearDraftContent(draftKey)
+			attachmentUploads.clearPending()
+		}
 	}
 
 	const forkDraft = async () => {
@@ -198,88 +199,12 @@ export function Composer({
 		try {
 			await onFork(prompt)
 			clearDraftContent(draftKey)
-			setPendingAttachments(current => current.filter(attachment => attachment.sessionId !== sessionId))
+			attachmentUploads.clearPending()
 		} catch (err) {
 			setForkError(err instanceof Error ? err.message : 'Could not fork this chat')
 		} finally {
 			setForking(false)
 		}
-	}
-
-	const removeAttachment = (id: string) => {
-		if (readyAttachments.some(attachment => attachment.path === id)) {
-			removeDraftAttachment(draftKey, id)
-			return
-		}
-		cancelledUploads.current.add(id)
-		setPendingAttachments(current => current.filter(attachment => attachment.id !== id))
-	}
-
-	const addFiles = async (picked: FileList | File[]) => {
-		if (!sessionId || !online) return
-		for (const file of Array.from(picked)) {
-			const id = crypto.randomUUID()
-			setPendingAttachments(current => [
-				...current,
-				{
-					id,
-					sessionId,
-					name: file.name || 'attachment',
-					status: 'uploading'
-				}
-			])
-			try {
-				const uploaded = await client.uploadAttachment(sessionId, workspaceId, file)
-				if (cancelledUploads.current.delete(id)) continue
-				addDraftAttachment(sessionId, uploaded.attachment)
-				setPendingAttachments(current => current.filter(attachment => attachment.id !== id))
-			} catch (err) {
-				if (cancelledUploads.current.delete(id)) continue
-				setPendingAttachments(current =>
-					current.map(attachment =>
-						attachment.id === id
-							? { ...attachment, status: 'error', error: err instanceof Error ? err.message : 'Upload failed' }
-							: attachment
-					)
-				)
-			}
-		}
-	}
-
-	const chooseFiles = (files: FileList | null) => {
-		if (files?.length) void addFiles(files)
-	}
-
-	const isFileDrag = (event: React.DragEvent<HTMLElement>) => Array.from(event.dataTransfer.types).includes('Files')
-
-	const dragEnter = (event: React.DragEvent<HTMLElement>) => {
-		if (!isFileDrag(event)) return
-		event.preventDefault()
-		dragDepth.current += 1
-		setDraggingFiles(true)
-	}
-
-	const dragLeave = (event: React.DragEvent<HTMLElement>) => {
-		if (!isFileDrag(event)) return
-		dragDepth.current -= 1
-		if (dragDepth.current <= 0) {
-			dragDepth.current = 0
-			setDraggingFiles(false)
-		}
-	}
-
-	const dragOver = (event: React.DragEvent<HTMLElement>) => {
-		if (!isFileDrag(event)) return
-		event.preventDefault()
-		event.dataTransfer.dropEffect = 'copy'
-	}
-
-	const drop = (event: React.DragEvent<HTMLElement>) => {
-		if (!isFileDrag(event)) return
-		event.preventDefault()
-		dragDepth.current = 0
-		setDraggingFiles(false)
-		chooseFiles(event.dataTransfer.files)
 	}
 
 	/**
@@ -371,53 +296,10 @@ export function Composer({
 			    focus too, and lighting the whole card up on a Plan tap reads as a typo. */}
 			<fieldset
 				aria-label="Message composer"
-				onDragEnter={dragEnter}
-				onDragLeave={dragLeave}
-				onDragOver={dragOver}
-				onDrop={drop}
-				className={`m-0 min-w-0 rounded-2xl border border-border bg-surface p-2 has-[textarea:focus]:border-accent/60 ${draggingFiles ? 'border-accent bg-accent-soft' : ''}`}
+				{...attachmentUploads.dropTargetProps}
+				className={`m-0 min-w-0 rounded-2xl border border-border bg-surface p-2 has-[textarea:focus]:border-accent/60 ${attachmentUploads.dragging ? 'border-accent bg-accent-soft' : ''}`}
 			>
-				<input
-					ref={fileInput}
-					type="file"
-					multiple
-					className="hidden"
-					onChange={event => {
-						chooseFiles(event.target.files)
-						event.target.value = ''
-					}}
-				/>
-				{activeAttachments.length ? (
-					<div className="flex flex-wrap gap-1 px-2 pb-1">
-						{activeAttachments.map(attachment => (
-							<div
-								key={attachment.id}
-								title={attachment.error ?? attachment.name}
-								className="flex max-w-full items-center gap-1 rounded-lg bg-surface-2 py-1 pl-2 pr-1 text-xs text-muted"
-							>
-								{attachment.status === 'uploading' ? (
-									<LoaderCircle size={12} className="shrink-0 animate-spin" />
-								) : null}
-								<span className="truncate">
-									{attachment.status === 'error' ? `${attachment.name}: ${attachment.error}` : attachment.name}
-								</span>
-								<button
-									type="button"
-									onClick={() => removeAttachment(attachment.id)}
-									aria-label={`Remove ${attachment.name}`}
-									className="flex size-5 shrink-0 items-center justify-center rounded active:bg-surface"
-								>
-									<X size={13} />
-								</button>
-							</div>
-						))}
-					</div>
-				) : null}
-				{draggingFiles ? (
-					<div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-xl border border-dashed border-accent bg-accent-soft/90 text-sm font-medium text-accent">
-						Drop files to attach
-					</div>
-				) : null}
+				<AttachmentTray uploads={attachmentUploads} />
 				<textarea
 					ref={ref}
 					rows={1}
@@ -435,12 +317,7 @@ export function Composer({
 						if (useApp.getState().focusedDraft === draftKey) setFocusedDraft(null)
 						requestPrefsFlush()
 					}}
-					onPaste={event => {
-						const files = event.clipboardData.files
-						if (!files.length) return
-						event.preventDefault()
-						chooseFiles(files)
-					}}
+					onPaste={attachmentUploads.onPaste}
 					// On a touch keyboard Enter breaks the line instead (lib/keys.ts): there is
 					// no Shift+Enter on a phone, and the Send button is right there.
 					onKeyDown={e => {
@@ -455,6 +332,9 @@ export function Composer({
 						<AgentBar
 							session={session}
 							workspaceId={workspaceId}
+							frozenWorkflow={
+								workflow && workflowRole ? { name: workflowRole, role: workflow.roles[workflowRole] } : undefined
+							}
 							workflow={
 								workflowVisible
 									? {
@@ -471,15 +351,7 @@ export function Composer({
 						<span className="flex-1" />
 					)}
 					{session && onContext ? <ContextDonutButton session={session} onOpen={onContext} /> : null}
-					<button
-						type="button"
-						onClick={() => fileInput.current?.click()}
-						disabled={disabled || forking || !online}
-						aria-label="Attach files"
-						className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:text-faint"
-					>
-						<Paperclip size={17} />
-					</button>
+					<AttachmentPickerButton uploads={attachmentUploads} disabled={disabled || forking || !online} />
 					{canStop ? (
 						<button
 							type="button"

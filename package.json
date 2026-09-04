@@ -46,6 +46,8 @@
 		"build:node": "tsc -p tsconfig.build.json && cp src/*.applescript dist-node/src/",
 		"preview": "yarn build && yarn start",
 		"gen:icons": "node scripts/gen-icons.ts",
+		"db:schema": "node --experimental-transform-types scripts/generate-orchestration-schema.ts",
+		"db:schema:check": "node --experimental-transform-types scripts/generate-orchestration-schema.ts --check",
 		"deploy": "yarn build && node bin/cli.js service install",
 		"service": "node bin/cli.js service",
 		"typecheck": "tsc -p tsconfig.json",
@@ -54,7 +56,7 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
-		"check:repo": "yarn check:imports && yarn check:applescript",
+		"check:repo": "yarn check:imports && yarn check:applescript && yarn db:schema:check",
 		"verify": "yarn typecheck && yarn lint && yarn check:repo && yarn test",
 		"release": "semantic-release",
 		"prepack": "yarn build && yarn build:node",
@@ -78,6 +80,7 @@
 		"@vitejs/plugin-react": "^5.0.4",
 		"@vitest/coverage-v8": "^4.1.11",
 		"clsx": "^2.1.1",
+		"drizzle-kit": "1.0.0-rc.4",
 		"husky": "^9.1.7",
 		"jsqr": "^1.4.0",
 		"lowlight": "^3.3.0",
@@ -99,5 +102,9 @@
 		"vite-plugin-pwa": "^1.2.0",
 		"vitest": "^4.1.11",
 		"zustand": "^5.0.12"
+	},
+	"dependencies": {
+		"drizzle-orm": "1.0.0-rc.4",
+		"zod": "4.1.12"
 	}
 }

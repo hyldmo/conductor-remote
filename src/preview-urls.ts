@@ -72,7 +72,7 @@ function fields(text: string): Partial<PreviewUrlSetting> {
 /**
  * Split an inline TOML table on top-level commas. Preview URL fields are strings,
  * so this deliberately implements only the small grammar the Conductor schema
- * permits instead of pulling a TOML runtime into the dependency-free relay.
+ * permits instead of pulling a TOML runtime into the lightweight relay.
  */
 function inlineFields(text: string): Partial<PreviewUrlSetting> {
 	const parts: string[] = []
