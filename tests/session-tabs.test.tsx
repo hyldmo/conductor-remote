@@ -39,6 +39,7 @@ describe('phone chat tabs', () => {
 				readMarks={{}}
 				promptStates={{}}
 				onSelect={vi.fn()}
+				onContext={vi.fn()}
 				onNewChat={vi.fn()}
 				onClose={vi.fn()}
 				creating={false}
@@ -49,7 +50,8 @@ describe('phone chat tabs', () => {
 
 		expect(html).toContain('Alpha')
 		expect(html).not.toContain('aria-label="Close Alpha chat"')
-		expect(html.match(/<button/g)).toHaveLength(2)
+		expect(html).toContain('aria-label="Context for Alpha: 42% used"')
+		expect(html.match(/<button/g)).toHaveLength(3)
 	})
 
 	test('keeps selection and close as separate controls with multiple tabs', () => {
@@ -61,6 +63,7 @@ describe('phone chat tabs', () => {
 				readMarks={{}}
 				promptStates={{}}
 				onSelect={vi.fn()}
+				onContext={vi.fn()}
 				onNewChat={vi.fn()}
 				onClose={vi.fn()}
 				creating={false}
@@ -71,7 +74,7 @@ describe('phone chat tabs', () => {
 
 		expect(html).toContain('aria-label="Close Alpha chat"')
 		expect(html).toContain('aria-label="Close Beta chat"')
-		expect(html.match(/<button/g)).toHaveLength(5)
+		expect(html.match(/<button/g)).toHaveLength(7)
 	})
 
 	test('keeps durable workflow children out of the parent tab row', () => {
@@ -88,6 +91,7 @@ describe('phone chat tabs', () => {
 					[childSession.id]: { role: 'exploration', delegationId: 'job-1', assignedAt: 2 }
 				}}
 				onSelect={vi.fn()}
+				onContext={vi.fn()}
 				onNewChat={vi.fn()}
 				onClose={vi.fn()}
 				creating={false}
@@ -112,6 +116,7 @@ describe('phone chat tabs', () => {
 				readMarks={{}}
 				promptStates={{}}
 				onSelect={vi.fn()}
+				onContext={vi.fn()}
 				onNewChat={vi.fn()}
 				onClose={vi.fn()}
 				creating={false}

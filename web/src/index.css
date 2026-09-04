@@ -20,6 +20,11 @@
 	--color-working: light-dark(#a65f00, #f5a623);
 	--color-idle: light-dark(#167a52, #3ecf8e);
 	--color-done: light-dark(#286bc0, #5b9dff);
+	/* Context composition is categorical, not status. Keep each stratum distinct
+	   from the neutral unused track and from the app's violet/blue controls. */
+	--color-context-initial: light-dark(#4b505c, #d7dae0);
+	--color-context-chat: light-dark(#a83fa3, #ed7ce2);
+	--color-context-tools: light-dark(#087f73, #35cdb8);
 	/* An inactive provider context whose cheap/fast prompt cache may have cooled. */
 	--color-cold-cache: light-dark(#90611f, #d6a85f);
 

@@ -232,9 +232,12 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 ## What works today
 
 - ✅ Live list of active workspaces with agent status (working / idle / done),
-  repo, branch, model, context %, and an unread mark on any workspace whose chats
+  repo, branch, model, per-chat context %, and an unread mark on any workspace whose chats
   finished something you haven't looked at — reading it *on the phone* clears it,
-  which Conductor itself only does when you open the workspace on the Mac.
+  which Conductor itself only does when you open the workspace on the Mac. Tap a tab's
+  context percentage or the segmented composer donut beside Attachments for estimated
+  initial/chat/thinking/tool-call composition and the approximate payload size of each
+  full-history fork format.
 - ✅ **Models** panel — change Claude Code and Codex defaults for new chats, written
   to `~/.conductor/settings.toml`, and see rolling plan usage from their structured
   CLI protocols with no model request. Cursor Agent and OpenCode keep their own

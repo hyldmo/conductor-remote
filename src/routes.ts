@@ -140,6 +140,8 @@ export const routes = {
 
 	// ── chats ──
 	messages: param('GET', '/api/sessions/:sessionId/messages'),
+	/** Exact last-turn total plus estimated context categories and fork attachment sizes. */
+	context: param('GET', '/api/sessions/:sessionId/context'),
 	models: param('GET', '/api/sessions/:sessionId/models'),
 	/** Star a model as the user's default; Conductor also selects it for this chat. */
 	defaultModel: param('POST', '/api/sessions/:sessionId/default-model'),

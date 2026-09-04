@@ -17,6 +17,7 @@ import {
 import { hasSelection, overSelection } from './lib/selection.ts'
 import { mergeEntries, withQueuedEntries } from './lib/transcript-merge.ts'
 import type {
+	ContextBreakdownResponse,
 	ModelCatalogResponse,
 	ModelDefaultsResponse,
 	RolesResponse,
@@ -624,6 +625,18 @@ export function usePlanUsage(enabled: boolean) {
 		enabled,
 		staleTime: 60_000,
 		gcTime: Number.POSITIVE_INFINITY,
+		retry: false
+	})
+}
+
+/** Full-history sizing is fetched only for the visible chat or while its context sheet is open. */
+export function useContextBreakdown(sessionId: string, enabled = true, revision?: string | null) {
+	return useQuery<ContextBreakdownResponse>({
+		queryKey: ['context-breakdown', sessionId, revision ?? null],
+		queryFn: () => client.contextBreakdown(sessionId),
+		enabled: enabled && !!sessionId,
+		// Reopening after another turn should re-read Conductor's newly persisted total.
+		staleTime: 0,
 		retry: false
 	})
 }

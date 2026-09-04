@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { Session } from '../src/wire.ts'
+import type { ContextBreakdownResponse, Session } from '../src/wire.ts'
 
 class MemoryStorage {
 	private readonly values = new Map<string, string>()
@@ -79,15 +79,25 @@ const pristineSession: Session = {
 	background_tasks: []
 }
 
-function renderComposer(session: Session, workflowStarted = false): string {
+function renderComposer(
+	session: Session,
+	workflowStarted = false,
+	onContext?: () => void,
+	contextBreakdown?: ContextBreakdownResponse
+): string {
+	const queryClient = new QueryClient()
+	if (contextBreakdown) {
+		queryClient.setQueryData(['context-breakdown', session.id, session.updated_at], contextBreakdown)
+	}
 	return renderToStaticMarkup(
-		<QueryClientProvider client={new QueryClient()}>
+		<QueryClientProvider client={queryClient}>
 			<Composer
 				session={session}
 				sessionId="chat"
 				workspaceId="workspace"
 				working={false}
 				workflowStarted={workflowStarted}
+				onContext={onContext}
 			/>
 		</QueryClientProvider>
 	)
@@ -114,5 +124,48 @@ describe('a restored attachment-only composer draft', () => {
 			'aria-label="Workflow mode'
 		)
 		expect(renderComposer(pristineSession, true)).not.toContain('aria-label="Workflow mode')
+	})
+
+	it('places a context donut immediately before attachments', () => {
+		const html = renderComposer({ ...pristineSession, context_used_percent: 42 }, false, () => {})
+		const context = html.indexOf('aria-label="Context for Untitled: 42% used"')
+		const attachments = html.indexOf('aria-label="Attach files"')
+
+		expect(context).toBeGreaterThan(-1)
+		expect(context).toBeLessThan(attachments)
+		expect(html).toContain('stroke-dasharray="42 58"')
+		expect(html).toContain('stroke-accent')
+	})
+
+	it('turns the context donut amber near compaction pressure', () => {
+		const html = renderComposer({ ...pristineSession, context_used_percent: 84.6 }, false, () => {})
+
+		expect(html).toContain('aria-label="Context for Untitled: 85% used"')
+		expect(html).toContain('stroke-working')
+	})
+
+	it('subdivides the used arc with the same four colors as the context sheet', () => {
+		const html = renderComposer({ ...pristineSession, context_used_percent: 50 }, false, () => {}, {
+			totalTokens: 100_000,
+			usedPercent: 50,
+			compacted: false,
+			categories: { initial: 20_000, chat: 30_000, thinking: 10_000, tools: 40_000 },
+			forkTokens: { concise: 20_000, reasoning: 30_000, full: 80_000 }
+		})
+
+		for (const [type, color] of [
+			['initial', 'stroke-context-initial'],
+			['chat', 'stroke-context-chat'],
+			['thinking', 'stroke-working'],
+			['tools', 'stroke-context-tools']
+		] as const) {
+			const segment = html.match(new RegExp(`<circle[^>]*data-context-segment="${type}"[^>]*>`))?.[0]
+			expect(segment).toContain(color)
+		}
+		expect(html).toContain('stroke-dasharray="10 90"')
+		expect(html).toContain('stroke-dasharray="15 85"')
+		expect(html).toContain('stroke-dasharray="5 95"')
+		expect(html).toContain('stroke-dasharray="20 80"')
+		expect(html).toContain('stroke-dashoffset="-30"')
 	})
 })

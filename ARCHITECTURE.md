@@ -15,6 +15,9 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   pkg-root.ts     packageRoot(): walk up to package.json (works from src/ and dist-node/src/)
   db.ts           read-only node:sqlite handle to conductor.db; logs >100ms queries without params
   reads.ts        workspaces / sessions / messages + worktree resolution
+  context-breakdown.ts  provider-neutral estimates for a chat's current context categories;
+                  respects compaction/turn boundaries, excludes mirrored child-agent frames,
+                  and sizes each full-history fork format
   icons.ts        repo-icon resolution, mirroring Conductor's own precedence (repos.icon →
                   a known filename in the repo root → the GitHub owner's avatar → a monogram)
   transcript.ts   Claude Code SDK stream JSON → phone-renderable entries, and back out to
@@ -110,7 +113,7 @@ web/              React PWA (Vite root)
   src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
   src/app.tsx     routes (/ list, /w/:id session) + token gate; mounts ReloadPrompt above the gate
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll) / useModels (model list, SWR)
-                  / useRoles; useSendPrompt applies staged agent settings, then sends
+                  / useContextBreakdown (on demand) / useRoles; useSendPrompt applies staged agent settings, then sends
   src/lib/        api client, types (re-export of src/wire.ts), format helpers, cn, composer
                   drafts (draft.ts), ready attachments and staged agent settings (agentDraft.ts), local-first host
                   preference sync (prefs.ts), read marks (read.ts, the unread this phone has
@@ -127,7 +130,7 @@ web/              React PWA (Vite root)
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
                   RolesSettings, WorkflowModePill, DelegationPipeline, QueueBubble,
                   WorkspaceMenu (the status groups, plus Archive), MergeBanner (merge + continue), MessageNav,
-                  DevServerControls, SearchSheet + SearchPane, ArchivedChat (a hit whose
+                  DevServerControls, ContextBreakdownSheet, SearchSheet + SearchPane, ArchivedChat (a hit whose
                   worktree is gone), NewWorkspaceSheet, PlanUsageSheet (the Models panel:
                   provider defaults plus usage), LogsSheet, TokenGate, QRCode +
                   QRScanner, ReloadPrompt, ui, and ConnectSheet

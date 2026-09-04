@@ -1,8 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowUp, GitFork, Info, LoaderCircle, Paperclip, Snowflake, Square, WifiOff, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useRoles, useSendPrompt } from '../hooks.ts'
+import { useContextBreakdown, useRoles, useSendPrompt } from '../hooks.ts'
 import { client } from '../lib/api.ts'
+import { contextRingSegments } from '../lib/context.ts'
 import { enterSubmits } from '../lib/keys.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
@@ -47,6 +48,7 @@ export function Composer({
 	working,
 	actuator,
 	onFork,
+	onContext,
 	workflowStarted = false,
 	focusDraft = false,
 	onDraftFocused
@@ -60,6 +62,8 @@ export function Composer({
 	actuator?: ActuatorInfo
 	/** Fork this full chat and keep the composed prompt in the new chat's draft. */
 	onFork?: (prompt: string) => Promise<void>
+	/** Open the active chat's context composition and fork-size breakdown. */
+	onContext?: () => void
 	/** The relay already owns this chat as a workflow root (or delegated child). */
 	workflowStarted?: boolean
 	/** A newly forked chat asks to continue from the end of its staged handoff. */
@@ -466,6 +470,7 @@ export function Composer({
 					) : (
 						<span className="flex-1" />
 					)}
+					{session && onContext ? <ContextDonutButton session={session} onOpen={onContext} /> : null}
 					<button
 						type="button"
 						onClick={() => fileInput.current?.click()}
@@ -507,5 +512,58 @@ export function Composer({
 				</div>
 			</fieldset>
 		</div>
+	)
+}
+
+/** A glanceable context-pressure gauge beside the controls that can add more context. */
+export function ContextDonutButton({ session, onOpen }: { session: Session; onOpen: () => void }) {
+	const used = session.context_used_percent
+	const breakdown = useContextBreakdown(session.id, typeof used === 'number' && used > 0, session.updated_at)
+	if (typeof used !== 'number' || used <= 0) return null
+	const progress = Math.min(100, Math.max(0, used))
+	const shown = Math.round(used)
+	const segments = contextRingSegments(progress, breakdown.data)
+	return (
+		<button
+			type="button"
+			onClick={onOpen}
+			aria-label={`Context for ${session.title || 'Untitled'}: ${shown}% used`}
+			aria-haspopup="dialog"
+			title={`Context: ${shown}% used`}
+			className="flex size-8 shrink-0 items-center justify-center rounded-md transition active:bg-surface-2"
+		>
+			<svg viewBox="0 0 18 18" aria-hidden="true" className="size-[18px] -rotate-90">
+				<circle cx="9" cy="9" r="6.5" fill="none" strokeWidth="3" className="stroke-border" />
+				{segments.length ? (
+					segments.map(segment => (
+						<circle
+							key={segment.key}
+							cx="9"
+							cy="9"
+							r="6.5"
+							fill="none"
+							strokeWidth="3"
+							pathLength="100"
+							strokeDasharray={`${segment.length} ${100 - segment.length}`}
+							strokeDashoffset={-segment.offset}
+							data-context-segment={segment.key}
+							className={segment.ringClass}
+						/>
+					))
+				) : (
+					<circle
+						cx="9"
+						cy="9"
+						r="6.5"
+						fill="none"
+						strokeWidth="3"
+						pathLength="100"
+						strokeDasharray={`${progress} ${100 - progress}`}
+						strokeLinecap="round"
+						className={used >= 80 ? 'stroke-working' : 'stroke-accent'}
+					/>
+				)}
+			</svg>
+		</button>
 	)
 }
