@@ -28,7 +28,16 @@
 
 import { chatCursor, parseChatCursor } from './chat-cursor.ts'
 import { routes } from './routes.ts'
-import { HIT_CLOSE, HIT_OPEN, isToolResult, timestampMs, workspaceTitle } from './shared.ts'
+import {
+	agentTypeCanExposeEffort,
+	agentTypeCanExposeFastMode,
+	HIT_CLOSE,
+	HIT_OPEN,
+	isToolResult,
+	modelAgentType,
+	timestampMs,
+	workspaceTitle
+} from './shared.ts'
 import type { TranscriptEntry } from './transcript.ts'
 import type {
 	AgentEffort,
@@ -454,7 +463,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'set_role',
 			description:
-				'Set one cross-provider delegated role using an exact label from list_models. This changes relay config only and does not drive Conductor. Plan mode is intentionally not a role option.',
+				'Set one cross-provider delegated role using an exact label from list_models. Effort and Fast are available only when Conductor exposes those controls for the selected provider; omit them for Cursor and OpenCode. This changes relay config only and does not drive Conductor. Plan mode is intentionally not a role option.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -462,9 +471,10 @@ export function createTools(call: RelayCall): Tool[] {
 					model: { type: 'string', description: 'Exact picker label from list_models.' },
 					effort: {
 						type: 'string',
-						enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
+						enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'],
+						description: 'Optional Claude/Codex reasoning control. Omit for Cursor and OpenCode.'
 					},
-					fast: { type: 'boolean' },
+					fast: { type: 'boolean', description: 'Optional Claude/Codex Fast control.' },
 					preamble: { type: 'string', description: 'Optional instructions prepended to each delegated task.' }
 				},
 				required: ['role', 'model']
@@ -475,14 +485,27 @@ export function createTools(call: RelayCall): Tool[] {
 				const effort = str(args.effort)
 				const efforts: AgentEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
 				if (effort && !efforts.includes(effort as AgentEffort)) throw new Error('effort is invalid')
+				const agentType = modelAgentType(model)
+				if (effort && agentType && !agentTypeCanExposeEffort(agentType)) {
+					throw new Error('the selected provider has no Conductor reasoning control; omit effort')
+				}
+				if (typeof args.fast === 'boolean' && agentType && !agentTypeCanExposeFastMode(agentType)) {
+					throw new Error('the selected provider has no Conductor Fast control; omit fast')
+				}
 				const current = await call<RolesResponse>(routes.roles.path())
 				const prior = current.roles[name]
+				const preserveEffort = agentTypeCanExposeEffort(agentType)
+				const preserveFast = agentTypeCanExposeFastMode(agentType)
 				const role = {
 					model,
-					...(effort ? { effort: effort as AgentEffort } : prior?.effort ? { effort: prior.effort } : {}),
+					...(effort
+						? { effort: effort as AgentEffort }
+						: preserveEffort && prior?.effort
+							? { effort: prior.effort }
+							: {}),
 					...(typeof args.fast === 'boolean'
 						? { fast: args.fast }
-						: prior?.fast !== undefined
+						: preserveFast && prior?.fast !== undefined
 							? { fast: prior.fast }
 							: {}),
 					...(typeof args.preamble === 'string'

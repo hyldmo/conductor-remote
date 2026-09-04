@@ -12,7 +12,7 @@ Object.defineProperty(globalThis, 'history', { configurable: true, value: { repl
 const [
 	{ DelegationPipeline },
 	{ QueueBubble },
-	{ RoleChip, RoleEditorCard, roleAgentType, roleDraftCanSave, roleModelProblem }
+	{ RoleChip, RoleEditorCard, roleAgentType, roleDraftCanSave, roleModelProblem, roleWithModel }
 ] = await Promise.all([
 	import('../web/src/components/DelegationPipeline.tsx'),
 	import('../web/src/components/QueueBubble.tsx'),
@@ -109,5 +109,28 @@ describe('delegation phone surfaces', () => {
 		expect(roleAgentType({ model: 'opencode-go/muse-spark-1.3-contributor' }, groups)).toBe('acp')
 		expect(roleModelProblem({ model: 'Fable 5.1' }, groups)).toBeNull()
 		expect(roleModelProblem({ model: 'unknown-model' }, groups)).toContain('exact model')
+	})
+
+	test('hides unsupported OpenCode controls and drops them when its model is selected', () => {
+		const model = 'opencode-go/muse-spark-1.3-contributor'
+		const role = { model, effort: 'high' as const, fast: false }
+		const html = renderToStaticMarkup(
+			<RoleEditorCard
+				name="exploration"
+				role={role}
+				models={[model]}
+				agentType="acp"
+				onChange={vi.fn()}
+				onRemove={vi.fn()}
+				canRemove
+			/>
+		)
+
+		expect(html).not.toContain('Reasoning effort for exploration')
+		expect(html).not.toContain('Fast mode for exploration')
+		expect(roleModelProblem(role, [{ agentType: 'acp', models: [model], updatedAt: 1 }])).toContain(
+			'does not expose a reasoning control'
+		)
+		expect(roleWithModel(role, model)).toEqual({ model })
 	})
 })

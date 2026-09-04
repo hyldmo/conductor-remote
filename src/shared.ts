@@ -189,6 +189,21 @@ export function modelAgentType(model: string): string | undefined {
 	return undefined
 }
 
+/**
+ * Whether this harness can render a per-session reasoning control. Claude and
+ * Codex still decide support model by model; Cursor and OpenCode do not expose
+ * one in Conductor today, so a stored default in their session row is not a
+ * capability signal.
+ */
+export function agentTypeCanExposeEffort(agentType: string | null | undefined): boolean {
+	return agentType === 'claude' || agentType === 'codex'
+}
+
+/** Conductor currently exposes its Fast session control only for Claude and Codex. */
+export function agentTypeCanExposeFastMode(agentType: string | null | undefined): boolean {
+	return agentType === 'claude' || agentType === 'codex'
+}
+
 /** Whether one exact picker label appears in any cached whole-menu snapshot. */
 export function modelCatalogIncludes(model: string, groups: readonly { models: readonly string[] }[]): boolean {
 	const wanted = modelPickerLabel(model)

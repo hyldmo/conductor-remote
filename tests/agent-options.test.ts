@@ -32,5 +32,7 @@ describe('agent option labels', () => {
 		expect(effortUiLabel('low', 'codex')).toBe('Light')
 		expect(effortUiLabel('none', 'codex')).toBe('__UNNAMED_EFFORT__')
 		expect(effortUiLabel('none', 'claude')).toBeUndefined()
+		expect(effortUiLabel('high', 'acp')).toBeUndefined()
+		expect(effortUiLabel('high', 'cursor')).toBeUndefined()
 	})
 })

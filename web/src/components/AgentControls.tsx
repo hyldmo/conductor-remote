@@ -1,7 +1,7 @@
 import { Map as MapIcon, Zap } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { displayedModelPickerLabel } from '../../../src/shared.ts'
-import { EFFORT_LABELS, supportsPlanMode } from '../lib/agent.ts'
+import { EFFORT_LABELS, supportsEffortControl, supportsFastMode, supportsPlanMode } from '../lib/agent.ts'
 import { cn } from '../lib/cn.ts'
 import { EffortBars, ProviderMark } from './AgentIcons.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
@@ -73,6 +73,8 @@ export function AgentControls({
 	status?: ReactNode
 }) {
 	const planAvailable = supportsPlanMode(agentType, providerModel)
+	const effortAvailable = supportsEffortControl(agentType, providerModel)
+	const fastAvailable = supportsFastMode(agentType, providerModel)
 
 	return (
 		<div className="min-w-0 flex-1">
@@ -110,21 +112,23 @@ export function AgentControls({
 						)}
 					/>
 				</div>
-				<button
-					type="button"
-					disabled={disabled}
-					onClick={onFastChange}
-					aria-label={`Fast mode ${fast === undefined ? 'default' : fast ? 'on' : 'off'}`}
-					aria-pressed={fast === true}
-					className={cn(
-						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:pointer-events-none disabled:opacity-40',
-						fast && 'text-text',
-						fastStaged && 'text-accent'
-					)}
-				>
-					<Zap size={17} />
-				</button>
-				{effort || showEmptyEffort ? (
+				{fastAvailable ? (
+					<button
+						type="button"
+						disabled={disabled}
+						onClick={onFastChange}
+						aria-label={`Fast mode ${fast === undefined ? 'default' : fast ? 'on' : 'off'}`}
+						aria-pressed={fast === true}
+						className={cn(
+							'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:pointer-events-none disabled:opacity-40',
+							fast && 'text-text',
+							fastStaged && 'text-accent'
+						)}
+					>
+						<Zap size={17} />
+					</button>
+				) : null}
+				{effortAvailable && (effort || showEmptyEffort) ? (
 					<button
 						type="button"
 						disabled={disabled}

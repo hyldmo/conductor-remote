@@ -24,7 +24,10 @@ describe('delegated role store', () => {
 
 		expect(result).toEqual({ config: DEFAULT_ROLES })
 		expect(result.config.roles.planning).toMatchObject({ model: 'Fable 5', effort: 'max', fast: false })
-		expect(result.config.roles.exploration).toMatchObject({ model: 'Muse Spark', effort: 'high' })
+		expect(result.config.roles.exploration).toEqual({
+			model: 'Muse Spark',
+			preamble: expect.any(String)
+		})
 		expect(result.config.roles.implementation).toMatchObject({ model: '5.6 Sol', effort: 'xhigh' })
 		expect(Object.values(result.config.roles).every(role => !Object.hasOwn(role, 'plan'))).toBe(true)
 		expect(fs.existsSync(file)).toBe(false)
@@ -35,7 +38,7 @@ describe('delegated role store', () => {
 		const result = store.write({
 			version: 1,
 			roles: {
-				exploration: { model: 'opencode/muse-spark-1.3-contributor-free', effort: 'high', fast: false },
+				exploration: { model: 'opencode/muse-spark-1.3-contributor-free' },
 				implementation: { model: '5.6 Sol', effort: 'ultracode', preamble: 'Implement the accepted baton.' }
 			}
 		})
@@ -44,6 +47,30 @@ describe('delegated role store', () => {
 		expect(store.read().config.roles.exploration.model).toContain('muse-spark')
 		expect(fs.statSync(file).mode & 0o777).toBe(0o600)
 		expect(fs.readdirSync(path.dirname(file))).toEqual(['roles.json'])
+	})
+
+	test("refuses controls Conductor doesn't render for an OpenCode role", () => {
+		const groups = [
+			{
+				agentType: 'acp',
+				models: ['opencode-go/muse-spark-1.3-contributor'],
+				updatedAt: 1
+			}
+		]
+
+		for (const role of [
+			{ model: 'opencode-go/muse-spark-1.3-contributor', effort: 'high' as const },
+			{ model: 'opencode-go/muse-spark-1.3-contributor', fast: false }
+		]) {
+			const config = { version: 1 as const, roles: { exploration: role } }
+			expect(roleModelIssues(config, groups)).toMatchObject([
+				{ role: 'exploration', error: { code: 'invalid_request' } }
+			])
+			expect(resolveRole(config, 'exploration', groups)).toMatchObject({
+				ok: false,
+				error: { code: 'invalid_request' }
+			})
+		}
 	})
 
 	test('rejects unknown fields, including Plan, without replacing the last good value', () => {

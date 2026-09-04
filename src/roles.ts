@@ -9,7 +9,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from './config.ts'
-import { modelAgentType, modelCatalogIncludes, modelPickerLabel } from './shared.ts'
+import {
+	agentTypeCanExposeEffort,
+	agentTypeCanExposeFastMode,
+	modelAgentType,
+	modelCatalogIncludes,
+	modelPickerLabel
+} from './shared.ts'
 import type { CachedModelGroup, DelegatedRole, DelegationError, ResolvedDelegatedRole, RolesConfig } from './wire.ts'
 
 const EFFORTS = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'])
@@ -28,7 +34,7 @@ export const DEFAULT_ROLES: RolesConfig = {
 		planning: { model: 'Fable 5', effort: 'max', fast: false, preamble: batonPreamble('planning') },
 		// Conductor currently offers two distinct Muse Spark rows. This descriptive
 		// placeholder intentionally matches neither, so the user must choose exactly.
-		exploration: { model: 'Muse Spark', effort: 'high', fast: false, preamble: batonPreamble('exploration') },
+		exploration: { model: 'Muse Spark', preamble: batonPreamble('exploration') },
 		implementation: { model: '5.6 Sol', effort: 'xhigh', fast: false, preamble: batonPreamble('implementation') }
 	}
 }
@@ -99,10 +105,23 @@ function issue(code: DelegationError['code'], message: string): DelegationError 
 	return { code, message, retryable: false }
 }
 
-function effortIssue(name: string, role: DelegatedRole, agentType: string): DelegationError | null {
-	return role.effort === 'none' && agentType !== 'codex'
-		? issue('invalid_request', `Role ${name} can use None effort only with a Codex model.`)
-		: null
+function controlIssue(name: string, role: DelegatedRole, agentType: string): DelegationError | null {
+	if (role.effort !== undefined && !agentTypeCanExposeEffort(agentType)) {
+		return issue(
+			'invalid_request',
+			`Role ${name} cannot set effort because Conductor exposes no reasoning control for this provider.`
+		)
+	}
+	if (role.effort === 'none' && agentType !== 'codex') {
+		return issue('invalid_request', `Role ${name} can use None effort only with a Codex model.`)
+	}
+	if (role.fast !== undefined && !agentTypeCanExposeFastMode(agentType)) {
+		return issue(
+			'invalid_request',
+			`Role ${name} cannot set Fast mode because Conductor exposes no Fast control for this provider.`
+		)
+	}
+	return null
 }
 
 /** Picker validation stays separate from shape decoding so a vanished model remains editable. */
@@ -127,7 +146,7 @@ export function roleModelIssues(
 			})
 			continue
 		}
-		const invalidEffort = effortIssue(name, role, agentType)
+		const invalidEffort = controlIssue(name, role, agentType)
 		if (invalidEffort) issues.push({ role: name, error: invalidEffort })
 	}
 	return issues
@@ -152,7 +171,7 @@ export function resolveRole(config: RolesConfig, name: string, groups: CachedMod
 			error: issue('provider_unknown', `Role ${name}'s model label does not identify a supported provider.`)
 		}
 	}
-	const invalidEffort = effortIssue(name, role, agentType)
+	const invalidEffort = controlIssue(name, role, agentType)
 	if (invalidEffort) return { ok: false, error: invalidEffort }
 	return { ok: true, role: { ...cloneRole(role), agentType } }
 }

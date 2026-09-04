@@ -5,7 +5,13 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { modelAgentType } from '../../../src/shared.ts'
 import { useModelCatalog, useModelDefaults, useRepos, useRoles } from '../hooks.ts'
-import { defaultEffortForModel, nextEffortOverride, supportsPlanMode } from '../lib/agent.ts'
+import {
+	defaultEffortForModel,
+	nextEffortOverride,
+	supportsEffortControl,
+	supportsFastMode,
+	supportsPlanMode
+} from '../lib/agent.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { NEW_WORKSPACE_DRAFT } from '../lib/draft.ts'
@@ -151,6 +157,8 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const ordinaryModel = agent.model ?? defaultModel ?? null
 	const selectedModel = workflowMode ? (planningRole?.model ?? 'Planning role') : ordinaryModel
 	const planAvailable = supportsPlanMode(null, ordinaryModel)
+	const effortAvailable = supportsEffortControl(null, ordinaryModel)
+	const fastAvailable = supportsFastMode(null, ordinaryModel)
 	// Draw the value this model will inherit without putting it in `agent`: an empty
 	// patch is what lets Conductor own the default when the workspace is created.
 	const inheritedEffort = defaultEffortForModel(ordinaryModel, modelDefaults.data?.defaultEfforts)
@@ -171,6 +179,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	useEffect(() => {
 		if (!planAvailable && agent.plan !== undefined) stageAgent({ plan: undefined })
 	}, [planAvailable, agent.plan, stageAgent])
+
+	useEffect(() => {
+		if (!effortAvailable && agent.effort !== undefined) stageAgent({ effort: undefined })
+		if (!fastAvailable && agent.fast !== undefined) stageAgent({ fast: undefined })
+	}, [agent.effort, agent.fast, effortAvailable, fastAvailable, stageAgent])
 
 	const removeAttachment = (id: string) => {
 		const attachment = readyAttachments.find(current => current.path === id)

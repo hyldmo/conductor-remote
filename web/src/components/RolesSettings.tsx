@@ -2,7 +2,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, LoaderCircle, Plus, Save, Trash2, X, Zap } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { modelAgentType, modelCatalogIncludes } from '../../../src/shared.ts'
+import {
+	agentTypeCanExposeEffort,
+	agentTypeCanExposeFastMode,
+	modelAgentType,
+	modelCatalogIncludes
+} from '../../../src/shared.ts'
 import { useModelCatalog, useRoles } from '../hooks.ts'
 import { EFFORT_LABELS } from '../lib/agent.ts'
 import { client } from '../lib/api.ts'
@@ -23,17 +28,40 @@ const copyConfig = (config: RolesConfig): RolesConfig => ({
 const defaultPreamble = (role: string) =>
 	`You are the ${role} agent for this workspace. End your final answer with a \`## Baton\` section: Decision, Evidence, Files changed, Risks, Suggested next role.`
 
-function nextRoleEffort(effort: AgentEffort | undefined, agentType: string | null): AgentEffort {
-	const choices = agentType === 'codex' ? ROLE_EFFORTS : ROLE_EFFORTS.filter(value => value !== 'none')
-	const current = effort ? choices.indexOf(effort) : -1
+function nextRoleEffort(effort: AgentEffort | undefined, agentType: string | null): AgentEffort | undefined {
+	const efforts = agentType === 'codex' ? ROLE_EFFORTS : ROLE_EFFORTS.filter(value => value !== 'none')
+	const choices: Array<AgentEffort | undefined> = [undefined, ...efforts]
+	const current = choices.indexOf(effort)
 	return choices[(current + 1) % choices.length]
+}
+
+function roleWithEffort(role: DelegatedRole, effort: AgentEffort | undefined): DelegatedRole {
+	const next = { ...role }
+	if (effort === undefined) delete next.effort
+	else next.effort = effort
+	return next
+}
+
+/** Selecting a provider also drops settings that provider cannot render. */
+export function roleWithModel(role: DelegatedRole, model: string): DelegatedRole {
+	const next: DelegatedRole = { ...role, model }
+	const agentType = modelAgentType(model)
+	if (!agentTypeCanExposeEffort(agentType)) delete next.effort
+	if (!agentTypeCanExposeFastMode(agentType)) delete next.fast
+	return next
 }
 
 export function roleModelProblem(role: DelegatedRole, groups: CachedModelGroup[]): string | null {
 	if (!modelCatalogIncludes(role.model, groups)) return 'Choose an exact model from Conductor’s picker.'
 	const agentType = modelAgentType(role.model)
 	if (!agentType) return 'This model label does not identify a supported provider.'
+	if (role.effort !== undefined && !agentTypeCanExposeEffort(agentType)) {
+		return 'Conductor does not expose a reasoning control for this provider. Select its model again to clear Effort.'
+	}
 	if (role.effort === 'none' && agentType !== 'codex') return 'None effort is available only for Codex.'
+	if (role.fast !== undefined && !agentTypeCanExposeFastMode(agentType)) {
+		return 'Conductor does not expose a Fast control for this provider. Select its model again to clear Fast.'
+	}
 	return null
 }
 
@@ -82,6 +110,10 @@ export function RoleEditorCard({
 	onRemove: () => void
 	canRemove: boolean
 }) {
+	const effectiveAgentType = agentType ?? modelAgentType(role.model) ?? null
+	const effortAvailable = agentTypeCanExposeEffort(effectiveAgentType)
+	const fastAvailable = agentTypeCanExposeFastMode(effectiveAgentType)
+
 	return (
 		<section className={cn('rounded-2xl border bg-surface p-3', invalid ? 'border-del/50' : 'border-border')}>
 			<div className="mb-2 flex items-center gap-2">
@@ -103,7 +135,7 @@ export function RoleEditorCard({
 					models={models}
 					placement="below"
 					empty="No picker models are cached yet."
-					onSelect={model => onChange({ ...role, model })}
+					onSelect={model => onChange(roleWithModel(role, model))}
 					renderTrigger={({ picking, toggle }) => (
 						<button
 							type="button"
@@ -121,27 +153,31 @@ export function RoleEditorCard({
 						</button>
 					)}
 				/>
-				<button
-					type="button"
-					onClick={() => onChange({ ...role, effort: nextRoleEffort(role.effort, agentType) })}
-					aria-label={`Reasoning effort for ${name}: ${role.effort ? EFFORT_LABELS[role.effort] : 'default'}`}
-					className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-2 text-xs text-muted active:bg-surface-2"
-				>
-					<EffortBars effort={role.effort ?? ''} />
-					{role.effort ? EFFORT_LABELS[role.effort] : 'Effort'}
-				</button>
-				<button
-					type="button"
-					onClick={() => onChange({ ...role, fast: !role.fast })}
-					aria-label={`Fast mode for ${name} ${role.fast ? 'on' : 'off'}`}
-					aria-pressed={role.fast === true}
-					className={cn(
-						'flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-xs text-muted active:bg-surface-2',
-						role.fast && 'bg-surface-2 text-text'
-					)}
-				>
-					<Zap size={13} /> Fast
-				</button>
+				{effortAvailable ? (
+					<button
+						type="button"
+						onClick={() => onChange(roleWithEffort(role, nextRoleEffort(role.effort, effectiveAgentType)))}
+						aria-label={`Reasoning effort for ${name}: ${role.effort ? EFFORT_LABELS[role.effort] : 'default'}`}
+						className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-2 text-xs text-muted active:bg-surface-2"
+					>
+						<EffortBars effort={role.effort ?? ''} />
+						{role.effort ? EFFORT_LABELS[role.effort] : 'Effort'}
+					</button>
+				) : null}
+				{fastAvailable ? (
+					<button
+						type="button"
+						onClick={() => onChange({ ...role, fast: !role.fast })}
+						aria-label={`Fast mode for ${name} ${role.fast ? 'on' : 'off'}`}
+						aria-pressed={role.fast === true}
+						className={cn(
+							'flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-xs text-muted active:bg-surface-2',
+							role.fast && 'bg-surface-2 text-text'
+						)}
+					>
+						<Zap size={13} /> Fast
+					</button>
+				) : null}
 			</div>
 			{invalid ? (
 				<p className="mt-2 flex items-start gap-1.5 text-xs text-del">

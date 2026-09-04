@@ -74,7 +74,7 @@ describe('delegation MCP tools', () => {
 		expect(output).toContain('model_missing')
 	})
 
-	test('updates one role by replacing the versioned document and retaining the rest', async () => {
+	test('drops inherited controls when changing a role to an OpenCode model', async () => {
 		const calls: Array<{ route: string; body?: unknown }> = []
 		const call: RelayCall = async <T>(route: string, options?: CallOptions) => {
 			calls.push({ route, body: options?.body })
@@ -84,8 +84,7 @@ describe('delegation MCP tools', () => {
 
 		await tool('set_role', call).run({
 			role: 'exploration',
-			model: 'opencode/muse-spark-1.3-contributor-free',
-			effort: 'high'
+			model: 'opencode/muse-spark-1.3-contributor-free'
 		})
 
 		expect(calls[1]).toMatchObject({ route: routes.updateRoles.path() })
@@ -93,9 +92,26 @@ describe('delegation MCP tools', () => {
 			version: 1,
 			roles: {
 				planning: roles.roles.planning,
-				exploration: { model: 'opencode/muse-spark-1.3-contributor-free', effort: 'high', fast: false }
+				exploration: { model: 'opencode/muse-spark-1.3-contributor-free' }
 			}
 		})
+	})
+
+	test('rejects an explicit OpenCode effort before updating role state', async () => {
+		let called = false
+		const call: RelayCall = async <T>() => {
+			called = true
+			return roles as T
+		}
+
+		await expect(
+			tool('set_role', call).run({
+				role: 'exploration',
+				model: 'opencode/muse-spark-1.3-contributor-free',
+				effort: 'high'
+			})
+		).rejects.toThrow(/no Conductor reasoning control/)
+		expect(called).toBe(false)
 	})
 
 	test('lists and dismisses jobs through their canonical routes', async () => {

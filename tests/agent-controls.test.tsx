@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test, vi } from 'vitest'
 import { AgentControls } from '../web/src/components/AgentControls.tsx'
 import { WorkflowModePill } from '../web/src/components/WorkflowModePill.tsx'
-import { supportsPlanMode } from '../web/src/lib/agent.ts'
+import { supportsEffortControl, supportsFastMode, supportsPlanMode } from '../web/src/lib/agent.ts'
 
 function controls(agentType: string | null, model: string | null): string {
 	return renderToStaticMarkup(
@@ -11,6 +11,9 @@ function controls(agentType: string | null, model: string | null): string {
 			providerModel={model}
 			agentType={agentType}
 			models={[]}
+			fast={false}
+			effort="high"
+			showEmptyEffort
 			onModelChange={vi.fn()}
 			onFastChange={vi.fn()}
 			onEffortChange={vi.fn()}
@@ -38,6 +41,26 @@ describe('agent controls', () => {
 	])('hides Plan outside Claude (%s, %s)', (agentType, model) => {
 		expect(supportsPlanMode(agentType, model)).toBe(false)
 		expect(controls(agentType, model)).not.toContain('aria-label="Plan mode')
+	})
+
+	test.each([
+		['cursor', 'composer-2.5'],
+		['acp', 'opencode:opencode-go/muse-spark-1.3-contributor']
+	])('hides stale effort and Fast values when Conductor renders neither control (%s, %s)', (agentType, model) => {
+		expect(supportsEffortControl(agentType, model)).toBe(false)
+		expect(supportsFastMode(agentType, model)).toBe(false)
+		expect(controls(agentType, model)).not.toContain('aria-label="Reasoning effort')
+		expect(controls(agentType, model)).not.toContain('aria-label="Fast mode')
+	})
+
+	test.each([
+		['claude', 'opus-5-1m'],
+		['codex', 'gpt-5.6-sol']
+	])('keeps effort and Fast for supported Conductor harnesses (%s, %s)', (agentType, model) => {
+		expect(supportsEffortControl(agentType, model)).toBe(true)
+		expect(supportsFastMode(agentType, model)).toBe(true)
+		expect(controls(agentType, model)).toContain('aria-label="Reasoning effort')
+		expect(controls(agentType, model)).toContain('aria-label="Fast mode')
 	})
 
 	test('puts Workflow before the disabled agent settings and leaves it reversible', () => {

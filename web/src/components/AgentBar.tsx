@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { modelAgentType } from '../../../src/shared.ts'
 import { useModelCatalog, useModels } from '../hooks.ts'
-import { nextEffort, supportsPlanMode } from '../lib/agent.ts'
+import { nextEffort, supportsEffortControl, supportsFastMode, supportsPlanMode } from '../lib/agent.ts'
 import { client } from '../lib/api.ts'
 import { modelLabel } from '../lib/format.ts'
 import { isLockedError } from '../lib/lock.ts'
@@ -86,6 +86,8 @@ export function AgentBar({
 	const displayedModel = staged.model ?? (modelLabel(session.model, models) || 'Model')
 	const providerModel = staged.model ?? session.model
 	const planAvailable = supportsPlanMode(session.agent_type, providerModel)
+	const effortAvailable = supportsEffortControl(session.agent_type, providerModel)
+	const fastAvailable = supportsFastMode(session.agent_type, providerModel)
 	const workflowModel = workflow?.role?.model ?? 'Planning role'
 
 	// A Plan choice can survive in synced/local drafts after switching away from
@@ -94,6 +96,13 @@ export function AgentBar({
 	useEffect(() => {
 		if (!planAvailable && staged.plan !== undefined) stageAgent(session.id, { plan: undefined })
 	}, [planAvailable, session.id, staged.plan, stageAgent])
+
+	// Provider switches can leave an invisible staged setting behind. Cursor and
+	// OpenCode have no matching controls, so never carry those settings into send.
+	useEffect(() => {
+		if (!effortAvailable && staged.effort !== undefined) stageAgent(session.id, { effort: undefined })
+		if (!fastAvailable && staged.fast !== undefined) stageAgent(session.id, { fast: undefined })
+	}, [effortAvailable, fastAvailable, session.id, staged.effort, staged.fast, stageAgent])
 
 	const makeDefault = async (model: string) => {
 		if (settingDefault) return
