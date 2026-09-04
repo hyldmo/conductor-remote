@@ -21,10 +21,10 @@ const initialPrefs = loadLocalPrefs()
 export const WORKING_HINT_MS = 15_000
 
 /**
- * Sidebar view preferences — grouping and filtering mirror the desktop app's
- * popover, with phone-only row presentation kept here too. `recent` has no
- * desktop equivalent: day buckets (Today / Yesterday / …) for reaching the chat
- * you left a minute ago.
+ * Sidebar view preferences. Workspace grouping and filtering mirror the desktop
+ * app's popover, while row details and the file rail's folder layout are local
+ * presentation choices. `recent` has no desktop equivalent: day buckets (Today /
+ * Yesterday / …) for reaching the chat you left a minute ago.
  */
 export type GroupBy = 'status' | 'repo' | 'recent' | 'none'
 export type SortBy = 'updated' | 'created' | 'name'
@@ -35,6 +35,8 @@ export interface ViewPrefs {
 	sortBy: SortBy
 	/** Show aggregate git additions/deletions on each workspace row. */
 	showDiffs: boolean
+	/** Group the changed/all-files rail into collapsible repository folders. */
+	showFolders: boolean
 	/**
 	 * Drop workspaces whose PR has landed (see `isMerged`). Off by default — a
 	 * filter that hides rows has to be asked for, never inherited.
@@ -57,6 +59,7 @@ const defaultView: ViewPrefs = {
 	repoSelection: ALL_REPOS,
 	sortBy: 'updated',
 	showDiffs: true,
+	showFolders: true,
 	hideMerged: false,
 	hideDone: false,
 	collapsed: []

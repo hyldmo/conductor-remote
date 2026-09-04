@@ -9,7 +9,9 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { DiffButton, DiffFileScopeToggle, SessionTabs } = await import('../web/src/components/SessionView.tsx')
+const { DiffButton, DiffFileScopeToggle, DiffFolderToggle, SessionTabs } = await import(
+	'../web/src/components/SessionView.tsx'
+)
 
 const session: Session = {
 	id: 'chat-1',
@@ -160,6 +162,15 @@ describe('workspace diff shortcut', () => {
 		expect(changed).toContain('aria-label="All files" aria-pressed="false"')
 		expect(all).toContain('aria-label="Changed files" aria-pressed="false"')
 		expect(all).toContain('aria-label="All files" aria-pressed="true"')
+	})
+
+	test('makes folder grouping an explicit file-rail preference', () => {
+		const folders = renderToStaticMarkup(<DiffFolderToggle showFolders onChange={vi.fn()} />)
+		const flat = renderToStaticMarkup(<DiffFolderToggle showFolders={false} onChange={vi.fn()} />)
+
+		expect(folders).toContain('aria-label="Group files into folders"')
+		expect(folders).toContain('aria-pressed="true"')
+		expect(flat).toContain('aria-pressed="false"')
 	})
 
 	test('shows a dot only when the workspace has changes', () => {
