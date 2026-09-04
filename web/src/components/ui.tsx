@@ -1,4 +1,4 @@
-import { Check, CloudOff, Copy, RefreshCw, WifiOff, X } from 'lucide-react'
+import { Check, CloudOff, Copy, Play, RefreshCw, WifiOff, X } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { useRepoIcon } from '../hooks.ts'
@@ -60,6 +60,27 @@ export function StatusDot({
 	if (spinning)
 		return <span className={cn('dot-spinner', className)} style={{ '--spin-color': color } as CSSProperties} />
 	return <span className={cn('dot', className)} style={{ background: color }} />
+}
+
+/**
+ * A live Conductor Run task in this workspace. Sits at the avatar's top-left, mirroring
+ * the bottom-right StatusDot's clearance and ring, so a Run marker and PR/agent activity
+ * never overlap. Presence only — the flag comes from a cached ps snapshot
+ * (src/run-activity.ts), so nothing here times or animates it.
+ */
+export function RunBadge({ className }: { className?: string }) {
+	return (
+		<span
+			className={cn(
+				'flex size-3 items-center justify-center rounded-full bg-surface text-add ring-2 ring-surface',
+				className
+			)}
+			role="img"
+			aria-label="Run active"
+		>
+			<Play size={7} strokeWidth={0} fill="currentColor" aria-hidden />
+		</span>
+	)
 }
 
 function syncedAgo(ms: number): string {

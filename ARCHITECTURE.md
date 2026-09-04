@@ -49,6 +49,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   preserves source HEAD, index and working tree through short-lived private refs
   change-stats.ts bounded, background cache of git line stats for /api/state; working rows
                   refresh quickly while idle rows avoid spending four git calls every poll
+  run-activity.ts cached live-process read for workspace Run badges; maps each resolved
+                  worktree to Conductor's `run-run:<n>.sh` wrapper without delaying /api/state
   file-preview.ts parses source and raster-image paths an agent wrote (absolute, or ~) and
                   decides whether the relay may open them — the same answer whether or not
                   the file exists

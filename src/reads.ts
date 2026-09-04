@@ -209,6 +209,8 @@ export interface Workspace extends WorkspaceRow {
 	pending_prompt?: FirstPrompt | null
 	/** Prompts parked for the lock screen, each naming its chat; set by src/server.ts from src/parked.ts. */
 	parked_prompts?: ParkedPrompt[]
+	/** A Conductor Run task is live in this worktree; set by src/server.ts from src/run-activity.ts. */
+	run_active?: boolean
 }
 
 const worktreeCache = new Map<string, string | null>()

@@ -60,6 +60,7 @@ import { readPrefs, writePrefs } from './prefs.ts'
 import { type DeliveryCursor, Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
 import { decodeRoles, RoleStore, resolveRole, roleModelIssues } from './roles.ts'
 import { isRoute, routeParam, routes } from './routes.ts'
+import { attachRunActivity } from './run-activity.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
 import { SendOnce } from './sendonce.ts'
 import { SessionPoller } from './session-poller.ts'
@@ -1477,6 +1478,7 @@ const server = http.createServer(async (req, res) => {
 				const workspaces = reads.listWorkspaces()
 				attachChangeStats(workspaces) // serves the cache now; refreshes stale git stats in the background
 				attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
+				attachRunActivity(workspaces) // flags a live Run wrapper from a cached ps snapshot
 				attachDelegationState(workspaces)
 				// An undelivered first prompt rides along with its workspace: the phone renders it
 				// in that chat rather than tracking delivery itself (see src/firstprompt.ts).
