@@ -3,6 +3,7 @@ import { useDebounced, useSearch } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import { queryTokens, relativeTime, splitSnippet, workspaceTitle } from '../lib/format.ts'
 import type { SearchRole, SearchSnippet, Workspace } from '../lib/types.ts'
+import { type RepoSelection, repoIsSelected, selectedRepos } from '../lib/workspace-filter.ts'
 import { repoFilterLabel } from './RepoFilter.tsx'
 import { Chip, Empty, RepoAvatar, Spinner } from './ui.tsx'
 
@@ -26,28 +27,30 @@ import { Chip, Empty, RepoAvatar, Spinner } from './ui.tsx'
  */
 export function SearchPane({
 	query,
-	repos,
+	repoSelection,
 	includeArchived,
 	live,
 	selectedId,
 	onOpen
 }: {
 	query: string
-	repos: string[]
+	repoSelection: RepoSelection
 	includeArchived: boolean
 	live: Workspace[]
 	selectedId?: string
 	onOpen: (workspaceId: string, sessionId: string | null) => void
 }) {
 	const settled = useDebounced(query.trim(), 250)
-	const { data, isError, error, isFetching } = useSearch(settled, repos, includeArchived)
+	const repos = selectedRepos(repoSelection)
+	const noRepos = repoSelection.mode === 'selected' && repos.length === 0
+	const { data, isError, error, isFetching } = useSearch(noRepos ? '' : settled, repos, includeArchived)
 	const tokens = useMemo(() => queryTokens(query), [query])
 
 	const rows = useMemo(() => {
 		const byId = new Map<string, Row>()
 		if (tokens.length)
 			for (const w of live) {
-				if (repos.length && !(w.repo_name && repos.includes(w.repo_name))) continue
+				if (repoSelection.mode === 'selected' && !(w.repo_name && repoIsSelected(repoSelection, w.repo_name))) continue
 				const hay = [workspaceTitle(w), w.branch, w.repo_name, w.directory_name, w.session_title]
 					.filter(Boolean)
 					.join(' ')
@@ -58,7 +61,7 @@ export function SearchPane({
 				if (tokens.every(t => hay.includes(t)))
 					byId.set(w.id, { workspace: w, archived: false, sessionId: null, snippets: [], hits: 0 })
 			}
-		for (const r of data?.results ?? []) {
+		for (const r of noRepos ? [] : (data?.results ?? [])) {
 			// `keepPreviousData` deliberately keeps the old response while the newly scoped
 			// request runs. Hide its archived rows immediately when this toggle changes.
 			if (!includeArchived && r.workspace.archived) continue
@@ -78,7 +81,7 @@ export function SearchPane({
 			})
 		}
 		return [...byId.values()]
-	}, [live, data, tokens, repos, includeArchived])
+	}, [live, data, tokens, repoSelection, noRepos, includeArchived])
 
 	const index = data?.index
 	return (
@@ -104,7 +107,9 @@ export function SearchPane({
 					<Spinner />
 				) : isError ? null : (
 					<Empty>
-						Nothing matches “{query.trim()}”{repos.length ? ` in ${repoFilterLabel(repos)}` : ''}.
+						{noRepos
+							? 'No repos selected.'
+							: `Nothing matches “${query.trim()}”${repos.length ? ` in ${repoFilterLabel(repoSelection)}` : ''}.`}
 					</Empty>
 				)
 			) : (

@@ -58,6 +58,12 @@ Order choices from least to most context: Last message only, Concise, With reaso
 
 Use the shared bottom-sheet form: portalled to `body`, capped at 85dvh, independently scrollable, bottom-anchored on phones, and centered on wider screens. The header stays fixed while content scrolls. Preserve loading, recoverable error, retry, backdrop-dismiss, and explicit close states.
 
+### Checkbox-list selection
+
+Use the conventional table model: one master checkbox in the same column as the row checkboxes. When everything is included, the master and every row appear checked. Toggling one row from that state excludes only that row; clearing the master and toggling one row selects only that row. A partial selection gives the master its native indeterminate state.
+
+Keep all, none, and an exact subset distinct in state; never overload an empty array to mean both all and none. Avoid detached selection banners or bulk-action strips when the master checkbox can express the state directly.
+
 ## Data honesty
 
 Exact provider values and transcript-derived estimates must be visually and verbally distinct. Prefix estimated token values with `≈`, call the section estimated, and preserve the exact total when fitting category proportions. Exclude opaque signatures, encoded binary payloads, incomplete turns, and mirrored child-agent internals from category estimates.
