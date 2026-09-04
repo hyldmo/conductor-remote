@@ -15,6 +15,12 @@ const ordinary = {
 	model: 'fable-5-1'
 }
 
+const configuredRoles = {
+	planning: { model: 'Configured planner' },
+	exploration: { model: 'Configured explorer' },
+	implementation: { model: 'Configured implementer' }
+}
+
 const workflow = {
 	id: 'workflow-1',
 	workspaceId: 'workspace-1',
@@ -43,27 +49,72 @@ describe('workspace sidebar run label', () => {
 		expect(html).not.toContain('Workflow')
 	})
 
-	test('shows Workflow instead of one model only from the explicit run projection', () => {
+	test('shows the Workflow and frozen role icons in execution order instead of one model name', () => {
 		const workspace = {
 			...ordinary,
 			workflow
 		}
-		const html = renderToStaticMarkup(<WorkspaceRunLabel workspace={workspace} modelGroups={modelGroups} />)
+		const html = renderToStaticMarkup(
+			<WorkspaceRunLabel workspace={workspace} modelGroups={modelGroups} configuredRoles={configuredRoles} />
+		)
 
-		expect(html).toContain('Workflow')
-		expect(html).toContain('Managed Workflow')
-		expect(html).toContain('Accepted')
-		expect(html).not.toContain('Fable 5.1')
+		const markers = [
+			'data-workflow-icon',
+			'data-workflow-role="planning"',
+			'data-workflow-role="exploration"',
+			'data-workflow-role="implementation"'
+		]
+		let prior = -1
+		for (const marker of markers) {
+			const index = html.indexOf(marker)
+			expect(index).toBeGreaterThan(prior)
+			prior = index
+		}
+		expect(html).toContain('Workflow · Accepted')
+		expect(html).toContain('Planning: Fable 5.1')
+		expect(html).not.toContain('Configured planner')
+		expect(html).not.toContain('class="truncate">Workflow')
 	})
 
-	test('does not infer Workflow ownership from legacy role or prompt artifacts', () => {
-		const legacyArtifacts = {
+	test('keeps the pre-coordinator planning-root signature and uses configured role icons', () => {
+		const legacyWorkflow = {
 			...ordinary,
-			delegations: [{ id: 'legacy-job' }],
-			session_roles: { 'chat-1': { role: 'planning' } },
-			pending_prompt: { sessionRole: 'planning' }
+			session_roles: { 'chat-1': { role: 'planning' } }
 		}
+		const html = renderToStaticMarkup(
+			<WorkspaceRunLabel workspace={legacyWorkflow} modelGroups={modelGroups} configuredRoles={configuredRoles} />
+		)
 
-		expect(workspaceHasWorkflow(legacyArtifacts)).toBe(false)
+		expect(workspaceHasWorkflow(legacyWorkflow)).toBe(true)
+		expect(html).toContain('Planning: Configured planner')
+		expect(html).toContain('data-workflow-role="implementation"')
+	})
+
+	test('recognizes a pending Workflow but not arbitrary delegated role artifacts', () => {
+		expect(workspaceHasWorkflow({ ...ordinary, pending_prompt: { sessionRole: 'planning' } })).toBe(true)
+		expect(
+			workspaceHasWorkflow({
+				...ordinary,
+				session_roles: {
+					'chat-1': { role: 'exploration', delegationId: 'explore-1' },
+					'chat-2': { role: 'planning', delegationId: 'planning-child' }
+				}
+			})
+		).toBe(false)
+	})
+
+	test('keeps a completed durable Workflow as the workspace run identity', () => {
+		const html = renderToStaticMarkup(
+			<WorkspaceRunLabel
+				workspace={{
+					...ordinary,
+					workflow_identity: { id: workflow.id, phase: 'completed', roles: workflow.roles }
+				}}
+				modelGroups={modelGroups}
+			/>
+		)
+
+		expect(html).toContain('Workflow · Completed')
+		expect(html).toContain('data-workflow-role="planning"')
 	})
 })

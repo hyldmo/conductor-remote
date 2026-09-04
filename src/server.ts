@@ -1257,7 +1257,7 @@ function projectWorkflowDelegation(
 
 /** Attach only bounded, scrubbed navigation state; capabilities and internal effect evidence stay in SQLite. */
 type WorkflowAttachedWorkspace = Workspace &
-	Pick<WireWorkspace, 'delegations' | 'session_roles' | 'workflow' | 'delegation_warning'>
+	Pick<WireWorkspace, 'delegations' | 'session_roles' | 'workflow' | 'workflow_identity' | 'delegation_warning'>
 
 function attachWorkflowState(workspaces: WorkflowAttachedWorkspace[]): WorkflowRunWire[] {
 	if (!orchestration.writable) return []
@@ -1292,6 +1292,23 @@ function attachWorkflowState(workspaces: WorkflowAttachedWorkspace[]): WorkflowR
 		}
 		// Compatibility for cached clients that only understand one workspace-level run.
 		if (!workspace.workflow || workflow.rootSessionId === workspace.active_session_id) workspace.workflow = workflow
+	}
+	// A terminal run leaves the active Workflow list but not the workspace's identity.
+	// Attach only the newest historical projection when no live run already won above;
+	// its frozen public roles let the sidebar remain truthful after role settings change.
+	const historicalWorkspaceIds = [...byWorkspace.values()]
+		.filter(workspace => !workspace.workflow)
+		.map(workspace => workspace.id)
+	for (const workflow of orchestration.listLatestWorkflowProjectionsForWorkspaces(historicalWorkspaceIds)) {
+		if (!workflow.workspaceId) continue
+		const workspace = byWorkspace.get(workflow.workspaceId)
+		if (workspace && !workspace.workflow) {
+			workspace.workflow_identity = {
+				id: workflow.id,
+				phase: workflow.phase,
+				roles: workflow.roles
+			}
+		}
 	}
 	return projections
 }

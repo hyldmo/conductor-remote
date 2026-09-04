@@ -12,6 +12,7 @@ import type {
 	UiQuarantineWire,
 	WorkflowDelegateRequest,
 	WorkflowDelegateResult,
+	WorkflowIdentityWire,
 	WorkflowRunWire,
 	Workspace
 } from '../src/wire.ts'
@@ -63,6 +64,8 @@ describe('delegation wire contract', () => {
 		expectTypeOf<Workspace>().toHaveProperty('delegations')
 		expectTypeOf<Workspace>().toHaveProperty('session_roles')
 		expectTypeOf<Workspace>().toHaveProperty('workflow')
+		expectTypeOf<Workspace>().toHaveProperty('workflow_identity')
+		expectTypeOf<keyof WorkflowIdentityWire>().toEqualTypeOf<'id' | 'phase' | 'roles'>()
 	})
 
 	test('projects a bounded global UI quarantine and requires explicit stability confirmation', () => {

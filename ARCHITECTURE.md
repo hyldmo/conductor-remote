@@ -221,7 +221,11 @@ including after a relay restart.
 phase, frozen public roles, guaranteed/extra job counts, navigation ids, sanitized error,
 adoption candidates, and allowed actions. `StateResponse.workflows` carries accepted
 runs even before they bind to a workspace; a workspace projection is only a convenience
-after binding. The phone owns idempotent Retry, explicit candidate adoption, separately
+after binding. Once the run is terminal, `workspace.workflow_identity` retains only its
+id, phase, and frozen public roles so the sidebar's Workflow/role icon stack does not
+fall back to whichever chat model happens to be active; pre-coordinator workspaces use
+the old un-delegated planning-root marker as a narrow upgrade fallback. The phone owns
+idempotent Retry, explicit candidate adoption, separately
 confirmed risky replay, non-destructive Cancel, and stable-review Complete (only after
 an implementation Baton and with no outstanding job). The pipeline uses explicit
 Workflow ids for child tabs; it never
