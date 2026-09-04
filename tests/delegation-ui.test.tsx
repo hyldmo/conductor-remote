@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test, vi } from 'vitest'
-import type { DelegationProjection } from '../src/wire.ts'
+import type { DelegationProjection, Session } from '../src/wire.ts'
 
 Object.defineProperty(globalThis, 'location', { configurable: true, value: { hash: '', pathname: '/', search: '' } })
 Object.defineProperty(globalThis, 'localStorage', {
@@ -32,6 +32,25 @@ const running: DelegationProjection = {
 	attempts: 0,
 	createdAt: 1,
 	updatedAt: 2
+}
+
+const completedChild: Session = {
+	id: 'child-1',
+	status: 'idle',
+	title: 'Explorer',
+	model: 'Muse Spark',
+	permission_mode: 'default',
+	claude_effort_level: 'high',
+	fast_mode: 0,
+	agent_type: 'acp',
+	context_used_percent: 38,
+	unread_count: 0,
+	created_at: '2026-09-03 10:00:00',
+	updated_at: '2026-09-03 10:05:00',
+	last_user_message_at: '2026-09-03 10:01:00',
+	prompt_cache_ttl_ms: null,
+	turn_started_at: '2026-09-03 10:01:00',
+	background_tasks: []
 }
 
 describe('delegation phone surfaces', () => {
@@ -67,6 +86,24 @@ describe('delegation phone surfaces', () => {
 		expect(html).toContain('exploration')
 		expect(html).toContain('5.6 Terra')
 		expect(html).toContain('Running')
+	})
+
+	test('retains completed children as subtabs after their active job is gone', () => {
+		const html = renderToStaticMarkup(
+			<DelegationPipeline
+				jobs={[]}
+				sessions={[completedChild]}
+				roles={{
+					[completedChild.id]: { role: 'exploration', delegationId: 'job-1', assignedAt: 2 }
+				}}
+				activeSessionId={completedChild.id}
+				onSelectSession={vi.fn()}
+			/>
+		)
+
+		expect(html).toContain('exploration')
+		expect(html).toContain('Muse Spark')
+		expect(html).toContain('bg-surface-2')
 	})
 
 	test('role identity survives independently of an active job', () => {
