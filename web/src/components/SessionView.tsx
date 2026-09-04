@@ -101,6 +101,10 @@ export function SessionView() {
 	const activeSession = sessions.find(s => s.id === sessionId)
 	const sessionRoles = { ...(sessionsData?.session_roles ?? {}), ...(ws?.session_roles ?? {}) }
 	const delegations = ws?.delegations ?? []
+	const delegationSubtabSessionIds = useMemo(
+		() => new Set(delegations.flatMap(job => (job.childSessionId ? [job.childSessionId] : []))),
+		[delegations]
+	)
 
 	// Reading here can't clear Conductor's own unread flag (the relay's DB handle is
 	// read-only), so record what this phone has seen: the chat on screen is marked up to
@@ -314,6 +318,7 @@ export function SessionView() {
 							readMarks={readMarks}
 							promptStates={promptStates}
 							roles={sessionRoles}
+							subtabSessionIds={delegationSubtabSessionIds}
 							onSelect={pickSession}
 							onNewChat={createChat}
 							onClose={id => void closeChat(id)}
@@ -343,7 +348,13 @@ export function SessionView() {
 							</button>
 						</div>
 					) : null}
-					<DelegationPipeline jobs={delegations} activeSessionId={sessionId} onSelectSession={pickSession} />
+					<DelegationPipeline
+						jobs={delegations}
+						sessions={sessions}
+						roles={sessionRoles}
+						activeSessionId={sessionId}
+						onSelectSession={pickSession}
+					/>
 					{ws.delegation_warning || delegationError ? (
 						<div className="shrink-0 border-b border-del/30 bg-del/5 px-3 py-1.5 text-xs text-del">
 							{delegationError ?? ws.delegation_warning}
@@ -458,6 +469,7 @@ export function SessionTabs({
 	readMarks,
 	promptStates,
 	roles = {},
+	subtabSessionIds,
 	onSelect,
 	onNewChat,
 	onClose,
@@ -470,6 +482,8 @@ export function SessionTabs({
 	readMarks: ReadMarks
 	promptStates: Record<string, PromptIndicatorState>
 	roles?: Record<string, SessionRoleAssignment>
+	/** Live delegated children not yet present in the durable role snapshot. */
+	subtabSessionIds?: ReadonlySet<string>
 	onSelect: (id: string) => void
 	onNewChat: () => void
 	onClose: (id: string) => void
@@ -478,19 +492,23 @@ export function SessionTabs({
 	online: boolean
 }) {
 	const activeTab = useRef<HTMLDivElement>(null)
+	const primarySessions = sessions.filter(
+		session => !roles[session.id]?.delegationId && !subtabSessionIds?.has(session.id)
+	)
+	const activeHasPrimaryTab = primarySessions.some(session => session.id === activeId)
 
 	// Opening a workspace can restore a session near the end of a long tab row. Keep its
 	// selected tab visible on first paint and after each tab change, without moving the
 	// transcript or the rest of the page.
 	useLayoutEffect(() => {
-		if (!activeId) return
+		if (!(activeId && activeHasPrimaryTab)) return
 		activeTab.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-	}, [activeId])
+	}, [activeId, activeHasPrimaryTab])
 
 	return (
 		<nav className="flex shrink-0 items-center gap-1 border-b border-border-soft bg-bg px-3 py-2">
 			<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-				{sessions.map(s => {
+				{primarySessions.map(s => {
 					const promptState = promptStates[s.id]
 					return (
 						<div

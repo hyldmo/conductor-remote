@@ -74,6 +74,36 @@ describe('phone chat tabs', () => {
 		expect(html.match(/<button/g)).toHaveLength(5)
 	})
 
+	test('keeps durable workflow children out of the parent tab row', () => {
+		const childSession: Session = { ...session, id: 'chat-2', title: 'Explorer' }
+		const manualSession: Session = { ...session, id: 'chat-3', title: 'Manual' }
+		const html = renderToStaticMarkup(
+			<SessionTabs
+				sessions={[session, childSession, manualSession]}
+				activeId={childSession.id}
+				readMarks={{}}
+				promptStates={{}}
+				roles={{
+					[session.id]: { role: 'planning', assignedAt: 1 },
+					[childSession.id]: { role: 'exploration', delegationId: 'job-1', assignedAt: 2 }
+				}}
+				onSelect={vi.fn()}
+				onNewChat={vi.fn()}
+				onClose={vi.fn()}
+				creating={false}
+				closingId={null}
+				online
+			/>
+		)
+
+		expect(html).toContain('Alpha')
+		expect(html).toContain('Manual')
+		expect(html).not.toContain('Explorer')
+		expect(html).toContain('aria-label="Close Alpha chat"')
+		expect(html).toContain('aria-label="Close Manual chat"')
+		expect(html).not.toContain('aria-label="Close Explorer chat"')
+	})
+
 	test('keeps New chat reachable after the last tab closes', () => {
 		const html = renderToStaticMarkup(
 			<SessionTabs
