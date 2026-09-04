@@ -265,6 +265,14 @@ export function SessionView() {
 		setSelectedDiff(null)
 		setDiffNavigatorOpen(false)
 	}
+	const closeDiffFile = () => {
+		// The file viewer sits beside the changed-files rail on desktop. Its close
+		// button dismisses only that file; the rail's own close button owns closing
+		// the whole review. On mobile, reopening the navigator is the equivalent
+		// "back to changed files" destination.
+		setSelectedDiff(null)
+		setDiffNavigatorOpen(true)
+	}
 
 	const toggleDiff = () => {
 		if (diffOpen) closeDiff()
@@ -378,7 +386,7 @@ export function SessionView() {
 								filePath={selectedDiffFile}
 								onSelectFile={selectDiffFile}
 								onShowFiles={() => setDiffNavigatorOpen(true)}
-								onClose={closeDiff}
+								onClose={closeDiffFile}
 							/>
 						) : (
 							<Transcript
