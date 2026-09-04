@@ -43,8 +43,8 @@ import { HELPER_PATH, helperFile, helperReady, installedHelper, PIDFILE_PATH } f
 
 const execFileP = promisify(execFile)
 
-/** Longest window the API will arm. A phone tap should never be able to disable sleep forever. */
-export const MAX_SECONDS = 16 * 3600
+/** Longest window the API will arm. Long-weekend runs fit, while every phone request stays bounded. */
+export const MAX_SECONDS = 7 * 24 * 3600
 
 export interface NoSleepState {
 	/** False when `nosleep setup` hasn't been run — every action here is unavailable. */
@@ -304,7 +304,7 @@ function rescanExpiry(): void {
 		},
 		Math.max(0, fireAt - Date.now())
 	)
-	// A 16h timer must not hold the process open, and it survives nothing anyway — a
+	// A long timer must not hold the process open, and it survives nothing anyway — a
 	// restarted relay rebuilds it from the pidfile in watchNoSleepExpiry's first rescan.
 	expiryTimer.unref()
 }

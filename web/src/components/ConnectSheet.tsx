@@ -1,6 +1,7 @@
-import { Bell, Check, Copy, FileDiff, LogOut, RotateCcw, Sun, SunMoon, Wifi, X } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { Bell, Check, Clock, Copy, FileDiff, LogOut, RotateCcw, Sun, SunMoon, Wifi, X } from 'lucide-react'
+import { type FormEvent, useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { parseDurationSeconds } from '../../../src/shared.ts'
 import { usePush } from '../hooks.ts'
 import { ApiError, client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
@@ -311,8 +312,7 @@ function NotificationsRow() {
 const AWAKE_CHOICES: { label: string; seconds: number; className?: string }[] = [
 	{ label: '1h', seconds: 3600 },
 	{ label: '4h', seconds: 4 * 3600, className: 'hidden min-[400px]:block' },
-	{ label: '8h', seconds: 8 * 3600 },
-	{ label: '16h', seconds: 16 * 3600 }
+	{ label: '10h', seconds: 10 * 3600 }
 ]
 
 /** "until 21:45", weekday-prefixed when the window crosses midnight — same rule the CLI prints. */
@@ -344,6 +344,9 @@ function MacRow() {
 	// relay goes unreachable seconds after the tap, and copy that still read "stops the Mac
 	// sleeping when you shut the lid" made that look like the app breaking.
 	const [goingToSleep, setGoingToSleep] = useState(false)
+	const [pickingAwakeDuration, setPickingAwakeDuration] = useState(false)
+	const [awakeDuration, setAwakeDuration] = useState('')
+	const [awakeDurationError, setAwakeDurationError] = useState<string | null>(null)
 	// Restarting quits the app, so it is two taps like Disconnect above — and the second
 	// tap has a second form: 'agents' is the relay having refused because chats are
 	// mid-turn, which is a different sentence and a different consent.
@@ -369,8 +372,10 @@ function MacRow() {
 		try {
 			await fn()
 			await load()
+			return true
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err))
+			return false
 		} finally {
 			setBusy(false)
 		}
@@ -393,6 +398,28 @@ function MacRow() {
 		} finally {
 			setBusy(false)
 		}
+	}
+
+	const setCustomAwakeDuration = async (event: FormEvent<HTMLFormElement>) => {
+		event.preventDefault()
+		const seconds = parseDurationSeconds(awakeDuration)
+		if (seconds === null) {
+			setAwakeDurationError('Use a duration like 80h, 90m, or a number of seconds.')
+			return
+		}
+		if (seconds < 1) {
+			setAwakeDurationError('Choose a duration longer than zero.')
+			return
+		}
+		const maxSeconds = data?.nosleep.maxSeconds ?? 7 * 24 * 3600
+		if (seconds > maxSeconds) {
+			setAwakeDurationError(`Choose a duration up to ${Math.round(maxSeconds / 3600)}h.`)
+			return
+		}
+
+		setAwakeDurationError(null)
+		setGoingToSleep(false)
+		if (await act(() => client.armNoSleep(seconds))) setPickingAwakeDuration(false)
 	}
 
 	const nosleep = data?.nosleep
@@ -433,6 +460,8 @@ function MacRow() {
 								disabled={busy || !nosleep?.available}
 								onClick={() =>
 									void act(() => {
+										setPickingAwakeDuration(false)
+										setAwakeDurationError(null)
 										setGoingToSleep(false)
 										return client.armNoSleep(c.seconds)
 									})
@@ -445,9 +474,55 @@ function MacRow() {
 								{c.label}
 							</button>
 						))}
+						<button
+							type="button"
+							disabled={busy || !nosleep?.available}
+							aria-label="Choose a custom keep-awake duration"
+							aria-expanded={pickingAwakeDuration}
+							onClick={() => {
+								setAwakeDurationError(null)
+								setPickingAwakeDuration(open => !open)
+							}}
+							className={cn(
+								'grid size-[30px] place-items-center rounded-lg border border-border active:bg-surface disabled:opacity-40',
+								pickingAwakeDuration && 'bg-surface text-accent'
+							)}
+						>
+							<Clock size={14} />
+						</button>
 					</div>
 				)}
 			</div>
+			{!nosleep?.armed && pickingAwakeDuration ? (
+				<form onSubmit={setCustomAwakeDuration} className="fade-in flex items-center justify-end gap-1.5">
+					<label htmlFor="awake-duration" className="text-xs text-muted">
+						Keep awake for
+					</label>
+					<input
+						id="awake-duration"
+						type="text"
+						required
+						value={awakeDuration}
+						disabled={busy}
+						placeholder="e.g. 80h"
+						autoCapitalize="none"
+						autoCorrect="off"
+						onChange={event => {
+							setAwakeDuration(event.target.value)
+							setAwakeDurationError(null)
+						}}
+						className="h-[30px] w-[6.5rem] rounded-lg border border-border bg-surface px-2 text-xs text-text disabled:opacity-40"
+					/>
+					<button
+						type="submit"
+						disabled={busy || !awakeDuration.trim()}
+						className="h-[30px] rounded-lg bg-accent px-2.5 text-xs font-medium text-on-solid active:opacity-80 disabled:opacity-40"
+					>
+						{busy ? 'Setting…' : 'Set'}
+					</button>
+				</form>
+			) : null}
+			{awakeDurationError ? <p className="text-right text-xs text-del">{awakeDurationError}</p> : null}
 			<p className="text-xs text-muted">
 				{!data
 					? 'Checking…'

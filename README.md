@@ -629,9 +629,10 @@ re-checked after install, with the drop-in pulled back out if anything is wrong,
 bad `/etc/sudoers.d` entry can cost you `sudo` altogether.
 
 **From the phone.** Once the rule is installed, the Connect sheet grows a **Mac** section:
-tap 1h / 4h / 8h / 16h to hold the Mac awake, or "Let it sleep" to end the window early
-(`GET`/`POST`/`DELETE /api/nosleep`, capped at 16h). On screens narrower than 400px, the
-4h button is hidden to keep the controls on one row. It reports whether the active
+tap 1h / 4h / 10h to choose a duration, or use the clock to enter the same duration syntax
+as the CLI (`80h`, `90m`, `30s`, or bare seconds). "Let it sleep" ends the window early
+(`GET`/`POST`/`DELETE /api/nosleep`, capped at 168h / 7 days). On screens narrower than
+400px, the 4h button is hidden to keep the controls on one row. It reports whether the active
 window blocks the screen lock. The armed window is spawned
 *detached*, because the relay restarts itself on every self-update and a plain child would
 die with it and quietly restore sleep at the worst moment; the relay finds it again after a
