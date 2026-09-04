@@ -20,22 +20,21 @@
 import { spawn } from 'node:child_process'
 import { installedServiceEnvironment, preventScreenLockEnabled } from '../src/config.ts'
 import { HELPER_PATH, helperFile, helperReady, installedHelper, NOSLEEP_BODY } from '../src/nosleep-helper.ts'
+import { parseDurationSeconds } from '../src/shared.ts'
 import { setup, status } from './nosleep-setup.ts'
 
 /** Parse `90m` / `2h` / `30s` / bare seconds into seconds; null = run until Ctrl-C. */
 function parseDuration(raw: string | undefined): number | null {
 	if (!raw) return null
-	const m = raw.match(/^(\d+)(s|m|h)?$/)
-	if (!m) {
+	const seconds = parseDurationSeconds(raw)
+	if (seconds === null) {
 		console.error(
 			`nosleep: bad duration "${raw}" — use e.g. 90m, 2h, 30s, or a number of seconds.\n` +
 				'Subcommands: `nosleep setup [--uninstall]`, `nosleep status`.'
 		)
 		process.exit(1)
 	}
-	const n = Number(m[1])
-	const unit = m[2] ?? 's'
-	return unit === 'h' ? n * 3600 : unit === 'm' ? n * 60 : n
+	return seconds
 }
 
 async function main(): Promise<void> {

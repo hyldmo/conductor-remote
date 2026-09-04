@@ -27,6 +27,19 @@ export interface Titled {
 export const WORKFLOW_OBJECTIVE_HEADING = '## Workflow objective'
 
 /**
+ * Parse the duration grammar accepted by `conductor-remote nosleep`: `90m`,
+ * `2h`, `30s`, or bare seconds. Kept here so the CLI and phone cannot drift.
+ */
+export function parseDurationSeconds(raw: string): number | null {
+	const match = /^(\d+)(s|m|h)?$/.exec(raw.trim())
+	if (!match) return null
+	const amount = Number(match[1])
+	const unit = match[2] ?? 's'
+	const seconds = amount * (unit === 'h' ? 3600 : unit === 'm' ? 60 : 1)
+	return Number.isSafeInteger(seconds) ? seconds : null
+}
+
+/**
  * The branch minus its prefix, sentence-cased — Conductor's own fallback title while a
  * workspace is still in progress. Prefix-agnostic (github_username / custom / none): it
  * strips the first path segment rather than reading Conductor's `branch_prefix_type`

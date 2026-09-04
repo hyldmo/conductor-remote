@@ -643,7 +643,7 @@ export interface PrefsResponse {
 /**
  * GET /api/nosleep — the window's state plus the ceiling a caller may ask for. It rides
  * along inside `SettingsResponse` as well, so the phone needs no second trip to draw the
- * slider; both read this one declaration.
+ * control; both read this one declaration.
  */
 export interface NoSleepStatus extends NoSleepState {
 	maxSeconds: number
