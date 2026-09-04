@@ -182,7 +182,10 @@ snapshot—provider, model, effort, Fast, and private preamble—so later role e
 only later runs. The two child roles must remain cross-provider from the planning role.
 Generic per-chat Plan controls are deliberately outside that snapshot: they remain
 visible and independent where Conductor supports them, and Workflow adds no special
-Plan policy or explanatory copy.
+Plan policy or explanatory copy. The root's first prompt includes a compact catalog of
+the frozen role names, model labels, and responsibilities. It does not ask the agent to
+call `list_roles`, because that tool reads mutable defaults for future runs rather than
+the active run's snapshot.
 
 The only start boundary is the authenticated PWA's `POST /api/workflows`. New workspace
 and pristine existing-chat targets use its tagged union; ordinary `POST /api/workspaces`

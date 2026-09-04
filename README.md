@@ -445,7 +445,9 @@ choices previously read from Conductor's real picker; a missing or ambiguous lab
 stays red and Start is refused before the relay opens a tab. The shipped
 `exploration` placeholder is intentionally invalid when several Spark rows exist,
 so choose the exact one once. Start freezes all three roles for that run; editing a
-definition later affects only the next run. In the sidebar, a Workflow workspace
+definition later affects only the next run. The root receives those frozen model labels
+and responsibilities in its first prompt; it does not need to call `list_roles`, whose
+output describes mutable defaults for later runs. In the sidebar, a Workflow workspace
 replaces the active model label with an ordered icon stack: Workflow, planning,
 exploration, then implementation; the frozen stack remains after completion. In
 **New workspace** and the composer of

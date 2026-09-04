@@ -98,17 +98,34 @@ export function prepareWorkflowRun(
 export interface WorkflowRootPromptInput {
 	workflowId: string
 	objective: string
-	role: FrozenWorkflowRole
+	roles: FrozenWorkflowRoles
 	phaseCapability: string
 	cycle: number
 	revision: number
 }
 
+const WORKFLOW_ROLE_PURPOSES: Record<WorkflowRoleName, string> = {
+	planning: 'this root chat; plan and integrate delegated work',
+	exploration: 'read-only investigation and evidence',
+	implementation: 'code changes and verification'
+}
+
+function frozenRoleCatalog(roles: FrozenWorkflowRoles): string {
+	return [
+		'## Frozen roles for this Workflow',
+		...WORKFLOW_ROLE_NAMES.map(
+			name => `- ${name} — ${roles[name].model.replace(/\s+/g, ' ').trim()}: ${WORKFLOW_ROLE_PURPOSES[name]}`
+		),
+		'This catalog is authoritative for this run; do not replace it with mutable role defaults.'
+	].join('\n')
+}
+
 /** The first root message, issued only after a durable run and capability exist. */
 export function workflowRootPrompt(input: WorkflowRootPromptInput): string {
 	return [
-		input.role.preamble?.trim(),
+		input.roles.planning.preamble?.trim(),
 		'You are the planning root for a managed Workflow.',
+		frozenRoleCatalog(input.roles),
 		'The relay has already scheduled one tracked explorer for this objective. It will deliver a Baton here when it finishes; you do not need to create or poll for that guaranteed explorer.',
 		'You may search, inspect files, run read-only probes, ask the user questions, synthesize evidence, and verify results. Do not edit files or implement the change in this root chat. Delegate tracked code changes to the implementation role after the exploration evidence arrives.',
 		'When there are genuinely independent questions, you may request additional tracked explorers with delegate_task. Use the workflow_id and phase_capability from the private block exactly; the relay owns role settings and rejects stale phases. Do not use provider-native child-agent tools as a substitute for tracked Workflow chats.',
