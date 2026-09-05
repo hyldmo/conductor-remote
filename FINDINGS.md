@@ -332,9 +332,19 @@ incomplete, and a matching raw SQLite update would violate the read-only DB rule
 while still missing Conductor's live store. The safe actuator is therefore the
 actual AX button, whose visible name is `Continue` and whose tooltip is “Continue
 on a new branch with the same chats.” The relay focuses the phone's selected chat,
-presses one unambiguous shallow match, and uses the read-only branch change as the
-receipt. Conductor exposes the control for merged, non-archived workspaces; the PWA
-and HTTP route enforce the same boundary.
+presses one unambiguous workspace action with an Archive sibling, and uses the
+read-only branch change as the receipt. Conductor exposes the control for merged,
+non-archived workspaces; the PWA and HTTP route enforce the same boundary.
+
+**A missing action must not trigger a transcript search.** A read-only probe on
+2026-09-05 reproduced the old ten-level web-area lookup hitting its 28s ceiling:
+it reached 584 unrelated nodes at depth four without finding Continue. The lookup
+now examines only the asserted pane's direct buttons and one level of groups,
+excluding the composer, and filters button names in a single Apple event per
+container. A missing-button probe completed in 0.95s including the pane lookup;
+the native click was not exercised. A bounded poll handles the PR refresh after
+focus, while a persistently absent control returns its specific refusal. The
+AppleScript fixture tests exercise the shipped traversal without touching any UI.
 
 ### △ Built-in app-actions bridge — one DB flag unlocks it, but the connection won't hold
 The same production UI bundle carries a Playwright-style DOM action loop, and it
