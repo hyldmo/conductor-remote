@@ -117,6 +117,7 @@ function renderComposer(
 				workspaceId="workspace"
 				working={false}
 				workflowStarted={workflowStarted}
+				onCall={() => {}}
 				onContext={onContext}
 				workflow={workflowStarted ? workflow : undefined}
 			/>
@@ -147,11 +148,14 @@ describe('a restored attachment-only composer draft', () => {
 		expect(renderComposer(pristineSession, true)).not.toContain('aria-label="Workflow mode')
 	})
 
-	it('places a context donut immediately before attachments', () => {
+	it('places the chat call beside the context donut and attachments', () => {
 		const html = renderComposer({ ...pristineSession, context_used_percent: 42 }, false, () => {})
+		const call = html.indexOf('aria-label="Call this chat"')
 		const context = html.indexOf('aria-label="Context for Untitled: 42% used"')
 		const attachments = html.indexOf('aria-label="Attach files"')
 
+		expect(call).toBeGreaterThan(-1)
+		expect(call).toBeLessThan(context)
 		expect(context).toBeGreaterThan(-1)
 		expect(context).toBeLessThan(attachments)
 		expect(html).toContain('stroke-dasharray="42 58"')

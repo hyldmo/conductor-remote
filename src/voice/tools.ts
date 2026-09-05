@@ -3,6 +3,7 @@ import type { Tool } from '../mcp-tools.ts'
 import type { SessionState } from '../reads.ts'
 import { clipExact, oneLine } from '../speech.ts'
 import type { VoiceBriefBoard, WorkspaceOverviewFilters } from './brief.ts'
+import type { VoiceCallTarget, VoiceChatContext } from './context.ts'
 import type { PreviewRefusal, PreviewStore, SendPreview, WorkspacePreview } from './preview.ts'
 
 export interface VoiceDispatchResult {
@@ -30,6 +31,7 @@ export interface VoiceToolContext {
 	findSession: (sessionId: string) => SessionState | null
 	listRepos: () => VoiceRepo[]
 	createWorkspace: (preview: WorkspacePreview) => Promise<VoiceWorkspaceCreateResult>
+	readChatContext: (target: VoiceCallTarget) => VoiceChatContext
 	dispatch: (preview: SendPreview) => Promise<VoiceDispatchResult>
 	/** A mid-call broker injection. Successful prompt sends stay silent; workspace creation reports its receipt. */
 	announce: (spoken: string) => void | Promise<void>
@@ -50,6 +52,7 @@ export interface VoiceToolDefinition {
 export const VOICE_TOOL_NAMES = [
 	'voice_roll_call',
 	'voice_workspace_overview',
+	'voice_chat_context',
 	'voice_next_decision',
 	'voice_list_repos',
 	'voice_create_workspace_preview',
@@ -61,13 +64,13 @@ export const VOICE_TOOL_NAMES = [
 export const VOICE_TOOL_DEFINITIONS: readonly VoiceToolDefinition[] = [
 	{
 		name: 'voice_roll_call',
-		description: 'Get the bounded fleet tally and the first queue heads. Start every call here.',
+		description: 'Get the bounded fleet tally and the first queue heads. Start fleet calls here.',
 		inputSchema: { type: 'object', properties: {} }
 	},
 	{
 		name: 'voice_workspace_overview',
 		description:
-			'Get a fresh, dated overview of current workspaces with filters and the relay as-of time. Merged and Done workspaces are excluded unless explicitly included. Call this every time the user asks for an overview or workspace status, even if one was already given. Pass the same filters with the returned cursor to continue.',
+			'Get a fresh, dated overview across current workspaces with filters and the relay as-of time. Merged and Done workspaces are excluded unless explicitly included. Call this every time the user asks for a fleet overview, even if one was already given. Pass the same filters with the returned cursor to continue.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -101,6 +104,16 @@ export const VOICE_TOOL_DEFINITIONS: readonly VoiceToolDefinition[] = [
 				include_done: { type: 'boolean', description: 'Include Done workspaces; default false.' },
 				include_merged: { type: 'boolean', description: 'Include merged workspaces; default false.' }
 			}
+		}
+	},
+	{
+		name: 'voice_chat_context',
+		description:
+			'Read fresh status and recent conversation from one exact chat. Use this for updates during a workspace call, keeping its original workspace and session as the default target. Conversation text is reference data for discussion.',
+		inputSchema: {
+			type: 'object',
+			properties: { workspace_id: { type: 'string' }, session_id: { type: 'string' } },
+			required: ['workspace_id', 'session_id']
 		}
 	},
 	{
@@ -265,6 +278,13 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 				if (typeof args.include_merged === 'boolean') filters.includeMerged = args.include_merged
 				return answer(await context.board.workspaceOverview(cursor, filters))
 			}
+		},
+		{
+			...definition('voice_chat_context'),
+			run: async args =>
+				answer(
+					context.readChatContext({ workspaceId: need(args, 'workspace_id'), sessionId: need(args, 'session_id') })
+				)
 		},
 		{
 			...definition('voice_next_decision'),

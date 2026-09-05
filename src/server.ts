@@ -117,6 +117,7 @@ import { recoverExpiredUiLease } from './ui-lease-watchdog.ts'
 import { VoiceBriefBoard } from './voice/brief.ts'
 import { VoiceBroker } from './voice/broker.ts'
 import { openAIOriginForSipHost, readVoiceConfig, voicePort } from './voice/config.ts'
+import { parseVoiceCallTarget, readVoiceChatContext, VoiceContextError } from './voice/context.ts'
 import { createVoiceGateway } from './voice/gateway.ts'
 import { PreviewStore, type WorkspacePreview } from './voice/preview.ts'
 import { createVoiceServer } from './voice/server.ts'
@@ -457,6 +458,7 @@ function voiceToolsForCall(callId: string) {
 		findSession: sessionId => reads.listSessionStates().find(state => state.sessionId === sessionId) ?? null,
 		listRepos: () => reads.listRepos().map(repo => ({ name: repo.name, defaultBranch: repo.default_branch })),
 		createWorkspace: createVoiceWorkspace,
+		readChatContext: target => readVoiceChatContext(reads, target),
 		dispatch: dispatchVoicePreview,
 		announce: spoken => {
 			if (!voiceBroker?.inject(callId, spoken)) console.warn(`[voice] ${callId} could not receive a delivery nudge`)
@@ -2901,14 +2903,14 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// POST /api/voice/calls — the PWA sends its SDP offer to this authenticated
-			// relay. The relay combines it with the global orchestrator session and
+			// relay. The relay loads the selected chat context or the fleet session and
 			// keeps OpenAI's permanent key and every function tool on the Mac.
 			if (isRoute(routes.voiceCall, req.method, pathname)) {
 				if (!voiceConfig.openaiKey || !voiceBroker)
 					return json(req, res, 503, { error: 'voice needs an OpenAI API key on this relay' })
 				const raw = await readBody(req)
 				if (raw.length > MAX_SDP_CHARS * 2) return json(req, res, 413, { error: 'WebRTC offer is too large' })
-				const body = JSON.parse(raw || '{}') as { sdp?: unknown; voice?: unknown; language?: unknown }
+				const body = JSON.parse(raw || '{}') as { sdp?: unknown; voice?: unknown; language?: unknown; target?: unknown }
 				if (typeof body.sdp !== 'string' || !body.sdp.trim())
 					return json(req, res, 400, { error: 'WebRTC offer is required' })
 				if (body.sdp.length > MAX_SDP_CHARS) return json(req, res, 413, { error: 'WebRTC offer is too large' })
@@ -2916,6 +2918,8 @@ const server = http.createServer(async (req, res) => {
 					return json(req, res, 400, { error: `voice must be one of ${OPENAI_REALTIME_VOICES.join(', ')}` })
 				if (!isVoiceLanguage(body.language)) return json(req, res, 400, { error: 'unsupported voice language' })
 				try {
+					const target = parseVoiceCallTarget(body.target)
+					const context = target ? readVoiceChatContext(reads, target) : undefined
 					const call = await createWebRtcCall(
 						voiceConfig.openaiKey,
 						openAIOriginForSipHost(voiceConfig.sipHost),
@@ -2923,13 +2927,15 @@ const server = http.createServer(async (req, res) => {
 						{
 							model: voiceConfig.model,
 							voice: body.voice as OpenAIRealtimeVoice,
-							language: body.language as VoiceLanguage
+							language: body.language as VoiceLanguage,
+							context
 						},
 						voiceSafetyIdentifier
 					)
 					voiceBroker.registerWebRtc(call.callId)
 					return json(req, res, 200, call)
 				} catch (err) {
+					if (err instanceof VoiceContextError) return json(req, res, err.status, { error: err.message })
 					console.warn('[voice] could not create WebRTC orchestrator call:', err)
 					return json(req, res, 502, { error: err instanceof Error ? err.message : 'voice call failed' })
 				}

@@ -1,8 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUp, GitFork, Info, LoaderCircle, Snowflake, Square, WifiOff } from 'lucide-react'
+import { ArrowUp, GitFork, Info, LoaderCircle, PhoneCall, Snowflake, Square, WifiOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useContextBreakdown, useSendPrompt, useWorkflowRoleReadiness } from '../hooks.ts'
 import { client } from '../lib/api.ts'
+import { cn } from '../lib/cn.ts'
 import { contextRingSegments } from '../lib/context.ts'
 import { enterSubmits } from '../lib/keys.ts'
 import { isLockedError } from '../lib/lock.ts'
@@ -42,6 +43,8 @@ export function Composer({
 	working,
 	actuator,
 	onFork,
+	onCall,
+	callActive = false,
 	onContext,
 	workflowStarted = false,
 	workflow,
@@ -58,6 +61,9 @@ export function Composer({
 	actuator?: ActuatorInfo
 	/** Fork this full chat and keep the composed prompt in the new chat's draft. */
 	onFork?: (prompt: string) => Promise<void>
+	/** Start a call with this pane's active chat as its initial context. */
+	onCall?: () => void
+	callActive?: boolean
 	/** Open the active chat's context composition and fork-size breakdown. */
 	onContext?: () => void
 	/** Another durable delivery already owns this otherwise-pristine composer. */
@@ -350,6 +356,21 @@ export function Composer({
 					) : (
 						<span className="flex-1" />
 					)}
+					{session && onCall ? (
+						<button
+							type="button"
+							onClick={onCall}
+							aria-label={callActive ? 'Open active call' : 'Call this chat'}
+							aria-haspopup="dialog"
+							title={callActive ? 'Open active call' : 'Call with the current chat’s context'}
+							className={cn(
+								'flex size-8 shrink-0 items-center justify-center rounded-md text-faint transition active:bg-surface-2',
+								callActive && 'bg-voice-soft text-voice'
+							)}
+						>
+							<PhoneCall size={16} />
+						</button>
+					) : null}
 					{session && onContext ? <ContextDonutButton session={session} onOpen={onContext} /> : null}
 					<AttachmentPickerButton uploads={attachmentUploads} disabled={disabled || forking || !online} />
 					{canStop ? (

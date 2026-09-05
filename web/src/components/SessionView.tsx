@@ -7,6 +7,7 @@ import {
 	Hourglass,
 	LoaderCircle,
 	MessageSquarePlus,
+	PhoneCall,
 	Plus,
 	Workflow,
 	X
@@ -58,6 +59,7 @@ import { RoleChip, RolesSettings } from './RolesSettings.tsx'
 import type { SplitFormat } from './Transcript.tsx'
 import { Transcript } from './Transcript.tsx'
 import { PromptStatusDot, Spinner, UnlockLink } from './ui.tsx'
+import { useVoiceCall } from './VoiceProvider.tsx'
 import { useWorkspaceActions, WorkspaceMenu } from './WorkspaceMenu.tsx'
 
 /** Resolve Workflow ownership from the exact chat, never from a workspace-level display fallback. */
@@ -124,6 +126,7 @@ export function delegationPipelineForParentSession(
 
 export function SessionView() {
 	const { workspaceId } = useParams<{ workspaceId: string }>()
+	const voice = useVoiceCall()
 	// Which chat is on screen lives in the URL, because two things set it: the tab strip
 	// here, and a tapped notification, which names the chat that just finished
 	// (src/notify.ts ▸ chatRoute). Holding it in state instead loses that race — a repeat
@@ -269,17 +272,31 @@ export function SessionView() {
 	// The palette's rows for this workspace (`lib/commands.ts`). Keyed on the few facts
 	// that decide what is offered and checked, with the handlers behind a ref: the poll
 	// re-reads the workspace every 2.5s and must not re-register anything.
-	const latest = useRef<{ toggleDiff: () => void; createChat: () => Promise<void>; openContext: () => void } | null>(
-		null
-	)
+	const latest = useRef<{
+		toggleDiff: () => void
+		createChat: () => Promise<void>
+		openContext: () => void
+		openCall: () => void
+	} | null>(null)
 	const statusNow = ws ? workspaceStatus(ws) : null
 	const canCreateChat = !!ws && ws.state === 'ready' && online && !creatingChat
 	const canSetStatus = !!ws && online && !workspaceActions.busy
 	const hasChat = !!activeSession
+	const voiceActive = voice.status !== 'idle'
+	const canCall = voiceActive || (hasChat && !pickedSubagent)
 	const setStatus = workspaceActions.setStatus
 	const workspaceCommands = useMemo<Command[]>(() => {
 		if (!statusNow) return []
 		return [
+			{
+				id: 'workspace.call',
+				label: voiceActive ? 'Open active call' : 'Call this workspace',
+				group: 'Workspace',
+				icon: PhoneCall,
+				keywords: ['voice', 'phone', 'active chat', 'context'],
+				enabled: canCall,
+				run: () => latest.current?.openCall()
+			},
 			{
 				id: 'workspace.diff',
 				label: diffOpen ? 'Hide changes' : 'Show changes',
@@ -320,7 +337,7 @@ export function SessionView() {
 				})
 			)
 		]
-	}, [statusNow, diffOpen, canCreateChat, canSetStatus, hasChat, setStatus])
+	}, [statusNow, diffOpen, canCreateChat, canSetStatus, hasChat, canCall, voiceActive, setStatus])
 	useRegisterCommands('workspace', workspaceCommands)
 
 	if (!ws) {
@@ -475,9 +492,20 @@ export function SessionView() {
 			setDiffNavigatorOpen(true)
 		}
 	}
+	const openCall = () => {
+		if (voiceActive) return voice.openPanel()
+		if (!activeSession || pickedSubagent) return
+		voice.openWorkspacePanel({
+			workspaceId: ws.id,
+			sessionId: activeSession.id,
+			workspaceTitle: workspaceTitle(ws),
+			chatTitle: activeSession.title || 'Untitled chat'
+		})
+	}
 	latest.current = {
 		toggleDiff,
 		createChat,
+		openCall,
 		openContext: () => {
 			if (activeSession) setContextSession({ workspaceId: ws.id, id: activeSession.id, title: activeSession.title })
 		}
@@ -655,6 +683,8 @@ export function SessionView() {
 							working={working}
 							actuator={actuator}
 							onFork={prompt => forkChat({ thinking: true, tools: false }, prompt)}
+							onCall={canCall ? openCall : undefined}
+							callActive={voiceActive}
 							onContext={
 								activeSession
 									? () =>

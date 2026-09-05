@@ -4,6 +4,13 @@ import {
 	type OpenAIRealtimeVoice,
 	type VoiceLanguage
 } from '../../../src/shared.ts'
+import type { VoiceCallTarget } from './types.ts'
+
+/** Labels are for the sheet; only the ids cross the call API. */
+export interface WorkspaceVoiceTarget extends VoiceCallTarget {
+	workspaceTitle: string
+	chatTitle: string
+}
 
 export interface VoicePreferences {
 	voice: OpenAIRealtimeVoice
@@ -114,6 +121,8 @@ export function voiceToolLabel(name: string): string {
 			return 'Checking the fleet'
 		case 'voice_workspace_overview':
 			return 'Refreshing workspace overview'
+		case 'voice_chat_context':
+			return 'Refreshing chat context'
 		case 'voice_next_decision':
 			return 'Opening the next decision'
 		case 'voice_list_repos':
