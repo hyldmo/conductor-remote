@@ -1,43 +1,38 @@
+import { z } from 'zod'
+import { sendPromptSchema, sessionIdSchema } from '../../contracts/agent-inputs.ts'
 import { routes } from '../../routes.ts'
 import { parseChatCursor } from '../../transcript/cursor.ts'
 import type { CloseChatResult, SendResult, SplitChatResult, StopResult } from '../../wire.ts'
-import { need, rejectUnknown, str } from '../arguments.ts'
+import { need, str } from '../arguments.ts'
+import { defineTool } from '../define-tool.ts'
 import { plural } from '../formatters.ts'
 import { WRITE_TIMEOUT_MS } from '../protocol.ts'
 import type { RelayCall, Tool } from '../types.ts'
 
+const sendPromptInputSchema = z.strictObject({
+	session_id: sessionIdSchema,
+	workspace_id: sendPromptSchema.shape.workspaceId,
+	text: sendPromptSchema.shape.text
+})
+
 export function createSendPromptTool(call: RelayCall): Tool {
-	return {
+	return defineTool({
 		name: 'send_prompt',
 		description:
 			'Send a prompt into an existing Conductor chat, exactly as typing it on the Mac would. This DRIVES THE REAL UI: it focuses the workspace, selects the chat tab and presses Enter, so it steals focus for a few seconds. If that chat is already working, the message STEERS the running agent rather than starting a new turn — do not use it to poll or test. Ask the user before sending into a chat they did not name.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				session_id: { type: 'string', description: 'The chat to send to (list_chats / search_chats).' },
-				workspace_id: {
-					type: 'string',
-					description: 'Its workspace. Strongly recommended: it is what the relay asserts against before typing.'
-				},
-				text: { type: 'string' }
-			},
-			required: ['session_id', 'text'],
-			additionalProperties: false
-		},
+		inputSchema: sendPromptInputSchema,
 		run: async args => {
-			rejectUnknown(args, ['session_id', 'workspace_id', 'text'])
-			const sessionId = need(args, 'session_id')
-			const text = need(args, 'text')
+			const { session_id: sessionId, workspace_id: workspaceId, text } = args
 			const data = await call<SendResult>(routes.sendPrompt.path(sessionId), {
 				method: routes.sendPrompt.method,
-				body: { text, workspaceId: str(args.workspace_id) },
+				body: { text, workspaceId },
 				timeoutMs: WRITE_TIMEOUT_MS
 			})
 			if (data.parked) return 'the Mac is locked — the prompt is parked and will be sent on unlock'
 			if (!data.ok) throw new Error(data.error ?? 'the send did not land')
 			return data.warning ? `sent (${data.warning})` : 'sent'
 		}
-	}
+	})
 }
 
 export function createSplitChatTool(call: RelayCall): Tool {

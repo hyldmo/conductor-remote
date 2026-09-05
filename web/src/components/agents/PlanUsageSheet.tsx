@@ -78,7 +78,7 @@ export function ProviderCard({
 	onDefaultEffortChange?: (effort: string) => void
 }) {
 	const editableProvider = effortProvider(usage.provider)
-	const unknownEffort = defaultEffort && !EFFORT_ORDER.includes(defaultEffort) ? defaultEffort : null
+	const unknownEffort = defaultEffort && !EFFORT_ORDER.some(effort => effort === defaultEffort) ? defaultEffort : null
 	const visibleBuckets = usage.buckets.filter(
 		bucket => bucket.label !== 'GPT-5.3-Codex-Spark' || bucket.windows.some(window => window.usedPercent !== 0)
 	)

@@ -31,7 +31,7 @@ const MODEL_CATALOG_STALE_MS = 10 * 60 * 1000
 const NOTHING: AgentPatch = {}
 
 /** A staged value only exists while it differs from Conductor's; flipping back clears it. */
-function change<T>(next: T, current: T): T | undefined {
+function change<T>(next: T, current: unknown): T | undefined {
 	return next === current ? undefined : next
 }
 

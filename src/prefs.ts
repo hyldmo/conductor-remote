@@ -11,6 +11,7 @@ import path from 'node:path'
 import { stateDir } from './config.ts'
 import type { ParkedAgentPatch } from './delivery/parked.ts'
 import { attachmentName, attachmentToken } from './files/attachments.ts'
+import { isAgentEffort } from './shared.ts'
 
 /** A ready file reference carried with one unsent composer draft. The bytes stay on the host. */
 export interface DraftAttachment {
@@ -67,7 +68,7 @@ function sanitizeAgent(raw: unknown): ParkedAgentPatch {
 	if (!value) return {}
 	const agent: ParkedAgentPatch = {}
 	if (typeof value.model === 'string' && value.model.length <= MAX_AGENT_LABEL_LENGTH) agent.model = value.model
-	if (typeof value.effort === 'string' && value.effort.length <= MAX_AGENT_LABEL_LENGTH) agent.effort = value.effort
+	if (isAgentEffort(value.effort)) agent.effort = value.effort
 	if (typeof value.plan === 'boolean') agent.plan = value.plan
 	if (typeof value.fast === 'boolean') agent.fast = value.fast
 	return agent

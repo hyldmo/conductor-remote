@@ -49,6 +49,7 @@ function fixture() {
 		listRepos: vi.fn(() => [{ id: 'repo-1', name: 'example', root_path: '/unused/repo' }]),
 		getWorkspace: vi.fn((id: string) => (id === workspace.id ? workspace : null)),
 		listWorkspaces: vi.fn(() => [workspace]),
+		listSessions: vi.fn(() => [{ id: 'chat-1', model: 'Fable 5' }]),
 		getMessages: vi.fn((_sessionId: string, _after: number): unknown => ({ entries: [], queued: [], cursor: 0 })),
 		resolveRepoIcon: vi.fn((_repo: string): { path: string; contentType: string } | null => null),
 		toolImage: vi.fn((_reference: string) => ({
@@ -56,7 +57,11 @@ function fixture() {
 			mediaType: 'image/png'
 		}))
 	}
-	const firstPrompts = { get: vi.fn(() => undefined), forget: vi.fn(() => true) }
+	const firstPrompts = {
+		get: vi.fn(() => undefined),
+		forget: vi.fn(() => true),
+		enqueue: vi.fn(async (..._args: unknown[]) => null)
+	}
 	const parkedPrompts = {
 		forgetDelivered: vi.fn(),
 		forgetSession: vi.fn(() => true),
@@ -95,11 +100,14 @@ function fixture() {
 		deliverPrompt,
 		planUsage,
 		actuator: { name: 'fake' },
+		STAGED_ATTACHMENTS_DIR: '/unused/attachments',
+		createWorkspaceAndRead: vi.fn(async (..._args: unknown[]) => ({ result: { ok: true }, created: workspace })),
+		applyAgentPatch: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
 		sendBudget: () => 5_000,
 		sendOnce: new SendOnce<{ status: number; body: unknown }>({
 			keep: answer => answer.status === 200 || answer.status === 202
 		}),
-		workflowFrozenError: () => null,
+		workflowFrozenError: vi.fn((): { error: string } | null => null),
 		PARKED_ERROR: 'Prompt parked until the Mac unlocks.'
 	}
 	return { ...dependencies, services: dependencies as unknown as RelayServices }
@@ -223,6 +231,131 @@ describe('relay HTTP routing', () => {
 		)
 		expect(f.firstPrompts.forget).toHaveBeenCalledOnce()
 		expect(f.parkedPrompts.forgetDelivered).toHaveBeenCalledWith('chat-1', 'next task')
+	})
+
+	test('validates staged settings before delivery and preserves explicit false values', async () => {
+		const f = fixture()
+		const request = await listen(f.services)
+		const agent = { model: 'Fable 5', effort: 'high', plan: false, fast: false }
+		const response = await request('/api/sessions/chat-1/prompt', {
+			method: 'POST',
+			body: JSON.stringify({ text: ' hello ', agent, futureClientField: true })
+		})
+		expect(response.status).toBe(200)
+		expect(f.applyAgentPatch).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'chat-1', agent)
+		expect(f.deliverPrompt).toHaveBeenCalledWith(expect.anything(), 'chat-1', 'hello', expect.any(Number), false)
+		expect(f.applyAgentPatch.mock.invocationCallOrder[0]).toBeLessThan(f.deliverPrompt.mock.invocationCallOrder[0])
+	})
+
+	test('validates standalone settings with the same fields and preserves empty HTTP patches', async () => {
+		const f = fixture()
+		const request = await listen(f.services)
+		const patch = { workspaceId: 'workspace-1', model: ' Fable 5 ', plan: false, fast: false }
+		const response = await request('/api/sessions/chat-1/agent', { method: 'POST', body: JSON.stringify(patch) })
+		expect(response.status).toBe(200)
+		expect(f.applyAgentPatch).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'chat-1', {
+			...patch,
+			model: 'Fable 5'
+		})
+		const empty = await request('/api/sessions/chat-1/agent', { method: 'POST', body: '{}' })
+		expect(empty.status).toBe(200)
+	})
+
+	test('keeps creation prompt-only, immediate-send and explicit wait choices at the HTTP boundary', async () => {
+		const f = fixture()
+		const request = await listen(f.services)
+		const first = await request('/api/workspaces', { method: 'POST', body: JSON.stringify({ prompt: ' hello ' }) })
+		expect(first.status).toBe(200)
+		expect(f.createWorkspaceAndRead).toHaveBeenLastCalledWith('hello', null, undefined)
+		expect(f.firstPrompts.enqueue).toHaveBeenLastCalledWith('workspace-1', 'hello', true, [], undefined)
+		const configured = await request('/api/workspaces', {
+			method: 'POST',
+			body: JSON.stringify({
+				repo: 'example',
+				model: ' Fable 5 ',
+				fast: false,
+				plan: false,
+				send: true,
+				sendImmediately: false
+			})
+		})
+		expect(configured.status).toBe(200)
+		expect(await configured.json()).toMatchObject({ configured: true, sent: false })
+		expect(f.firstPrompts.enqueue).toHaveBeenLastCalledWith('workspace-1', '', false, [], {
+			model: 'Fable 5',
+			fast: false,
+			plan: false
+		})
+	})
+
+	test.each([
+		['/api/sessions/chat-1/prompt', { text: 'hello', agent: { fast: 'false' } }, 'agent.fast'],
+		['/api/sessions/chat-1/prompt', { text: 'hello', agent: { effort: 'extreme' } }, 'agent.effort'],
+		['/api/sessions/chat-1/prompt', { text: 'hello', agent: [] }, 'agent'],
+		['/api/sessions/chat-1/prompt', { text: 'hello', agent: null }, 'agent'],
+		['/api/sessions/chat-1/prompt', { text: 'hello', queue: 'false' }, 'queue'],
+		['/api/sessions/chat-1/prompt', { text: 'hello', clientId: 123 }, 'clientId'],
+		['/api/sessions/chat-1/prompt', { text: 'hello', workspaceId: 123 }, 'workspaceId'],
+		['/api/sessions/chat-1/prompt', { text: '  ' }, 'empty prompt'],
+		['/api/sessions/chat-1/agent', { plan: 'false' }, 'plan'],
+		['/api/sessions/chat-1/agent', { effort: 'extreme' }, 'effort'],
+		['/api/workspaces', { repo: 'example', fast: 'false' }, 'fast'],
+		['/api/workspaces', { repo: 'example', send: 'false' }, 'send'],
+		['/api/workspaces', { repo: 'example', sendImmediately: 0 }, 'sendImmediately'],
+		['/api/workspaces', { repo: 'example', attachmentIds: [123] }, 'attachmentIds.0'],
+		['/api/workspaces', { repo: 123 }, 'repo'],
+		['/api/workspaces', { prompt: 123 }, 'prompt']
+	])('rejects invalid fields before any side effects: %s (%#)', async (pathname, body, message) => {
+		const f = fixture()
+		const request = await listen(f.services)
+		const response = await request(pathname, { method: 'POST', body: JSON.stringify(body) })
+		expect(response.status).toBe(400)
+		expect(await response.json()).toEqual({ error: expect.stringContaining(message) })
+		expect(f.deliverPrompt).not.toHaveBeenCalled()
+		expect(f.applyAgentPatch).not.toHaveBeenCalled()
+		expect(f.createWorkspaceAndRead).not.toHaveBeenCalled()
+		expect(f.firstPrompts.enqueue).not.toHaveBeenCalled()
+	})
+
+	test.each([
+		'/api/workspaces',
+		'/api/sessions/chat-1/prompt',
+		'/api/sessions/chat-1/agent'
+	])('returns 400 for malformed JSON and non-object request bodies at %s', async pathname => {
+		const request = await listen(fixture().services)
+		for (const body of ['{', 'null', '[]', 'true', '"hello"']) {
+			const response = await request(pathname, { method: 'POST', body })
+			expect(response.status).toBe(400)
+			expect(await response.json()).toEqual({ error: expect.any(String) })
+		}
+	})
+
+	test('still rejects Workflow starts before stripping extra input fields and enforces frozen agent settings', async () => {
+		const f = fixture()
+		const request = await listen(f.services)
+		for (const pathname of ['/api/workspaces', '/api/sessions/chat-1/prompt']) {
+			const response = await request(pathname, {
+				method: 'POST',
+				body: JSON.stringify({
+					repo: 'example',
+					text: 'hello',
+					workflow: false
+				})
+			})
+			expect(response.status).toBe(400)
+			expect(await response.json()).toEqual({ error: 'Workflow starts through POST /api/workflows.' })
+		}
+		f.workflowFrozenError.mockReturnValue({ error: 'Workflow owns these settings' })
+		for (const [pathname, body] of [
+			['/api/sessions/chat-1/prompt', { text: 'hello', agent: { fast: false } }],
+			['/api/sessions/chat-1/agent', { fast: false }]
+		] as const) {
+			const response = await request(pathname, { method: 'POST', body: JSON.stringify(body) })
+			expect(response.status).toBe(409)
+		}
+		expect(f.deliverPrompt).not.toHaveBeenCalled()
+		expect(f.applyAgentPatch).not.toHaveBeenCalled()
+		expect(f.createWorkspaceAndRead).not.toHaveBeenCalled()
 	})
 
 	test('parks a locked send once and replays its accepted response', async () => {

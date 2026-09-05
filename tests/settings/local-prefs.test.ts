@@ -35,6 +35,14 @@ const attachment = {
 }
 
 describe('local-first preference sync', () => {
+	test('restores only effort values that the shared request contract accepts', () => {
+		const storage = new MemoryStorage()
+		storage.setItem('conductor-remote-agent:valid', JSON.stringify({ effort: 'none', fast: false }))
+		storage.setItem('conductor-remote-agent:invalid', JSON.stringify({ effort: 'extreme', fast: false }))
+		const prefs = new LocalPrefs(storage)
+		expect(prefs.project().agentDrafts).toEqual({ valid: { effort: 'none', fast: false }, invalid: { fast: false } })
+	})
+
 	test('migrates the legacy text and agent keys without inventing a recent revision', () => {
 		const storage = new MemoryStorage()
 		storage.setItem('conductor-remote-draft:chat', 'finish this')

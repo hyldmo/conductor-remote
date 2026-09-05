@@ -1,3 +1,4 @@
+import { AGENT_EFFORTS } from '../../../src/shared.ts'
 import type { DefaultEfforts } from './types.ts'
 
 export const EFFORT_LABELS: Record<string, string> = {
@@ -11,10 +12,11 @@ export const EFFORT_LABELS: Record<string, string> = {
 }
 
 /** Phone taps keep their existing Low→Ultracode cycle; a stored Codex None advances to Low. */
-export const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
+export const EFFORT_ORDER = AGENT_EFFORTS.filter(effort => effort !== 'none')
 
-export function nextEffort(effort: string | undefined): string {
-	return EFFORT_ORDER[(EFFORT_ORDER.indexOf(effort ?? '') + 1) % EFFORT_ORDER.length]
+export function nextEffort(effort: string | undefined) {
+	const choices: readonly string[] = EFFORT_ORDER
+	return EFFORT_ORDER[(choices.indexOf(effort ?? '') + 1) % EFFORT_ORDER.length]
 }
 
 export type AgentProvider = 'claude' | 'cursor' | 'openai' | 'opencode'
@@ -56,11 +58,11 @@ export function supportsFastMode(agentType: string | null, model: string | null)
 export function defaultEffortForModel(model: string | null, defaults: DefaultEfforts | undefined): string | undefined {
 	const provider = providerForAgent(null, model)
 	const effort = provider === 'claude' ? defaults?.claude : provider === 'openai' ? defaults?.codex : undefined
-	return effort && EFFORT_ORDER.includes(effort) ? effort : undefined
+	return EFFORT_ORDER.find(value => value === effort)
 }
 
 /** Advance the visible value, dropping the override when the cycle reaches the inherited default. */
-export function nextEffortOverride(effort: string | undefined, inherited: string | undefined): string | undefined {
+export function nextEffortOverride(effort: string | undefined, inherited: string | undefined) {
 	const next = nextEffort(effort)
 	if (next === inherited || (!inherited && effort === EFFORT_ORDER.at(-1))) return undefined
 	return next
