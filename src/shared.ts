@@ -185,6 +185,7 @@ export function modelPickerLabel(label: string): string {
 export function displayedModelPickerLabel(label: string): string {
 	return modelPickerLabel(label)
 		.replace(/^opencode:/i, '')
+		.replace(/^opencode\//i, '')
 		.replace(/^opencode-/i, '')
 }
 

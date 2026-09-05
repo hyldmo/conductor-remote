@@ -6,10 +6,12 @@ import ReactMarkdown, { type ExtraProps } from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { attachmentTokens, isPreviewableSource } from '../../../../src/shared.ts'
+import { useLocalImage } from '../../hooks/images.ts'
 import { client } from '../../lib/api.ts'
 import { useAttachmentReference, useFileMention, useImageReference } from '../../lib/fileMentions.ts'
 import { languageForFence } from '../../lib/syntax/highlight.ts'
 import type { FilePreviewResponse } from '../../lib/types.ts'
+import { ImageThumbnail } from '../attachments/ImageThumbnail.tsx'
 import { PreviewTruncationNotice, SourceLines } from '../review/SourceLines.tsx'
 import { ViewerHeader } from '../review/ViewerHeader.tsx'
 import { CopyButton, Spinner } from '../ui.tsx'
@@ -19,8 +21,8 @@ import { Code } from './Code.tsx'
 const PLUGINS = [remarkGfm, remarkBreaks]
 const ATTACHMENT_HOST = 'conductor-attachment.invalid'
 
-/** Turn a Conductor token into a Markdown link that `ChatLink` renders as a file chip. */
-function withAttachmentPills(text: string): string {
+/** Turn a Conductor token into a Markdown link for a file chip or image thumbnail. */
+function withAttachmentLinks(text: string): string {
 	const tokens = attachmentTokens(text)
 	if (!tokens.length) return text
 	let markdown = ''
@@ -41,31 +43,6 @@ function attachmentPath(href: string | undefined): string | null {
 	} catch {
 		return null
 	}
-}
-
-function useLocalImage(reference: string | null): { objectUrl: string | null; error: string | null } {
-	const [objectUrl, setObjectUrl] = useState<string | null>(null)
-	const [error, setError] = useState<string | null>(null)
-
-	useEffect(() => {
-		setObjectUrl(null)
-		setError(null)
-		if (!reference) return
-		let disposed = false
-		void client.localImage(reference).then(
-			url => {
-				if (!disposed) setObjectUrl(url)
-			},
-			err => {
-				if (!disposed) setError(err instanceof Error ? err.message : 'Image unavailable')
-			}
-		)
-		return () => {
-			disposed = true
-		}
-	}, [reference])
-
-	return { objectUrl, error }
 }
 
 /** Fetch a local Markdown image through the relay, where the browser can attach its auth header. */
@@ -122,6 +99,21 @@ export function ChatLink({ href, children, onClick, ...props }: React.ComponentP
 	// angle brackets hide it, and CommonMark reads `<scheme:rest>` as an autolink.
 	if (!href) return <span title={props.title}>{children}</span>
 	if (attachment) {
+		if (imageReference) {
+			return (
+				<>
+					<button
+						type="button"
+						title={`Open image ${imageReference}`}
+						onClick={() => setPreviewing(true)}
+						className="my-1 inline-flex rounded-lg align-middle transition hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+					>
+						<ImageThumbnail reference={imageReference} name={attachment.slice(attachment.lastIndexOf('/') + 1)} />
+					</button>
+					{preview}
+				</>
+			)
+		}
 		return (
 			<>
 				<button
@@ -391,7 +383,7 @@ export const Markdown = memo(function Markdown({ children }: { children: string 
 	return (
 		<div className="md">
 			<ReactMarkdown remarkPlugins={PLUGINS} components={COMPONENTS}>
-				{withAttachmentPills(children)}
+				{withAttachmentLinks(children)}
 			</ReactMarkdown>
 		</div>
 	)
