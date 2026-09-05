@@ -44,6 +44,7 @@ import {
 import { createListVoiceCallsTool, createReadVoiceCallTool, createSearchVoiceCallsTool } from './tools/voice.ts'
 import {
 	createArchiveWorkspaceTool,
+	createContinueWorkspaceTool,
 	createCreateWorkspaceTool,
 	createDevServerTool,
 	createListReposTool,
@@ -79,6 +80,7 @@ export function createTools(call: RelayCall): Tool[] {
 		createSetAgentOptionsTool(call),
 		createSetWorkspaceStatusTool(call),
 		createDevServerTool(call),
+		createContinueWorkspaceTool(call),
 		createArchiveWorkspaceTool(call),
 		createDismissPromptTool(call),
 		createKeepAwakeTool(call),
