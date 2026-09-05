@@ -28,10 +28,13 @@ const PROVIDER_COLORS: Partial<Record<AgentProvider, string>> = {
 export function ProviderMark({
 	agentType,
 	model,
+	monochrome = false,
 	className
 }: {
 	agentType: string | null
 	model: string | null
+	/** Inherit the surrounding ink on surfaces with inverted text and background. */
+	monochrome?: boolean
 	className?: string
 }) {
 	const provider = providerForAgent(agentType, model)
@@ -44,7 +47,7 @@ export function ProviderMark({
 			className={cn('inline-block shrink-0 bg-current', className)}
 			style={{
 				// `bg-current` paints the mask, so the tint is a `color` on the same element.
-				color: PROVIDER_COLORS[provider],
+				color: monochrome ? undefined : PROVIDER_COLORS[provider],
 				WebkitMaskImage: `url("${source}")`,
 				maskImage: `url("${source}")`,
 				WebkitMaskPosition: 'center',

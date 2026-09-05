@@ -20,6 +20,7 @@ export function workflowForActiveSession(
 }
 
 interface DelegationPipelineSelection {
+	parentSessionId: string
 	workflow?: WorkflowRunWire
 	jobs: DelegationProjection[]
 	roles: Record<string, SessionRoleAssignment>
@@ -61,5 +62,36 @@ export function delegationPipelineForParentSession(
 		})
 	)
 
-	return { workflow, jobs: parentJobs, roles: scopedRoles }
+	return { parentSessionId: sessionId, workflow, jobs: parentJobs, roles: scopedRoles }
+}
+
+/** Keep each ancestor's sibling tabs reachable while reading a delegated child. */
+export function delegationPipelinesForSession(
+	workflows: readonly WorkflowRunWire[],
+	jobs: readonly DelegationProjection[],
+	roles: Readonly<Record<string, SessionRoleAssignment>>,
+	sessionId: string | null
+): DelegationPipelineSelection[] {
+	const pipelines: DelegationPipelineSelection[] = []
+	const visited = new Set<string>()
+	let currentId = sessionId
+	while (currentId && !visited.has(currentId)) {
+		visited.add(currentId)
+		const pipeline = delegationPipelineForParentSession(workflows, jobs, roles, currentId)
+		if (pipeline) pipelines.unshift(pipeline)
+
+		const assignment = roles[currentId]
+		const job = jobs.find(candidate => candidate.childSessionId === currentId)
+		const workflow = workflowForActiveSession(workflows, currentId, roles, jobs)
+		const legacyParentIds =
+			assignment?.delegationId && !assignment.workflowId && !assignment.parentSessionId && !job
+				? Object.keys(roles).filter(candidateId => {
+						const candidate = roles[candidateId]
+						return candidate.role === 'planning' && !candidate.delegationId && !candidate.workflowId
+					})
+				: []
+		const legacyParentId = legacyParentIds.length === 1 ? legacyParentIds[0] : undefined
+		currentId = assignment?.parentSessionId ?? job?.parentSessionId ?? workflow?.rootSessionId ?? legacyParentId ?? null
+	}
+	return pipelines
 }
