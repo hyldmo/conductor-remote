@@ -4,6 +4,7 @@ import fs from 'node:fs'
 
 import path from 'node:path'
 
+import { agentConfigMatches } from '../../agents/agent-config.ts'
 import { ATTACHMENT_DIR, attachmentName, attachmentToken } from '../../files/attachments.ts'
 import type { WorkflowRunRecord } from '../../orchestration/persistence/types.ts'
 import { WorkflowCoordinatorError } from '../../orchestration/workflow/errors.ts'
@@ -14,7 +15,7 @@ import type {
 	WorkflowRootInspection
 } from '../../orchestration/workflow/types.ts'
 import type { DeliveryCursor, DeliveryReceipt, SessionRow, Workspace } from '../../reads/types.ts'
-import { modelLabel, timestampMs, workspaceTitle } from '../../shared.ts'
+import { timestampMs, workspaceTitle } from '../../shared.ts'
 
 import { retryWontHelp } from '../../writes/guards.ts'
 import { uiTurn, withGatedUiCommand } from '../../writes/ui-lock.ts'
@@ -32,6 +33,23 @@ export interface WorkflowSessionBaseline {
 	workspaceId: string
 	sessionIds: string[]
 }
+
+export function sessionMatchesWorkflowRole(session: SessionRow, role: FrozenWorkflowRole): boolean {
+	return (
+		session.agent_type === role.agentType &&
+		agentConfigMatches(
+			{
+				agentType: session.agent_type,
+				model: session.model,
+				effort: session.claude_effort_level,
+				plan: session.permission_mode === 'plan',
+				fast: Boolean(session.fast_mode)
+			},
+			role
+		)
+	)
+}
+
 export function createWorkflowProbesServices(
 	services: Pick<BaseServices, 'reads' | 'actuator'> &
 		Pick<
@@ -146,17 +164,6 @@ export function createWorkflowProbesServices(
 				inspection.reason ?? 'Workflow requires a pristine root chat.'
 			)
 		}
-	}
-
-	function sessionMatchesWorkflowRole(session: SessionRow, role: FrozenWorkflowRole): boolean {
-		const selected = modelLabel(session.model, [role.model]).toLowerCase()
-		const wanted = role.model.toLowerCase()
-		return (
-			session.agent_type === role.agentType &&
-			(selected === wanted || selected.startsWith(wanted)) &&
-			(role.effort === undefined || session.claude_effort_level === role.effort) &&
-			(role.fast === undefined || Boolean(session.fast_mode) === role.fast)
-		)
 	}
 
 	function stableWorkflowAttachment(worktree: string, jobId: string, name: string, body: string): string {

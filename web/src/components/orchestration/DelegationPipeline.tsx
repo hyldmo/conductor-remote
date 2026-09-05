@@ -24,7 +24,13 @@ export function DelegationPipeline({
 	if (!workflow && !delegatedTabs.length) return null
 	return (
 		<>
-			{workflow ? <WorkflowSummary workflow={workflow} bootstrapJob={bootstrapJob} /> : null}
+			{workflow ? (
+				<WorkflowSummary
+					workflow={workflow}
+					bootstrapJob={bootstrapJob}
+					rootSession={sessions.find(session => session.id === workflow.rootSessionId)}
+				/>
+			) : null}
 			<PipelineTabs
 				tabs={workflowTabs}
 				label="Workflow jobs"

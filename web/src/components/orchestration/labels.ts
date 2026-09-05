@@ -19,7 +19,7 @@ const PHASE_LABELS: Record<WorkflowPhase, string> = {
 	planning: 'Planning',
 	implementing: 'Implementing',
 	reviewing: 'Reviewing',
-	blocked: 'Blocked',
+	blocked: 'Coordination paused',
 	completed: 'Completed',
 	cancelled: 'Cancelled'
 }

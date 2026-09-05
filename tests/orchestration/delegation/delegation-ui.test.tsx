@@ -153,7 +153,9 @@ describe('delegation phone surfaces', () => {
 				<DelegationPipeline workflow={blockedWorkflow} jobs={[managedJob, running]} onSelectSession={vi.fn()} />
 			</QueryClientProvider>
 		)
-		expect(html).toContain('Blocked')
+		expect(html).toContain('Workflow coordination paused')
+		expect(html).toContain('Chats already running can continue.')
+		expect(html).toMatch(/<details[^>]*><summary[^>]*>Recovery options<\/summary>/)
 		expect(html).toContain('Guaranteed explorer')
 		expect(html).toContain('2 extra explorers')
 		expect(html).toContain('Fable 5.1')
@@ -162,6 +164,23 @@ describe('delegation phone surfaces', () => {
 		expect(html).toContain('Cancel workflow')
 		expect(html).toContain('Delegated agents')
 		expect(html).not.toContain('Legacy')
+	})
+
+	test.each(['working', 'idle'])('shows the main chat activity separately from a blocked workflow when %s', status => {
+		const html = renderToStaticMarkup(
+			<QueryClientProvider client={new QueryClient()}>
+				<DelegationPipeline
+					workflow={blockedWorkflow}
+					jobs={[{ ...running, workflowId: blockedWorkflow.id }]}
+					sessions={[{ ...completedChild, id: blockedWorkflow.rootSessionId!, status }]}
+					onSelectSession={vi.fn()}
+				/>
+			</QueryClientProvider>
+		)
+
+		expect(html).toContain('Workflow coordination paused')
+		expect(html.includes('The main chat is still running.')).toBe(status === 'working')
+		expect(html).toMatch(/<details(?![^>]*\bopen)[^>]*><summary[^>]*>Recovery options<\/summary>/)
 	})
 
 	test('keeps review stable until the phone explicitly marks it complete', () => {
@@ -188,6 +207,7 @@ describe('delegation phone surfaces', () => {
 		)
 		expect(html).toContain('Reviewing')
 		expect(html).toContain('Mark complete')
+		expect(html).toMatch(/<details[^>]*\bopen=""[^>]*><summary[^>]*>Workflow actions<\/summary>/)
 	})
 
 	test('shows the global UI stability acknowledgement independently of a cancelled Workflow', () => {
@@ -221,7 +241,9 @@ describe('delegation phone surfaces', () => {
 				/>
 			</QueryClientProvider>
 		)
-		expect(html).toContain('Automated Conductor UI writes are paused')
+		expect(html).toContain('Remote controls are paused')
+		expect(html).toContain('Chats already running can continue. New remote actions are on hold.')
+		expect(html).toMatch(/<details(?![^>]*\bopen)[^>]*><summary[^>]*>Technical details<\/summary>/)
 		expect(html).toContain('A dispatched child-open action lost its owner.')
 		expect(html).toContain('Action · open-child')
 		expect(html).toContain('Effect · effect-1')

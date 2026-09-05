@@ -1,4 +1,5 @@
 import { AlertTriangle, ArrowRight, CheckCircle2, Hourglass, Loader2 } from 'lucide-react'
+import { displayedModelPickerLabel } from '../../../../src/shared.ts'
 import { cn } from '../../lib/cn.ts'
 import type { DelegationProjection, Session, SessionRoleAssignment } from '../../lib/types.ts'
 import { ProviderMark } from '../agents/AgentIcons.tsx'
@@ -128,7 +129,9 @@ export function AgentSubtabStrip({ tabs, label }: { tabs: AgentSubtab[]; label: 
 						<ProviderMark agentType={tab.agentType} model={tab.model} monochrome={tab.selected} className="size-3.5" />
 						<span className="max-w-28 truncate font-medium">{tab.label}</span>
 						{tab.model ? (
-							<span className={cn('max-w-28 truncate', tab.selected ? 'text-bg/75' : 'text-faint')}>{tab.model}</span>
+							<span className={cn('max-w-28 truncate', tab.selected ? 'text-bg/75' : 'text-faint')}>
+								{displayedModelPickerLabel(tab.model)}
+							</span>
 						) : null}
 						{tab.status ? (
 							<span
