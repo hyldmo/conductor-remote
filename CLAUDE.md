@@ -923,7 +923,11 @@ Two asymmetric halves — keep them separate:
   `tests/files/attachments.test.ts` pins both against a token Conductor itself wrote,
   and pins the other half — that a name built from a **chat title**, which is free text
   a model wrote and which then gets joined onto a path, cannot climb out of the worktree.
-  On the phone that same token becomes a clickable pill. It resolves directly against
+  On the phone that same token becomes a clickable pill, or a small thumbnail for a
+  raster image. Picked images also preview in the composer while uploading; their
+  temporary object URLs are released when removed or unmounted. Saved image previews
+  use the authenticated local-image cache, so restored chat drafts still show them.
+  The token resolves directly against
   the chat's worktree — never through the source-only file list, which omits raster
   images — and opens the existing raster-image or source viewer, whose authenticated
   routes still realpath and authorize the resulting absolute path.
