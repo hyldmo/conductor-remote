@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Prefs, PrefsPatch } from '../../src/prefs.ts'
 import type { SessionState, Workspace } from '../../src/reads/types.ts'
 import {
@@ -247,6 +247,86 @@ describe('VoiceBriefBoard', () => {
 		expect(yesterday.workspaces.map(item => item.workspaceId)).toEqual(['w-yesterday'])
 
 		await expect(board.workspaceOverview(0, { updatedSince: 'whenever' })).rejects.toThrow(/updated_since/i)
+	})
+
+	it.each<{ label: string; completion: Partial<Workspace> }>([
+		{ label: 'manual Done', completion: { manual_status: 'done' } },
+		{ label: 'derived Done', completion: { derived_status: 'done' } },
+		{ label: 'merged', completion: { pr_status: 'merged' } },
+		{ label: 'Done and merged', completion: { manual_status: 'done', pr_status: 'merged' } }
+	])('excludes $label workspaces from every roll-call count and decision', async ({ completion }) => {
+		const finished = ['working', 'idle', 'error', 'needs_user_input', 'needs_plan_response'].map(status =>
+			state(`finished-${status}`, status, '2026-09-02 11:50:00')
+		)
+		const states = [
+			...finished,
+			state('working', 'working', '2026-09-02 11:45:00'),
+			state('attention', 'needs_user_input', '2026-09-02 11:40:00'),
+			state('old', 'idle', '2026-08-20 00:00:00')
+		]
+		const lastAssistantText = vi.fn(() => 'May I start Docker Desktop?')
+		const lastQuestionInput = vi.fn(() => null)
+		const board = new VoiceBriefBoard({
+			reads: {
+				listWorkspaces: () => [
+					...finished.map(s =>
+						workspace(s.sessionId, { ...completion, unread_sessions: [{ id: s.sessionId, at: s.updatedAt }] })
+					),
+					workspace('working'),
+					workspace('attention'),
+					workspace('old')
+				],
+				listSessionStates: () => states,
+				lastAssistantText,
+				lastQuestionInput
+			},
+			locked: async () => false,
+			readPrefs: () => ({ readMarks: {}, drafts: {} }),
+			writePrefs: () => ({ readMarks: {}, drafts: {} }),
+			now: () => NOW
+		})
+
+		// A decision request can also be the first tool used in a call.
+		expect((await board.nextDecision())?.sessionId).toBe('attention')
+		const roll = await board.rollCall()
+		expect(roll).toMatchObject({ working: 1, needsYou: 1, dormant: 1 })
+		expect(roll.spoken).toContain('1 working, 1 need you, 1 dormant')
+		expect(roll.spoken).not.toContain('finished')
+		expect(roll.queue.map(item => item.sessionId)).toEqual(['attention'])
+		expect(await board.nextDecision(1)).toBeNull()
+		// Finished conversations should not be read into the call at all.
+		expect(lastAssistantText.mock.calls).toEqual([['attention'], ['attention']])
+		expect(lastQuestionInput.mock.calls).toEqual([['attention'], ['attention']])
+	})
+
+	it('skips work completed during a call without shifting the remaining decision cursors', async () => {
+		const states = ['first', 'done', 'next', 'merged'].map((id, index) =>
+			state(id, 'needs_user_input', `2026-09-02 11:5${9 - index}:00`)
+		)
+		const workspaces = states.map(s => workspace(s.sessionId))
+		const board = new VoiceBriefBoard({
+			reads: {
+				listWorkspaces: () => workspaces,
+				listSessionStates: () => states,
+				lastAssistantText: () => 'May I continue?',
+				lastQuestionInput: () => null
+			},
+			locked: async () => false,
+			readPrefs: () => ({ readMarks: {}, drafts: {} }),
+			writePrefs: () => ({ readMarks: {}, drafts: {} }),
+			now: () => NOW
+		})
+
+		const roll = await board.rollCall()
+		expect(roll.queue.map(item => item.sessionId)).toEqual(['first', 'done', 'next', 'merged'])
+		const first = await board.nextDecision()
+		expect(first).toMatchObject({ sessionId: 'first', cursor: 1 })
+
+		workspaces[1].manual_status = 'done'
+		workspaces[3].pr_status = 'merged'
+		const next = await board.nextDecision(first?.cursor)
+		expect(next).toMatchObject({ sessionId: 'next', cursor: 3 })
+		expect(await board.nextDecision(next?.cursor)).toBeNull()
 	})
 
 	it('ranks live signals, excludes dormant work, and bounds spoken output', async () => {

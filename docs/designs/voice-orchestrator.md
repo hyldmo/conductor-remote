@@ -21,8 +21,8 @@ retarget the call.
 The browser sends its WebRTC offer to the authenticated relay. The relay creates
 the Realtime call with its permanent OpenAI key, returns only the SDP answer, and
 uses the call receipt to attach a private sideband controller. The PWA session
-gets the same nine schemas as SIP—roll call, filtered workspace overview, chat context, next
-decision, repository list, previewed/confirmed workspace creation, and
+gets the same twelve schemas as SIP—roll call, filtered workspace overview, chat context, next
+decision, call-history list/search/read, repository list, previewed/confirmed workspace creation, and
 previewed/confirmed send—but exposes them as function tools executed locally by
 that controller. SIP keeps the remote MCP transport because OpenAI hosts that call.
 Both paths therefore share the same deterministic fleet reads and the same
@@ -38,8 +38,20 @@ The current-chat call starts from the right side of the chat composer, immediate
 left of the context control. The relay reads the selected tab's conversation before
 creating the Realtime session, retaining the latest user request and recent replies
 within 24 messages and 16,000 characters. The call keeps that target as the user
-navigates and can refresh it with `voice_chat_context`. Fleet calls retain their
-roll-call opening. Both call modes use the existing confirmation gates for writes.
+navigates and can refresh it with `voice_chat_context`. Both call modes use the
+existing confirmation gates for writes.
+
+The 2026-09-05 call-memory revision supersedes the automatic roll-call and redial
+resume behavior proposed below. Each new Control Room call starts with a neutral
+greeting, with no fleet briefing or previous-call transcript loaded. On explicit
+request, `voice_list_calls`, `voice_search_calls`, and `voice_read_call` retrieve
+bounded text from `stateDir()/voice-history.db`, separate from Conductor chats.
+The current call is excluded before filtering and pagination; named dates use
+the Mac's calendar. A new call can recap a dropped call or yesterday's discussion
+without inheriting either as current instructions or authorization. Reattaching
+the broker to the same still-live call after a relay restart remains transport
+recovery, not a new conversation. Requested fleet tallies and decision queues
+exclude Merged and Done workspaces, including work completed during a call.
 
 The call sheet carries live input/output captions and a typed fallback. Voice and
 language are chosen before connecting; server voice activity detection handles

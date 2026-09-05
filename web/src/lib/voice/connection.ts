@@ -125,6 +125,12 @@ export function voiceToolLabel(name: string): string {
 			return 'Refreshing chat context'
 		case 'voice_next_decision':
 			return 'Opening the next decision'
+		case 'voice_list_calls':
+			return 'Finding previous calls'
+		case 'voice_search_calls':
+			return 'Searching call history'
+		case 'voice_read_call':
+			return 'Reading a previous call'
 		case 'voice_list_repos':
 			return 'Checking repositories'
 		case 'voice_create_workspace_preview':
