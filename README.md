@@ -298,8 +298,10 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
     targeting, no focus needed. Speaks a private, versioned IPC (see FINDINGS ▸
     Writes), so it's the more fragile of the two.
 - ✅ **Attach images and files** — tap the paperclip or paste an image into the
-  composer. Files up to 25 MB are stored in Conductor's own attachment layout
-  before the prompt is sent.
+  composer. Text pastes over 2,000 characters become a removable `pasted-text.txt`
+  attachment in chats and New workspace; shorter or offline pastes stay in the
+  editor. Files up to 25 MB are stored in Conductor's own attachment layout before
+  the prompt is sent.
 - ✅ **Deterministic cross-provider Workflow** — configure exact picker-backed
   planning, exploration, and implementation roles, then turn on **Workflow** in
   New workspace or an untouched **+ New chat**. The PWA calls the UI-only

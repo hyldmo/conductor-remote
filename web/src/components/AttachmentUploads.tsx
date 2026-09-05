@@ -1,6 +1,7 @@
 import { LoaderCircle, Paperclip, X } from 'lucide-react'
 import type { ClipboardEventHandler, ComponentProps, RefObject } from 'react'
 import { useCallback, useRef, useState } from 'react'
+import { pastedAttachments } from '../lib/clipboard.ts'
 import type { DraftAttachment } from '../lib/types.ts'
 
 export const EMPTY_ATTACHMENTS: readonly DraftAttachment[] = []
@@ -123,7 +124,9 @@ export function useAttachmentUploads({
 		}
 	}
 	const onPaste: ClipboardEventHandler<HTMLTextAreaElement> = event => {
-		const files = event.clipboardData.files
+		// Offline text must still reach the editor: there is no upload to take ownership of it.
+		if (!enabled) return
+		const files = pastedAttachments(event.clipboardData)
 		if (!files.length) return
 		event.preventDefault()
 		chooseFiles(files)
