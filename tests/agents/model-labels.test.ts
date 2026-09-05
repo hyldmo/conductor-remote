@@ -19,7 +19,7 @@ describe('model picker labels', () => {
 
 	test('shortens the redundant OpenCode prefix for display only', () => {
 		expect(displayedModelPickerLabel('opencode-go/grok-4.6')).toBe('go/grok-4.6')
-		expect(displayedModelPickerLabel('opencode/muse-space')).toBe('opencode/muse-space')
+		expect(displayedModelPickerLabel('opencode/muse-space')).toBe('muse-space')
 	})
 
 	test('groups models by provider', () => {
