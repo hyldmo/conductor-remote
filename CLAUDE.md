@@ -568,6 +568,14 @@ Two asymmetric halves — keep them separate:
     three real failures remain visible until dismissed. Successful job files disappear only after the
     exact parent user-row receipt, while `.context/delegations/sessions.json` keeps
     child role chips and exact parent ids alive until the worktree is archived.
+    **Outbox acceptance is not a failed send.** Both child tasks and returned results
+    persist their delivery cursor (transcript rowid plus pre-existing outbox ids) before
+    touching the UI, then follow the accepted message id through promotion to a
+    transcript row. The shared send returns that receipt directly; demanding an
+    immediate transcript row caused three copies of one assignment on 2026-09-05.
+    Pending acceptance spends no attempts and never resends. A saved baseline recovers
+    a receipt lost across retry/restart, an exact accepted id cannot be replaced by a
+    later identical prompt, and cancellation fails visibly without undoing the cancel.
     New ad hoc jobs never mark an ordinary parent as `planning`: that marker is
     also used by the sidebar's pre-coordinator Workflow identity fallback.
 

@@ -200,6 +200,13 @@ export class DelegationQueue {
 					if (this.recordFailure(store, job, result)) return true
 					continue
 				}
+				if ('pending' in result) {
+					// Persist the baseline before the UI action and then its accepted id.
+					// An unchanged pending receipt only needs the next session-poller tick.
+					if (JSON.stringify(job.sendDelivery) === JSON.stringify(result.sendDelivery)) continue
+					store.put(decodeDelegation({ ...job, sendDelivery: result.sendDelivery, updatedAt: this.now() }))
+					return true
+				}
 				store.put(transitionDelegation(job, 'running', { sentRowid: result.sentRowid }, this.now()))
 				return true
 			}
@@ -241,16 +248,20 @@ export class DelegationQueue {
 					continue
 				}
 				if ('pending' in result) {
-					// A queued Baton clears the composer before SQLite exposes any row.
-					// Persist the pre-dispatch cursor once, then only poll for the exact
-					// eventual row; repeating the UI action here would enqueue a duplicate.
-					if (job.returnCursor === result.returnCursor) continue
+					// Save the return text and baseline before sending, then its acceptance.
+					// Pending receipts only need a poll; another UI action would duplicate them.
+					if (
+						job.returnCursor === result.returnCursor &&
+						JSON.stringify(job.returnDelivery) === JSON.stringify(result.returnDelivery)
+					)
+						continue
 					store.put(
 						decodeDelegation({
 							...job,
 							returnCursor: result.returnCursor,
 							returnAttachment: result.returnAttachment,
 							returnText: result.returnText,
+							returnDelivery: result.returnDelivery,
 							updatedAt: this.now()
 						})
 					)

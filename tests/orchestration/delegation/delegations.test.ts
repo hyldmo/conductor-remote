@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
+import { decodeDelegation } from '../../../src/orchestration/delegation/codec.ts'
 import { DelegationStore } from '../../../src/orchestration/delegation/store.ts'
 import type { PersistedDelegation } from '../../../src/orchestration/delegation/types.ts'
 
@@ -82,6 +83,24 @@ describe('worktree delegation store', () => {
 		expect(() => store.put(job({ status: 'running', childSessionId: 'child-1' }))).toThrow(/sentRowid/)
 		expect(() => store.put(job({ status: 'returning', childSessionId: 'child-1', sentRowid: 22 }))).toThrow(/outcome/)
 		expect(() => store.put(job({ status: 'failed' }))).toThrow(/failure/)
+	})
+
+	test.each([
+		{ rowid: -1, outboxIds: [] },
+		{ rowid: 0, outboxIds: 'message-1' },
+		{ rowid: 0, outboxIds: [''] },
+		{ rowid: 0, outboxIds: [], messageId: '' },
+		{ rowid: 0, outboxIds: [], accepted: false }
+	])('rejects malformed delivery state before it can reset the receipt boundary: %j', delivery => {
+		expect(() => decodeDelegation({ ...job(), sendDelivery: delivery })).toThrow(/sendDelivery/)
+		expect(() => decodeDelegation({ ...job(), returnDelivery: delivery })).toThrow(/returnDelivery/)
+	})
+
+	test('requires the return text and matching baseline when restoring a tracked return', () => {
+		expect(() => decodeDelegation({ ...job(), returnDelivery: { rowid: 0, outboxIds: [] } })).toThrow(/returnCursor/)
+		expect(() => decodeDelegation({ ...job(), returnCursor: 0, returnDelivery: { rowid: 0, outboxIds: [] } })).toThrow(
+			/returnAttachment/
+		)
 	})
 
 	test('rejects traversal ids before touching the filesystem', () => {

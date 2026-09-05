@@ -272,8 +272,15 @@ from launching a Workflow. Its task and output format come from the configured p
 and assignment; the relay does not infer editing permissions from the role's name or
 impose a Baton format. The shipped role preambles request Batons, and custom roles may
 request other formats. `list_roles` exposes those instructions alongside all set controls.
-Restart semantics remain the existing queue's at-least-once side effects and receipt-based
-Baton delivery; managed jobs keep the coordinator's stronger effect reconciliation.
+Before sending either the task or its Baton, the queue saves its transcript cursor and
+existing outbox ids. Acceptance stores the new message id; `sending`/`returning` then
+poll that id until Conductor promotes it to a transcript row. An accepted outbox item
+must never spend a failure attempt or trigger another send merely because it has no
+rowid yet. The saved baseline also recovers acceptance after a retry/restart that lost
+the receipt write, while excluding older identical queued messages. A cancelled accepted
+id fails without resending. Legacy queued returns with no visible DB receipt retain their
+poll-only behavior. Opening/configuration still have at-least-once restart semantics;
+managed jobs keep the coordinator's stronger effect reconciliation.
 
 Role validation and the role editor share `currentModelCatalog`: each provider's labels
 come from the newest complete menu containing that provider. The observing chat's harness

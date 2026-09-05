@@ -16,7 +16,7 @@ import {
 } from '../../files/staged-attachments.ts'
 import { chatRoute, notifyAll } from '../../notifications/notify.ts'
 import { readPrefs } from '../../prefs.ts'
-import type { DeliveryCursor, SessionRow, Workspace } from '../../reads/types.ts'
+import type { DeliveryCursor, DeliveryReceipt, SessionRow, Workspace } from '../../reads/types.ts'
 import { setAgentOptions } from '../../writes/agent-options.ts'
 import { newChat } from '../../writes/chats.ts'
 import { lockBlocked, retryWontHelp, screenLocked, sendNeverStarted } from '../../writes/guards.ts'
@@ -55,8 +55,8 @@ export function createDeliveryServices(
 	 * this a dropped send (asleep/unfocused Mac) looks delivered. A prompt accepted into
 	 * Conductor's durable outbox also counts, before it becomes a transcript row.
 	 */
-	function deliveredSince(sessionId: string, text: string, since: DeliveryCursor): boolean {
-		return reads.promptDeliveredSince(sessionId, text, since)
+	function deliveredSince(sessionId: string, text: string, since: DeliveryCursor): DeliveryReceipt | null {
+		return reads.deliveryReceiptSince(sessionId, text, since)
 	}
 
 	function deliveredRowSince(sessionId: string, text: string, sinceRowid: number): number | null {
@@ -66,7 +66,7 @@ export function createDeliveryServices(
 	}
 
 	/**
-	 * Watch for that row, ending on a check rather than a sleep, and never past
+	 * Watch for a receipt, ending on a check rather than a sleep, and never past
 	 * `budgetDeadline`. Conductor records the row or outbox item right after the send
 	 * presses Enter, so a real send is confirmed in a tick and only the failure path
 	 * waits the window out.
@@ -78,31 +78,17 @@ export function createDeliveryServices(
 	 * a confirm *followed by another attempt* always gets its full window. Only the
 	 * last confirm of all can be cut short, and nothing follows it to duplicate a row.
 	 */
-	async function confirmDeliveryRow(
-		sessionId: string,
-		text: string,
-		sinceRowid: number,
-		budgetDeadline: number
-	): Promise<number | null> {
-		const stopAt = Math.min(Date.now() + CONFIRM_WINDOW_MS, budgetDeadline)
-		for (;;) {
-			const rowid = deliveredRowSince(sessionId, text, sinceRowid)
-			if (rowid !== null) return rowid
-			if (Date.now() >= stopAt) return null
-			await sleep(300)
-		}
-	}
-
 	async function confirmDelivery(
 		sessionId: string,
 		text: string,
 		since: DeliveryCursor,
 		budgetDeadline: number
-	): Promise<boolean> {
+	): Promise<DeliveryReceipt | null> {
 		const stopAt = Math.min(Date.now() + CONFIRM_WINDOW_MS, budgetDeadline)
 		for (;;) {
-			if (deliveredSince(sessionId, text, since)) return true
-			if (Date.now() >= stopAt) return false
+			const receipt = deliveredSince(sessionId, text, since)
+			if (receipt) return receipt
+			if (Date.now() >= stopAt) return null
 			await sleep(300)
 		}
 	}
@@ -237,19 +223,24 @@ export function createDeliveryServices(
 		sessionId: string,
 		text: string,
 		budgetMs = SEND_BUDGET_MS,
-		queue = false
-	): Promise<SendResult & { attempts: number }> {
+		queue = false,
+		cursor?: DeliveryCursor
+	): Promise<SendResult & { attempts: number } & ({ ok: true; receipt: DeliveryReceipt } | { ok: false })> {
 		const located = locateChat(ws, sessionId)
 		if ('error' in located) return { ok: false, strategy: actuator.name, attempts: 0, error: located.error }
 		// Snapshot the transcript cursor and outbox ids once: every check below asks "did
 		// *this* prompt arrive since we started", so a retry can't be fooled by an older
 		// identical prompt moving from the outbox into a new transcript row.
-		const before = reads.deliveryCursor(sessionId)
+		const before = cursor ?? reads.deliveryCursor(sessionId)
 		const label = ws.branch ?? ws.id
 		const deadline = Date.now() + budgetMs
 		let attempts = 0
 		let last: SendResult = { ok: false, strategy: actuator.name }
 		for (;;) {
+			// A persisted delegation cursor can already have a receipt after a restart
+			// or a late acceptance. Recover it before touching the composer again.
+			const existing = deliveredSince(sessionId, text, before)
+			if (existing) return { ok: true, strategy: last.strategy, attempts, receipt: existing }
 			attempts++
 			// The run gets the deadline, not a duration: `uiTurn` may hold it behind another
 			// write, and only the run knows what was left of the budget when it started. Minus
@@ -268,7 +259,7 @@ export function createDeliveryServices(
 				: await confirmDelivery(sessionId, text, before, deadline)
 			if (landed) {
 				if (attempts > 1) console.info(`[relay] send to ${label} landed on attempt ${attempts}`)
-				return { ok: true, strategy: last.strategy, attempts }
+				return { ok: true, strategy: last.strategy, attempts, receipt: landed }
 			}
 			if (retryWontHelp(last.error)) break
 			// A locked screen isn't worth the rest of the budget either — but for the
@@ -481,7 +472,6 @@ export function createDeliveryServices(
 		deliveredRowSince,
 		SEND_BUDGET_MS,
 		locateChat,
-		confirmDeliveryRow,
 		CONFIRM_WINDOW_MS,
 		firstPrompts,
 		parkedPrompts,
