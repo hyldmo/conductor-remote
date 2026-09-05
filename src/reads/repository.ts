@@ -90,6 +90,9 @@ export class Reads {
 	deliveryReceiptForId(sessionId: string, messageId: string): DeliveryReceipt | null {
 		return this.messages.deliveryReceiptForId(sessionId, messageId)
 	}
+	deliveryTextMatches(sessionId: string, messageId: string, text: string): boolean {
+		return this.messages.deliveryTextMatches(sessionId, messageId, text)
+	}
 	getMessages(
 		sessionId: string,
 		afterRowid = 0

@@ -143,6 +143,20 @@ export function createDelegationsServices(
 		return { ok: true as const }
 	}
 
+	/** Correlate an ordinary delegation without treating changed text as successful delivery. */
+	function trackedReceipt(sessionId: string, text: string, delivery: DelegationDelivery, attachment?: Attachment) {
+		if (delivery.messageId) return reads.deliveryReceiptForId(sessionId, delivery.messageId)
+		const cursor = { rowid: delivery.rowid, outboxIds: new Set(delivery.outboxIds) }
+		// Each handoff/report has its own persisted attachment directory. Its ASCII
+		// URL survives UTF-8 chunk corruption and also identifies sends from older relays.
+		// This is correlation only: verify the complete raw text after saving the id.
+		const marker = attachment ? `(${encodeURIComponent(attachment.path)})` : ''
+		return (
+			reads.deliveryReceiptSince(sessionId, text, cursor) ??
+			(marker && text.includes(marker) ? reads.deliveryReceiptContainingSince(sessionId, marker, cursor) : null)
+		)
+	}
+
 	/** Prepare durably before sending, then follow the accepted id without spending retries. */
 	async function trackedPrompt(
 		ws: Workspace,
@@ -150,6 +164,7 @@ export function createDelegationsServices(
 		text: string,
 		delivery: DelegationDelivery | undefined,
 		code: 'send_failed' | 'return_failed',
+		attachment?: Attachment,
 		queue = false
 	): Promise<
 		DelegationActionError | { ok: true; rowid: number } | { ok: true; pending: true; delivery: DelegationDelivery }
@@ -163,9 +178,8 @@ export function createDelegationsServices(
 			}
 		}
 		const cursor = { rowid: delivery.rowid, outboxIds: new Set(delivery.outboxIds) }
-		let receipt = delivery.messageId
-			? reads.deliveryReceiptForId(sessionId, delivery.messageId)
-			: reads.deliveryReceiptSince(sessionId, text, cursor)
+		const probe = () => trackedReceipt(sessionId, text, delivery, attachment)
+		let receipt = probe()
 		if (!receipt && delivery.messageId) {
 			return delegationError(code, 'the accepted delegated message was removed from Conductor before dispatch', false)
 		}
@@ -180,8 +194,8 @@ export function createDelegationsServices(
 				})
 			)
 			receipt = result.ok
-				? reads.deliveryReceiptSince(sessionId, text, cursor)
-				: await confirmDelivery(sessionId, text, cursor, Date.now() + CONFIRM_WINDOW_MS)
+				? probe()
+				: await confirmDelivery(sessionId, text, cursor, Date.now() + CONFIRM_WINDOW_MS, probe)
 			if (!receipt) {
 				return result.ok
 					? { ok: true as const, pending: true as const, delivery: { ...delivery, accepted: true as const } }
@@ -190,10 +204,20 @@ export function createDelegationsServices(
 		}
 		if (!receipt) {
 			const result = await withUiPriority('background', () =>
-				deliverPrompt(ws, sessionId, text, SEND_BUDGET_MS, false, cursor)
+				deliverPrompt(ws, sessionId, text, SEND_BUDGET_MS, false, cursor, probe)
 			)
 			if (!result.ok) return delegationError(code, result.error ?? 'the delegated message did not land')
 			receipt = result.receipt
+		}
+		if (delivery.messageId !== receipt.id) {
+			return { ok: true, pending: true, delivery: { ...delivery, messageId: receipt.id } }
+		}
+		if (!reads.deliveryTextMatches(sessionId, receipt.id, text)) {
+			return delegationError(
+				'delivery_altered',
+				`Conductor accepted the delegated ${code === 'send_failed' ? 'assignment' : 'result'} as message ${receipt.id}, but its text changed in transit. It will not be resent automatically. Inspect chat ${sessionId} before continuing.`,
+				false
+			)
 		}
 		return receipt.kind === 'message'
 			? { ok: true as const, rowid: receipt.rowid }
@@ -210,7 +234,7 @@ export function createDelegationsServices(
 		} catch (err) {
 			return delegationError('state_invalid', err instanceof Error ? err.message : String(err), false)
 		}
-		const result = await trackedPrompt(ws, job.childSessionId, text, job.sendDelivery, 'send_failed')
+		const result = await trackedPrompt(ws, job.childSessionId, text, job.sendDelivery, 'send_failed', job.handoff)
 		if (!result.ok) return result
 		return 'pending' in result
 			? { ok: true as const, pending: true as const, sendDelivery: result.delivery }
@@ -293,6 +317,7 @@ export function createDelegationsServices(
 			text,
 			job.returnDelivery,
 			'return_failed',
+			attachment,
 			job.returnMode === 'queue'
 		)
 		if (!result.ok) return result
@@ -310,6 +335,19 @@ export function createDelegationsServices(
 
 	const delegationQueue = new DelegationQueue(
 		{
+			reconcile: job => {
+				const returning = job.failure?.code === 'return_failed'
+				if (!returning && job.failure?.code !== 'send_failed') return null
+				const delivery = returning ? job.returnDelivery : job.sendDelivery
+				const sessionId = returning ? job.parentSessionId : job.childSessionId
+				if (!delivery || !sessionId) return null
+				const text = returning ? job.returnText : delegatedPrompt(job)
+				if (!text) return null
+				const receipt = trackedReceipt(sessionId, text, delivery, returning ? job.returnAttachment : job.handoff)
+				return receipt
+					? { stage: returning ? 'returning' : 'sending', delivery: { ...delivery, messageId: receipt.id } }
+					: null
+			},
 			open: openDelegation,
 			configure: configureDelegation,
 			send: sendDelegation,

@@ -150,7 +150,28 @@ export class DelegationQueue {
 			.flatMap(store => store.list().jobs.map(job => ({ store, job })))
 			.sort((a, b) => a.job.createdAt - b.job.createdAt || a.job.id.localeCompare(b.job.id))
 		for (const { store, job } of entries) {
-			if (job.status === 'failed') continue
+			if (job.status === 'failed') {
+				try {
+					const recovered = this.deps.reconcile?.(job)
+					if (!recovered) continue
+					// Only a positive read-only receipt reopens a terminal send failure.
+					// The normal delivery stage verifies integrity before observing completion.
+					store.put(
+						decodeDelegation({
+							...job,
+							status: recovered.stage,
+							[recovered.stage === 'sending' ? 'sendDelivery' : 'returnDelivery']: recovered.delivery,
+							failure: undefined,
+							lastAttemptAt: undefined,
+							updatedAt: this.now()
+						})
+					)
+					return true
+				} catch (err) {
+					this.onError(`delegation reconciliation failed: ${err instanceof Error ? err.message : err}`)
+					continue
+				}
+			}
 			if (job.status === 'returned') {
 				store.remove(job.id)
 				return true
