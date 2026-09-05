@@ -221,8 +221,8 @@ export function DiffFileList({
 							<span className={cn('truncate', onSelectedPath ? 'text-text' : 'text-muted')}>{node.name}</span>
 							<span className="shrink-0 text-[10px] tabular-nums text-faint">{node.fileCount}</span>
 						</span>
-						<span className="min-w-8 text-right text-add">{node.added ? `+${node.added}` : null}</span>
-						<span className="min-w-8 text-right text-del">{node.removed ? `−${node.removed}` : null}</span>
+						<span className="min-w-8 text-right text-add opacity-60">{node.added ? `+${node.added}` : null}</span>
+						<span className="min-w-8 text-right text-del opacity-60">{node.removed ? `−${node.removed}` : null}</span>
 					</button>
 					{expanded ? <ul>{node.children.map(child => renderNode(child, depth + 1))}</ul> : null}
 				</li>
