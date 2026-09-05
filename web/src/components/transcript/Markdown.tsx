@@ -35,6 +35,24 @@ function withAttachmentLinks(text: string): string {
 	return markdown + text.slice(offset)
 }
 
+/**
+ * Fork and Compact create `Transcript of <chat>.md` solely to give the next
+ * turn its inherited context. It has already done its job once that turn is in
+ * the transcript, so drawing its chip in the user's bubble only repeats an
+ * implementation detail. Keep ordinary uploaded attachments intact.
+ */
+function withoutTranscriptAttachments(text: string): string {
+	const tokens = attachmentTokens(text).filter(token => /^Transcript of .+\.md$/.test(token.name))
+	if (!tokens.length) return text
+	let result = ''
+	let offset = 0
+	for (const token of tokens) {
+		result += text.slice(offset, token.start)
+		offset = token.end
+	}
+	return result + text.slice(offset)
+}
+
 function attachmentPath(href: string | undefined): string | null {
 	if (!href) return null
 	try {
@@ -379,11 +397,17 @@ const COMPONENTS = { a: ChatLink, code: ChatCode, img: ChatImage, pre: ChatPre }
  * blocked main thread per poll on a phone-class CPU, which is what makes the
  * spinners stutter. The prop is a plain string, so the default compare is exact.
  */
-export const Markdown = memo(function Markdown({ children }: { children: string }) {
+export const Markdown = memo(function Markdown({
+	children,
+	hideTranscriptAttachments = false
+}: {
+	children: string
+	hideTranscriptAttachments?: boolean
+}) {
 	return (
 		<div className="md">
 			<ReactMarkdown remarkPlugins={PLUGINS} components={COMPONENTS}>
-				{withAttachmentLinks(children)}
+				{withAttachmentLinks(hideTranscriptAttachments ? withoutTranscriptAttachments(children) : children)}
 			</ReactMarkdown>
 		</div>
 	)
