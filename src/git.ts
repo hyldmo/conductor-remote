@@ -267,6 +267,8 @@ async function localState(worktree: string): Promise<{ dirty: boolean; unpushed:
  * a mention only when it matches a real file. The same list lets a reviewer browse
  * source beyond the changed set. Tracked plus untracked-not-ignored: an agent that just
  * wrote a file should appear in both places long before anything commits it.
+ * The root `.context/` directory is included even when ignored, so workspace notes
+ * and plans are browsable too. Other ignored paths keep their normal exclusions.
  *
  * Two things keep the payload small. Only previewable extensions ship, because
  * `/api/files` refuses everything else anyway, and 20,000 paths is the ceiling — a
@@ -276,7 +278,16 @@ async function localState(worktree: string): Promise<{ dirty: boolean; unpushed:
 export async function listSourceFiles(worktree: string): Promise<{ files: string[]; truncated: boolean }> {
 	let listing = ''
 	try {
-		listing = await git(worktree, ['ls-files', '--cached', '--others', '--exclude-standard', '-z'])
+		listing = await git(worktree, [
+			'ls-files',
+			'--cached',
+			'--others',
+			'--exclude-standard',
+			// Unignore the directory itself to let Git descend, then all its contents.
+			'--exclude=!/.context/',
+			'--exclude=!/.context/**',
+			'-z'
+		])
 	} catch {
 		return { files: [], truncated: false }
 	}
