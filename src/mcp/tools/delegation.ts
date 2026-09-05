@@ -38,7 +38,7 @@ export function createDelegateTaskTool(call: RelayCall): Tool {
 	return {
 		name: 'delegate_task',
 		description:
-			'Spawn one lightweight tracked sibling chat in a subtab. From an ordinary chat, pass session_id, a valid role from list_roles, and a focused prompt. Choose a configured role whose instructions fit the task; repeat for independent questions so children can run concurrently. This does not start a Workflow or turn the parent into a planner. The role must use a different provider than the parent. The child follows the configured preamble and assignment, receives a transcript attachment, and returns its result. Queue mode delivers behind the current turn by default; use steer if the result is needed during this turn. Keep working and integrate the result. For an active Workflow, only its root may call with workflow_id and current phase_capability from the private envelope; its frozen settings, role restrictions, transcript boundary, and Baton routing apply. Returns immediately with a delegation id; list_delegations observes progress. The relay later opens/configures/sends the child through the Mac UI. This tool cannot start or recover a Workflow.',
+			'Spawn one lightweight tracked sibling chat in a subtab. From an ordinary chat, pass session_id, a valid role from list_roles, and a focused prompt. Choose a configured role whose instructions fit the task; repeat for independent questions so children can run concurrently. This does not start a Workflow or turn the parent into a planner. The role must use a different provider than the parent. The child follows the configured preamble and assignment and receives a frozen parent transcript plus a read_chat reference. The relay returns a short completion notice with a report attachment containing the final reply. Read the report for the result; use the child chat reference for earlier investigation when needed. Queue mode delivers behind the current turn by default; use steer if the result is needed during this turn. Keep working and integrate the result. For an active Workflow, only its root may call with workflow_id and current phase_capability from the private envelope; its frozen settings, role restrictions, transcript boundary, and Baton routing apply. Returns immediately with a delegation id; list_delegations observes progress. The relay later opens/configures/sends the child through the Mac UI. This tool cannot start or recover a Workflow.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -57,11 +57,12 @@ export function createDelegateTaskTool(call: RelayCall): Tool {
 					type: 'string',
 					enum: ['queue', 'steer'],
 					description:
-						'Ordinary chats only. Queue the Baton behind this turn (default), or steer it into a running turn.'
+						'Ordinary chats only. Queue the completion notice behind this turn (default), or steer it into a running turn.'
 				},
 				through: {
 					type: 'string',
-					description: 'Ordinary chats only. Optional read_chat cursor bounding the transcript handoff.'
+					description:
+						'Ordinary chats only. Optional chat cursor for the parent cut; defaults to the latest entry when accepted.'
 				},
 				include_thinking: {
 					type: 'boolean',

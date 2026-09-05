@@ -3,8 +3,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { DelegationQueue, transitionDelegation } from '../../../src/orchestration/delegation/queue.ts'
+import { delegationReturnText } from '../../../src/orchestration/delegation/return.ts'
 import { DelegationStore } from '../../../src/orchestration/delegation/store.ts'
-import type { DelegationActionError, PersistedDelegation } from '../../../src/orchestration/delegation/types.ts'
+import type {
+	DelegationActionError,
+	DelegationQueueDeps,
+	PersistedDelegation
+} from '../../../src/orchestration/delegation/types.ts'
 
 const temporaryDirs: string[] = []
 
@@ -230,11 +235,18 @@ describe('delegation queue', () => {
 		expect(persisted.list().jobs[0]).toMatchObject({ status: 'opening', attempts: 0 })
 	})
 
-	test('dispatches a queued return once and waits for its eventual transcript row', async () => {
+	test.each(['legacy', 'report'])('keeps a queued %s return through restart without resending it', async format => {
 		const persisted = store()
 		let receipt = false
 		let dispatches = 0
-		const queue = new DelegationQueue({
+		const returnText =
+			format === 'legacy'
+				? '## Baton\nDone'
+				: delegationReturnText(
+						job({ childSessionId: 'child-1', outcome: { kind: 'success', assistantRowid: 30, text: 'Done' } }),
+						handoff
+					)
+		const deps: DelegationQueueDeps = {
 			open: async () => ({ ok: true, childSessionId: 'child-1', handoff }),
 			configure: async () => ({ ok: true }),
 			send: async () => ({ ok: true, sentRowid: 20 }),
@@ -245,7 +257,7 @@ describe('delegation queue', () => {
 			returnResult: async current => {
 				if (current.returnCursor === undefined) {
 					dispatches++
-					return { ok: true, pending: true, returnCursor: 12, returnAttachment: handoff, returnText: 'Baton' }
+					return { ok: true, pending: true, returnCursor: 12, returnAttachment: handoff, returnText }
 				}
 				return receipt
 					? { ok: true, returnRowid: 40 }
@@ -254,10 +266,11 @@ describe('delegation queue', () => {
 							pending: true,
 							returnCursor: current.returnCursor,
 							returnAttachment: current.returnAttachment ?? handoff,
-							returnText: current.returnText ?? 'Baton'
+							returnText: current.returnText ?? returnText
 						}
 			}
-		})
+		}
+		let queue = new DelegationQueue(deps)
 
 		queue.enqueue(persisted, job())
 		await queue.wake()
@@ -265,6 +278,12 @@ describe('delegation queue', () => {
 		await queue.wake()
 		expect(dispatches).toBe(1)
 		expect(persisted.list().jobs[0]).toMatchObject({ status: 'returning', returnCursor: 12 })
+
+		queue = new DelegationQueue(deps)
+		queue.resume([persisted])
+		await queue.wake()
+		expect(dispatches).toBe(1)
+		expect(persisted.list().jobs[0]).toMatchObject({ returnText, returnAttachment: handoff, returnCursor: 12 })
 
 		receipt = true
 		await queue.wake()

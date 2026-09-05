@@ -68,12 +68,12 @@ export function createReadChatTool(call: RelayCall): Tool {
 	return {
 		name: 'read_chat',
 		description:
-			'Read a bounded Conductor chat transcript by session_id, newest messages last. Pass a cursor from search_chats or a prior read_chat as near; before and after expand either direction or both together. For a [thinking] search hit, set include_thinking true to include the matching block. Without near, returns the trailing entries. Works for archived workspaces. Tool calls and failed tool output are summarised to one line each; prose is verbatim unless the output budget truncates it.',
+			'Read a bounded Conductor chat transcript by session_id, newest messages last. Pass a cursor from search_chats, a prior read_chat, or a delegation handoff as near; before and after expand either direction or both together. Set after to 0 when reading a completed delegation to keep later follow-ups out. For a [thinking] search hit, set include_thinking true to include the matching block. Without near, returns the trailing entries. Works for archived workspaces. Tool calls and failed tool output are summarised to one line each; prose is verbatim unless the output budget truncates it.',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				session_id: { type: 'string', description: 'From search_chats or list_chats.' },
-				near: { type: 'string', description: 'A cursor from search_chats or a prior read_chat.' },
+				session_id: { type: 'string', description: 'From search_chats, list_chats, or a delegation handoff.' },
+				near: { type: 'string', description: 'A cursor from search_chats, read_chat, or a delegation handoff.' },
 				before: { type: 'number', description: 'Entries before near to return (default 6, max 100).' },
 				after: { type: 'number', description: 'Entries after near to return (default 6, max 100).' },
 				limit: {
@@ -96,7 +96,7 @@ export function createReadChatTool(call: RelayCall): Tool {
 			const sessionId = need(args, 'session_id')
 			const near = str(args.near)
 			const anchor = near ? parseChatCursor(near) : null
-			if (near && anchor === null) throw new Error('near must be a cursor returned by search_chats')
+			if (near && anchor === null) throw new Error('near must be a chat cursor')
 			const count = (value: unknown, fallback: number) => Math.min(100, Math.max(0, Math.floor(num(value) ?? fallback)))
 			const before = count(args.before, 6)
 			const after = count(args.after, 6)

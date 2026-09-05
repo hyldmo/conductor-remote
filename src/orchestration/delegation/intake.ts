@@ -84,9 +84,12 @@ export function acceptDelegation(
 	if (resolved.role.agentType === parent.agent_type) {
 		return refused('same_provider', `Role ${roleName} uses the parent's ${parent.agent_type} provider.`)
 	}
-	if (body.throughRowid !== undefined && !transcriptThrough(deps.getMessages(parentSessionId), body.throughRowid)) {
+	const entries = deps.getMessages(parentSessionId)
+	if (body.throughRowid !== undefined && !transcriptThrough(entries, body.throughRowid)) {
 		return refused('invalid_request', 'throughRowid is not in the parent chat')
 	}
+	// Freeze the default cut when the task is accepted, before UI queue delays or later parent turns.
+	const throughRowid = body.throughRowid ?? entries.at(-1)?.rowid
 	const now = Date.now()
 	const job: PersistedDelegation = {
 		version: 1,
@@ -98,7 +101,7 @@ export function acceptDelegation(
 		prompt,
 		returnMode: body.returnMode ?? 'queue',
 		includeThinking: body.includeThinking ?? false,
-		...(body.throughRowid === undefined ? {} : { throughRowid: body.throughRowid }),
+		...(throughRowid === undefined ? {} : { throughRowid }),
 		status: 'queued',
 		attempts: 0,
 		createdAt: now,

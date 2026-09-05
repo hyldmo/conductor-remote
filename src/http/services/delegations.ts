@@ -2,6 +2,7 @@ import { writeAttachment } from '../../files/attachments.ts'
 
 import { delegatedPrompt } from '../../orchestration/delegation/prompt.ts'
 import { DelegationQueue } from '../../orchestration/delegation/queue.ts'
+import { delegationReturnAttachment, delegationReturnText } from '../../orchestration/delegation/return.ts'
 import type {
 	DelegationActionError,
 	DelegationDelivery,
@@ -233,14 +234,14 @@ export function createDelegationsServices(
 				outcome: {
 					kind: 'error' as const,
 					error: 'the delegated agent stopped with an error',
-					...(last ? { assistantRowid: last.rowid, text: last.text.trim() } : {})
+					...(last ? { assistantRowid: last.rowid, text: last.text } : {})
 				},
 				...(last ? { completionRowid: last.rowid } : {})
 			}
 		}
 		if (child.status !== 'idle' || child.background_tasks.length || !last) return null
 		return {
-			outcome: { kind: 'success' as const, assistantRowid: last.rowid, text: last.text.trim() },
+			outcome: { kind: 'success' as const, assistantRowid: last.rowid, text: last.text },
 			completionRowid: last.rowid
 		}
 	}
@@ -249,37 +250,6 @@ export function createDelegationsServices(
 	function batonText(text: string): string {
 		const match = /^## Baton\b/im.exec(text)
 		return match ? text.slice(match.index).trim() : text.trim()
-	}
-
-	function delegationReturnAttachment(job: PersistedDelegation, ws: Workspace): Attachment {
-		if (!ws.worktree || !job.childSessionId || job.sentRowid === undefined)
-			throw new Error('return state is incomplete')
-		const rendered = renderTranscript(reads.getMessages(job.childSessionId, job.sentRowid).entries, {
-			thinking: true,
-			tools: false
-		})
-		const outcomeText = job.outcome
-			? job.outcome.kind === 'success'
-				? job.outcome.text
-				: (job.outcome.text ?? job.outcome.error)
-			: '(no transcript prose)'
-		const body = [
-			`# Delegated ${job.role} result`,
-			'',
-			`Delegation: ${job.id}`,
-			`Child chat: ${job.childSessionId}`,
-			'',
-			rendered.text || outcomeText
-		].join('\n')
-		return wireAttachment(writeAttachment(ws.worktree, `Delegated ${job.role} result.md`, body))
-	}
-
-	function delegationReturnText(job: PersistedDelegation, attachment: Attachment): string {
-		if (!job.outcome) throw new Error('the delegated outcome is missing')
-		const result =
-			job.outcome.kind === 'success' ? batonText(job.outcome.text) : batonText(job.outcome.text ?? job.outcome.error)
-		const verb = job.outcome.kind === 'success' ? 'completed' : 'failed'
-		return [`Delegated ${job.role} task ${job.id} ${verb}.`, '', result, '', attachment.token].join('\n')
 	}
 
 	async function returnDelegation(job: PersistedDelegation) {
@@ -307,7 +277,12 @@ export function createDelegationsServices(
 		let attachment: Attachment
 		let text: string
 		try {
-			attachment = job.returnAttachment ?? delegationReturnAttachment(job, ws)
+			if (job.returnAttachment) {
+				attachment = job.returnAttachment
+			} else {
+				if (!ws.worktree) throw new Error('worktree path unresolved')
+				attachment = delegationReturnAttachment(job, ws.worktree)
+			}
 			text = job.returnText ?? delegationReturnText(job, attachment)
 		} catch (err) {
 			return delegationError('return_failed', err instanceof Error ? err.message : String(err), false)

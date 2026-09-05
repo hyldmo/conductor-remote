@@ -91,7 +91,9 @@ src/                     Node relay; source runs as .ts, npm ships emitted dist-
       intake.ts          validate ordinary-chat tasks and Workflow ownership before persistence
       queue.ts           one ordinary-job producer, retries and stable completion observations
       store.ts, codec.ts worktree-local JSON job/session-role storage and strict decoding
-      prompt.ts, types.ts focused child assignment and queue adapter contracts
+      prompt.ts          child assignment with the frozen parent chat reference
+      return.ts          saved final-answer report and completion notice
+      types.ts           queue adapter contracts
   agents/                agent-config.ts: model receipt before effort/Fast; model-cache.ts:
                          observed picker labels; roles.ts: strict global roles.json;
                          conductor-settings.ts: surgical new-chat defaults in settings.toml
@@ -272,7 +274,17 @@ from launching a Workflow. Its task and output format come from the configured p
 and assignment; the relay does not infer editing permissions from the role's name or
 impose a Baton format. The shipped role preambles request Batons, and custom roles may
 request other formats. `list_roles` exposes those instructions alongside all set controls.
-Before sending either the task or its Baton, the queue saves its transcript cursor and
+The parent transcript cut is frozen at intake. Helpers receive the parent session id and
+cursor with `read_chat` guidance, and put the complete result in their final reply. The
+queue freezes that reply as its outcome; `src/orchestration/delegation/return.ts` builds the report from
+those saved bytes, preserving custom formats and all sections before a Baton. It never
+rescans the child transcript during return, so reasoning, interim prose, and later replies
+cannot enter the report. Failed tasks carry their reason and label any last reply as partial.
+The parent receives a short completion notice with one report attachment and a child
+`read_chat` reference ending at the saved answer. Earlier investigation can be retrieved
+when needed. The notice carries no copy of the result. Parent transcript attachments
+remain part of the assignment; only return attachments become final-answer reports.
+Before sending either the task or its completion notice, the queue saves its transcript cursor and
 existing outbox ids. Acceptance stores the new message id; `sending`/`returning` then
 poll that id until Conductor promotes it to a transcript row. An accepted outbox item
 must never spend a failure attempt or trigger another send merely because it has no
@@ -280,7 +292,8 @@ rowid yet. The saved baseline also recovers acceptance after a retry/restart tha
 the receipt write, while excluding older identical queued messages. A cancelled accepted
 id fails without resending. Legacy queued returns with no visible DB receipt retain their
 poll-only behavior. Opening/configuration still have at-least-once restart semantics;
-managed jobs keep the coordinator's stronger effect reconciliation.
+managed jobs keep the coordinator's stronger effect reconciliation and phase Batons.
+Returns already queued before an upgrade retain their exact saved text for receipt matching.
 
 Role validation and the role editor share `currentModelCatalog`: each provider's labels
 come from the newest complete menu containing that provider. The observing chat's harness
