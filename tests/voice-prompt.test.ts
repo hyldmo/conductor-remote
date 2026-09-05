@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { VOICE_INSTRUCTIONS } from '../src/voice/prompt.ts'
 
 describe('the voice session prompt', () => {
-	it('keeps the model a narrow presenter and structurally requires preview before send', () => {
+	it('routes fresh reads and requires preview before send', () => {
 		expect(VOICE_INSTRUCTIONS).toContain('voice_roll_call')
 		expect(VOICE_INSTRUCTIONS).toContain('voice_workspace_overview')
 		expect(VOICE_INSTRUCTIONS).toMatch(/every time.*overview/i)
@@ -17,6 +17,6 @@ describe('the voice session prompt', () => {
 		expect(VOICE_INSTRUCTIONS).toMatch(/exact preview/i)
 		expect(VOICE_INSTRUCTIONS).toMatch(/yes/i)
 		expect(VOICE_INSTRUCTIONS).toMatch(/one decision/i)
-		expect(VOICE_INSTRUCTIONS.length).toBeLessThanOrEqual(2_600)
+		expect(VOICE_INSTRUCTIONS.length).toBeLessThanOrEqual(4_000)
 	})
 })

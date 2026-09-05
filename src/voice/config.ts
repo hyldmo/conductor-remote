@@ -14,6 +14,19 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from '../config.ts'
 
+export const VOICE_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const
+export type VoiceReasoningEffort = (typeof VOICE_REASONING_EFFORTS)[number]
+export const DEFAULT_VOICE_REASONING_EFFORT: VoiceReasoningEffort = 'medium'
+
+function isVoiceReasoningEffort(value: unknown): value is VoiceReasoningEffort {
+	return typeof value === 'string' && (VOICE_REASONING_EFFORTS as readonly string[]).includes(value)
+}
+
+/** Older non-reasoning voice models remain selectable through voice.model. */
+export function voiceReasoning(model: string, effort = DEFAULT_VOICE_REASONING_EFFORT) {
+	return /^gpt-realtime-2(?:[.-]|$)/.test(model) ? { reasoning: { effort } } : {}
+}
+
 /** The listener's loopback port. Non-secret, so it may ride the plist like its siblings. */
 export function voicePort(): number {
 	const raw = Number(process.env.VOICE_PORT)
@@ -40,6 +53,7 @@ export interface VoiceConfig {
 	/** Public mount, e.g. `https://mac.example.ts.net/voice`. */
 	publicBaseUrl: string | null
 	model: string
+	reasoningEffort: VoiceReasoningEffort
 	voice: string
 	sipHost: string
 }
@@ -57,6 +71,7 @@ const EMPTY: Omit<VoiceConfig, 'mcpToken' | 'trunkSecret'> = {
 	projectId: null,
 	publicBaseUrl: null,
 	model: 'gpt-realtime-2.1',
+	reasoningEffort: DEFAULT_VOICE_REASONING_EFFORT,
 	voice: 'marin',
 	sipHost: 'sip.api.openai.com'
 }
@@ -109,6 +124,7 @@ export function readVoiceConfig(file: string = voiceConfigPath()): VoiceConfig {
 		projectId: asStringOrNull(raw.projectId),
 		publicBaseUrl: normalizedPublicUrl(asStringOrNull(raw.publicBaseUrl)),
 		model: asStringOrNull(raw.model) ?? EMPTY.model,
+		reasoningEffort: isVoiceReasoningEffort(raw.reasoningEffort) ? raw.reasoningEffort : EMPTY.reasoningEffort,
 		voice: asStringOrNull(raw.voice) ?? EMPTY.voice,
 		sipHost: asStringOrNull(raw.sipHost) ?? EMPTY.sipHost
 	}
@@ -137,6 +153,7 @@ export const VOICE_SETTING_NAMES = [
 	'voice.project-id',
 	'voice.public-url',
 	'voice.model',
+	'voice.reasoning-effort',
 	'voice.voice',
 	'voice.sip-host'
 ] as const
@@ -180,6 +197,11 @@ export function setVoiceSetting(name: string, value: string, file: string = voic
 		case 'voice.model':
 			if (!nullable) throw new Error('voice.model cannot be unset')
 			config.model = nullable
+			break
+		case 'voice.reasoning-effort':
+			if (!isVoiceReasoningEffort(nullable))
+				throw new Error(`voice.reasoning-effort must be one of ${VOICE_REASONING_EFFORTS.join(', ')}`)
+			config.reasoningEffort = nullable
 			break
 		case 'voice.voice':
 			if (!nullable) throw new Error('voice.voice cannot be unset')

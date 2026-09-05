@@ -363,6 +363,7 @@ const voiceBroker = voiceConfig.openaiKey
 			apiKey: voiceConfig.openaiKey,
 			apiOrigin: openAIOriginForSipHost(voiceConfig.sipHost),
 			model: voiceConfig.model,
+			reasoningEffort: voiceConfig.reasoningEffort,
 			voice: voiceConfig.voice,
 			mcpUrl: voiceConfig.publicBaseUrl ? `${voiceConfig.publicBaseUrl}/mcp` : null,
 			mcpToken: voiceConfig.mcpToken,
@@ -2969,6 +2970,7 @@ const server = http.createServer(async (req, res) => {
 						body.sdp,
 						{
 							model: voiceConfig.model,
+							reasoningEffort: voiceConfig.reasoningEffort,
 							voice: body.voice as OpenAIRealtimeVoice,
 							language: body.language as VoiceLanguage,
 							context

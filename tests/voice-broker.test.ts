@@ -82,6 +82,7 @@ function setup(apiOrigin = 'https://api.openai.com') {
 		apiKey: 'sk-test-secret',
 		apiOrigin,
 		model: 'gpt-realtime-2.1-mini',
+		reasoningEffort: 'low',
 		voice: 'marin',
 		mcpUrl: 'https://mac.example/voice/mcp',
 		mcpToken: 'voice-only-token',
@@ -108,10 +109,10 @@ function setup(apiOrigin = 'https://api.openai.com') {
 }
 
 describe('the call accept payload', () => {
-	it('uses the current mini model and exposes only the scoped MCP tools', () => {
+	it('uses medium reasoning on GPT-Realtime-2.1 and exposes only the scoped MCP tools', () => {
 		const body = buildAcceptBody({
 			callId: 'rtc_1',
-			model: 'gpt-realtime-2.1-mini',
+			model: 'gpt-realtime-2.1',
 			voice: 'marin',
 			mcpUrl: 'https://mac.example/voice/mcp',
 			mcpToken: 'voice-only-token',
@@ -119,7 +120,8 @@ describe('the call accept payload', () => {
 		})
 		expect(body).toMatchObject({
 			type: 'realtime',
-			model: 'gpt-realtime-2.1-mini',
+			model: 'gpt-realtime-2.1',
+			reasoning: { effort: 'medium' },
 			instructions: VOICE_INSTRUCTIONS,
 			audio: { output: { voice: 'marin' } },
 			tools: [
@@ -190,6 +192,7 @@ describe('VoiceBroker', () => {
 	it('accepts, persists, and opens the authenticated observer socket', async () => {
 		const { broker, sockets, socketFactory, fetcher } = setup()
 		await broker.accept('rtc_1')
+		expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ reasoning: { effort: 'low' } })
 		expect(fetcher).toHaveBeenCalledWith(
 			'https://api.openai.com/v1/realtime/calls/rtc_1/accept',
 			expect.objectContaining({
