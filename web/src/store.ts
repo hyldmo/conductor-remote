@@ -11,6 +11,7 @@ import {
 	setLocalDraftContent,
 	setLocalReadMark
 } from './lib/prefs.ts'
+import { type CompactDraft, loadCompactDrafts, writeCompactDrafts } from './lib/prompts/compact-draft.ts'
 import {
 	loadPending,
 	loadWorkflowClientAttempts,
@@ -138,6 +139,8 @@ interface AppState {
 	workflowClientAttempts: Record<string, WorkflowClientAttempt>
 	/** Device-local Workflow choices, preserved across tab switches and page reloads. */
 	workflowDrafts: Record<string, true>
+	/** Device-local choices to compact on the next send, scoped to the source chat. */
+	compactDrafts: Record<string, CompactDraft>
 	/** Unsent composer text per chat, mirrored to localStorage (see lib/prompts/draft.ts). */
 	drafts: Record<string, string>
 	/** Ready host-side files carried atomically with each composer draft. */
@@ -199,8 +202,10 @@ interface AppState {
 	/** Forget an attempt only after the relay returned its authoritative mutation response. */
 	finishWorkflowAttempt: (key: string, clientId: string) => void
 	setWorkflowDraft: (sessionId: string, active: boolean) => void
+	setCompactDraft: (sessionId: string, format: CompactDraft | null) => void
 	setDraft: (chatId: string, text: string) => void
 	addDraftAttachment: (chatId: string, attachment: DraftAttachment) => void
+	setDraftContent: (chatId: string, text: string, attachments: DraftAttachment[]) => void
 	removeDraftAttachment: (chatId: string, path: string) => void
 	/** Clear sent text and files together while preserving agent choices still being applied. */
 	clearDraftContent: (chatId: string) => void
@@ -242,6 +247,7 @@ export const useApp = create<AppState>((set, get) => {
 		pending: loadPending(),
 		workflowClientAttempts: loadWorkflowClientAttempts(),
 		workflowDrafts: loadWorkflowDrafts(),
+		compactDrafts: loadCompactDrafts(),
 		drafts: initialPrefs.drafts,
 		draftAttachments: initialPrefs.draftAttachments,
 		agentDrafts: initialPrefs.agentDrafts,
@@ -316,6 +322,13 @@ export const useApp = create<AppState>((set, get) => {
 			writeWorkflowDrafts(next)
 			set({ workflowDrafts: next })
 		},
+		setCompactDraft: (sessionId, format) => {
+			const next = { ...get().compactDrafts }
+			if (format) next[sessionId] = { ...format }
+			else delete next[sessionId]
+			writeCompactDrafts(next)
+			set({ compactDrafts: next })
+		},
 		setDraft: (chatId, text) => {
 			const saved = setLocalDraft(chatId, text, get().agentDrafts[chatId] ?? {})
 			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })
@@ -338,10 +351,11 @@ export const useApp = create<AppState>((set, get) => {
 			const saved = setLocalAttachments(chatId, next, get().drafts[chatId] ?? '', get().agentDrafts[chatId] ?? {})
 			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })
 		},
-		clearDraftContent: chatId => {
-			const saved = setLocalDraftContent(chatId, '', get().agentDrafts[chatId] ?? {}, [])
+		setDraftContent: (chatId, text, attachments) => {
+			const saved = setLocalDraftContent(chatId, text, get().agentDrafts[chatId] ?? {}, attachments)
 			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts, draftAttachments: saved.draftAttachments })
 		},
+		clearDraftContent: chatId => get().setDraftContent(chatId, '', []),
 		moveDraft: (fromId, toId) => {
 			const drafts = get().drafts
 			const text = drafts[fromId]

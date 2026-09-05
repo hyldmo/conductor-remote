@@ -33,8 +33,84 @@ const attachment = {
 	bytes: 42,
 	token: '@⟦diagram.png⟧(.context%2Fattachments%2Fabc123%2Fdiagram.png)'
 }
+const forkToken = '@⟦Transcript of prior chat.md⟧(.context%2Fattachments%2Fdef456%2FTranscript%20of%20prior%20chat.md)'
 
 describe('local-first preference sync', () => {
+	test.each(['', 'Continue from here'])('upgrades a saved fork draft while preserving its user text: %j', text => {
+		const storage = new MemoryStorage()
+		const prefs = new LocalPrefs(storage)
+		const legacy = `Forked from ${forkToken}\n\n${text ? `\n${text}` : ''}`
+		prefs.setContent('chat', legacy, { effort: 'high' }, [attachment])
+		const reloaded = new LocalPrefs(storage)
+		const draft = reloaded.snapshot().drafts.chat
+		expect(draft.text).toBe(text)
+		expect(draft.agent).toEqual({ effort: 'high' })
+		expect(draft.attachments).toEqual([
+			attachment,
+			{
+				name: 'Transcript of prior chat.md',
+				path: '.context/attachments/def456/Transcript of prior chat.md',
+				bytes: 0,
+				token: forkToken,
+				source: 'fork'
+			}
+		])
+		expect(new LocalPrefs(storage).snapshot().drafts.chat).toEqual(draft)
+	})
+
+	test('upgrades a legacy fork from another device and uploads the separate context', () => {
+		const prefs = new LocalPrefs(new MemoryStorage())
+		const merged = prefs.merge(
+			remote({
+				drafts: {
+					chat: {
+						text: `Forked from ${forkToken}\n\nA tangent`,
+						agent: {},
+						attachments: [],
+						updatedAt: 10,
+						deleted: false
+					}
+				}
+			}),
+			null
+		)
+		expect(merged.needsUpload).toBe(true)
+		expect(merged.state.drafts.chat).toBe('A tangent')
+		expect(merged.state.draftAttachments.chat).toMatchObject([{ token: forkToken, source: 'fork' }])
+		expect(prefs.snapshot().drafts.chat.updatedAt).toBeGreaterThan(10)
+	})
+
+	test.each([
+		`Discuss: Forked from ${forkToken}\n\n`,
+		`Forked from ${attachment.token}\n\n`,
+		`Forked from ${forkToken} is an example`,
+		'Forked from @⟦Transcript of missing.md⟧(invalid)\n\n'
+	])('keeps user-authored text that does not match a generated fork: %j', text => {
+		const storage = new MemoryStorage()
+		new LocalPrefs(storage).setDraft('chat', text, {})
+		const reloaded = new LocalPrefs(storage).project()
+		expect(reloaded.drafts.chat).toBe(text)
+		expect(reloaded.draftAttachments.chat).toBeUndefined()
+	})
+
+	test('keeps fork context hidden through reload, device sync, and moving a workspace draft into its chat', () => {
+		const storage = new MemoryStorage()
+		const prefs = new LocalPrefs(storage)
+		const context = { ...attachment, source: 'fork' as const }
+		prefs.setContent('workspace', '', {}, [context])
+		const reloaded = new LocalPrefs(storage)
+		expect(reloaded.project().draftAttachments.workspace).toEqual([context])
+		reloaded.moveDraft('workspace', 'chat')
+		reloaded.setDraft('chat', 'Use this context', {})
+		const secondDevice = new LocalPrefs(new MemoryStorage())
+		const merged = secondDevice.merge(reloaded.snapshot(), null)
+		expect(merged.state.drafts).toEqual({ chat: 'Use this context' })
+		expect(merged.state.draftAttachments).toEqual({ chat: [context] })
+		secondDevice.setContent('chat', '', {}, [])
+		expect(secondDevice.snapshot().drafts.chat.deleted).toBe(true)
+		expect(secondDevice.project().draftAttachments).toEqual({})
+	})
+
 	test('migrates the legacy text and agent keys without inventing a recent revision', () => {
 		const storage = new MemoryStorage()
 		storage.setItem('conductor-remote-draft:chat', 'finish this')

@@ -18,6 +18,8 @@ export interface DraftAttachment {
 	path: string
 	bytes: number
 	token: string
+	/** Fork context stays outside the composer and travels with the next user message. */
+	source?: 'fork'
 	/** Present only while a New Workspace file is waiting outside its future worktree. */
 	stageId?: string
 }
@@ -103,7 +105,8 @@ function sanitizeAttachment(raw: unknown): DraftAttachment | null {
 		token.length > MAX_ATTACHMENT_TOKEN_LENGTH ||
 		!Number.isSafeInteger(bytes) ||
 		bytes < 0 ||
-		bytes > MAX_ATTACHMENT_BYTES
+		// Forks reference an already-written transcript, which can exceed the upload limit.
+		(bytes > MAX_ATTACHMENT_BYTES && value.source !== 'fork')
 	)
 		return null
 	const match = attachmentPath.match(/^\.context\/attachments\/([A-Za-z0-9]{6})\/([^/]+)$/)
@@ -111,7 +114,14 @@ function sanitizeAttachment(raw: unknown): DraftAttachment | null {
 		return null
 	const stageId = value.stageId
 	if (stageId !== undefined && (typeof stageId !== 'string' || stageId !== match[1])) return null
-	return { name, path: attachmentPath, bytes, token, ...(stageId ? { stageId } : {}) }
+	return {
+		name,
+		path: attachmentPath,
+		bytes,
+		token,
+		...(value.source === 'fork' ? { source: 'fork' as const } : {}),
+		...(stageId ? { stageId } : {})
+	}
 }
 
 function sanitizeAttachments(raw: unknown): DraftAttachment[] {
@@ -179,6 +189,7 @@ function sameDraft(a: SyncedDraft, b: SyncedDraft): boolean {
 				attachment.path === other.path &&
 				attachment.bytes === other.bytes &&
 				attachment.token === other.token &&
+				attachment.source === other.source &&
 				attachment.stageId === other.stageId
 			)
 		}) &&

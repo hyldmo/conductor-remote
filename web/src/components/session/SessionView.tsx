@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useClearChatNotification } from '../../hooks/push.ts'
 import { useDiff, useFileDiff, useWorkspaceFiles } from '../../hooks/review.ts'
+import { useSendPrompt } from '../../hooks/send.ts'
 import { useWorkspaceCommands } from '../../hooks/workspace-commands.ts'
 import { useAnyWorkspace, useSessions, useWorkspaces } from '../../hooks/workspaces.ts'
 import { ApiError, client } from '../../lib/api.ts'
@@ -11,6 +12,7 @@ import type { DiffFileScope } from '../../lib/diff.ts'
 import { buildResolver, MentionResolverProvider } from '../../lib/fileMentions.ts'
 import { shortModel, timestampMs, workspaceStatus, workspaceTitle } from '../../lib/format.ts'
 import { isLockedError } from '../../lib/lock.ts'
+import { sameCompactDraft } from '../../lib/prompts/compact-draft.ts'
 import { type PromptIndicatorState, promptIndicator } from '../../lib/prompts/pending.ts'
 import { conversationTabs, latestChat, previousChats } from '../../lib/transcript/history.ts'
 import type { WorkflowRoleName } from '../../lib/types.ts'
@@ -29,7 +31,7 @@ import { useWorkspaceActions, WorkspaceMenu } from '../workspaces/WorkspaceMenu.
 import { ArchivedChat } from './ArchivedChat.tsx'
 import { ClosedTabsSheet } from './ClosedTabsSheet.tsx'
 import { Composer } from './Composer.tsx'
-import { type ChatHistoryRetry, handoffChat, joinChatHistory } from './chat-handoff.ts'
+import { type ChatHistoryRetry, handoffChat, joinChatHistory, sendHandoffDraft } from './chat-handoff.ts'
 import { DiffButton, DiffPanel, MobileDiffNavigator } from './DiffPanel.tsx'
 import { SubagentReplyNotice } from './SessionNotices.tsx'
 import { SessionTabs, TabCloseNotice } from './SessionTabs.tsx'
@@ -69,6 +71,7 @@ export function SessionView() {
 	const [closeError, setCloseError] = useState<string | null>(null)
 	const [closeRetryId, setCloseRetryId] = useState<string | null>(null)
 	const [compactingChat, setCompactingChat] = useState<string | null>(null)
+	const [compactTarget, setCompactTarget] = useState<string | null>(null)
 	const compactInFlight = useRef(false)
 	const [historyError, setHistoryError] = useState<ChatHistoryRetry | null>(null)
 	const [joiningHistory, setJoiningHistory] = useState(false)
@@ -80,6 +83,7 @@ export function SessionView() {
 		title: string | null
 	} | null>(null)
 	const queryClient = useQueryClient()
+	const sendPrompt = useSendPrompt()
 	const navigate = useNavigate()
 	const workspaceActions = useWorkspaceActions(workspaceId)
 	const { data, isLoading } = useWorkspaces()
@@ -329,12 +333,15 @@ export function SessionView() {
 
 	// Compact keeps Fork's context handoff and joins the real chats only in our UI.
 	const forkChat = async (format: SplitFormat, continuation?: string, replace = false) => {
-		if (!sessionId) return
+		if (!sessionId) throw new Error('No active chat')
 		const result = await handoffChat({ sessionId, workspaceId: ws.id }, format, {
 			replace,
 			continuation,
+			onPrepared: split => {
+				if (replace) setCompactTarget(split.sessionId)
+			},
 			onReady: async split => {
-				if (split.sessionId) setFocusComposerFor(split.sessionId)
+				if (split.sessionId && !replace) setFocusComposerFor(split.sessionId)
 				if (split.destination === 'workspace') {
 					await queryClient.invalidateQueries({ queryKey: ['state'] })
 					navigate(
@@ -344,13 +351,14 @@ export function SessionView() {
 					)
 					return
 				}
-				await queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
 				if (split.sessionId) pickSession(split.sessionId)
+				void queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
 			}
 		})
 		if (replace) {
 			setHistoryError(result.historyError ?? null)
 		}
+		return result.split
 	}
 	const retryHistory = async () => {
 		if (!historyError || joiningHistory) return
@@ -376,16 +384,25 @@ export function SessionView() {
 					: compactingChat || closingChat
 						? 'A tab action is already in progress'
 						: undefined
-	const compactChat = async (format: SplitFormat) => {
+	const stageCompact = async (format: SplitFormat) => {
+		if (!sessionId) return
+		const state = useApp.getState()
+		state.setCompactDraft(sessionId, sameCompactDraft(state.compactDrafts[sessionId], format) ? null : format)
+	}
+	const compactChat = async (queue: boolean) => {
 		if (!sessionId || compactInFlight.current) return
 		if (compactUnavailable) throw new Error(compactUnavailable)
+		const format = useApp.getState().compactDrafts[sessionId]
+		if (!format) throw new Error('Choose Compact before sending')
 		compactInFlight.current = true
 		setCompactingChat(sessionId)
 		try {
-			await forkChat(format, undefined, true)
+			const split = await forkChat(format, undefined, true)
+			await sendHandoffDraft(split, queue, sendPrompt)
 		} finally {
 			compactInFlight.current = false
 			setCompactingChat(null)
+			setCompactTarget(null)
 		}
 	}
 	const closeDiff = () => {
@@ -615,8 +632,10 @@ export function SessionView() {
 								model={activeSession?.model}
 								selectedSubagentId={pickedSubagent}
 								queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
-								onFork={forkChat}
-								onCompact={compactChat}
+								onFork={async format => {
+									await forkChat(format)
+								}}
+								onCompact={stageCompact}
 								compactUnavailable={compactUnavailable}
 								onSelectSession={pickSession}
 								onSelectSubagent={pickSubagent}
@@ -651,7 +670,8 @@ export function SessionView() {
 							workspaceId={ws.id}
 							working={working}
 							actuator={actuator}
-							onCompact={() => compactChat({ thinking: true, tools: false })}
+							onCompact={compactChat}
+							preparingCompact={!!sessionId && (compactingChat === sessionId || compactTarget === sessionId)}
 							compactUnavailable={compactUnavailable}
 							onCall={canCall ? openCall : undefined}
 							callActive={voiceActive}

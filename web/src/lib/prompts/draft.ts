@@ -7,6 +7,9 @@
  * composer has to show it without waiting for a remount. The key can also be a
  * workspace id while the workspace has no chat yet.
  */
+import { attachmentToken, attachmentTokens } from '../../../../src/shared.ts'
+import type { DraftAttachment } from '../types.ts'
+
 export const DRAFT_PREFIX = 'conductor-remote-draft:'
 
 /**
@@ -18,3 +21,37 @@ export const DRAFT_PREFIX = 'conductor-remote-draft:'
  * are UUIDs, so this cannot collide with a chat's own draft.
  */
 export const NEW_WORKSPACE_DRAFT = 'new-workspace'
+
+/** Recover the generated handoff in a draft saved before forks used separate attachments. */
+export function legacyForkContent(
+	text: string,
+	attachments: DraftAttachment[]
+): { text: string; attachments: DraftAttachment[] } | null {
+	const prefix = 'Forked from '
+	if (!text.startsWith(prefix)) return null
+	const token = attachmentTokens(text)[0]
+	if (
+		!token ||
+		token.start !== prefix.length ||
+		!token.name.startsWith('Transcript of ') ||
+		text.slice(token.start, token.end) !== attachmentToken(token.name, token.path) ||
+		!text.slice(token.end).startsWith('\n\n')
+	)
+		return null
+	const existing = attachments.find(attachment => attachment.path === token.path)
+	return {
+		// The old handoff adds a third newline when it appends a continuation.
+		text: text.slice(token.end).replace(/^\n{2,3}/, ''),
+		attachments: [
+			...attachments.filter(attachment => attachment.path !== token.path),
+			{
+				name: token.name,
+				path: token.path,
+				// Legacy drafts stored only the reference; Conductor reads the actual file on send.
+				bytes: existing?.bytes ?? 0,
+				token: text.slice(token.start, token.end),
+				source: 'fork'
+			}
+		]
+	}
+}

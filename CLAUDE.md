@@ -1016,6 +1016,21 @@ Two asymmetric halves — keep them separate:
     attached these files. Read them before proceeding. - &lt;path&gt; (113.8 KB)"* ahead of the
     prompt, and read the file. The attachment token is the one canonical reference: a
     second prose path creates a duplicate link in Conductor's chat.
+  - **Fork context waits for the user's first send.** The PWA saves the transcript as a
+    draft attachment with `source: 'fork'`, outside the textarea and attachment tray.
+    That context alone cannot enable Send. The user's text or added files enable it,
+    and one ordinary prompt carries the context and request together. The persisted
+    pending bubble owns both through delivery and Retry; clearing the draft prevents
+    the context from riding on later messages. The marker survives preference sync,
+    reloads and the workspace-to-chat draft move. Existing `Forked from` drafts are
+    converted when local preferences load or restore from the host, keeping the user's
+    continuation. **Compact stages a choice until Send.** Both Compact controls toggle
+    the per-chat choice in `web/src/lib/prompts/compact-draft.ts`; the composer shows
+    a cancellable banner and leaves the current chat and draft in place. Send rechecks
+    eligibility, creates the new context with the selected format, and hands its draft
+    to the ordinary persisted send. Both source and destination composers stay guarded
+    while that handoff runs. A failed creation keeps the original draft and choice;
+    a failed delivery retries in the new chat without creating another fork.
   - **⌘T alone does not open the tab, and it fails by opening something else.** The
     keystroke lands wherever focus is, so a focused terminal panel takes it and you get a
     new *terminal* — measured: the run reported success, `sessions` gained nothing, and
