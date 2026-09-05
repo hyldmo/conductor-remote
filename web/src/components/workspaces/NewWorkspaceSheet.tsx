@@ -35,6 +35,8 @@ import { RepoAvatar } from '../ui.tsx'
 
 /** The "Send immediately" choice, remembered for next time — a preference, not state. */
 const SEND_NOW_KEY = 'conductor-remote-send-immediately'
+/** This is deliberately separate from the global Auto default: it affects only this form. */
+const NEW_WORKSPACE_AUTO_KEY = 'conductor-remote-new-workspace-auto'
 const NO_AGENT: AgentPatch = {}
 
 function loadSendNow(): boolean {
@@ -49,6 +51,21 @@ function loadSendNow(): boolean {
 function saveSendNow(on: boolean): void {
 	try {
 		localStorage.setItem(SEND_NOW_KEY, on ? 'on' : 'off')
+	} catch {}
+}
+
+function loadNewWorkspaceAuto(): boolean | undefined {
+	try {
+		const value = localStorage.getItem(NEW_WORKSPACE_AUTO_KEY)
+		return value === null ? undefined : value === 'on'
+	} catch {
+		return undefined
+	}
+}
+
+function saveNewWorkspaceAuto(on: boolean): void {
+	try {
+		localStorage.setItem(NEW_WORKSPACE_AUTO_KEY, on ? 'on' : 'off')
 	} catch {}
 }
 
@@ -109,8 +126,10 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const setPrompt = (text: string) => setDraft(NEW_WORKSPACE_DRAFT, text)
 	const agent = useApp(s => s.agentDrafts[NEW_WORKSPACE_DRAFT]) ?? NO_AGENT
 	const [workflowMode, setWorkflowMode] = useState(false)
-	const autoMode = !workflowMode && (agent.auto ?? autoConfig.data?.config.defaultAuto ?? false)
+	const [newWorkspaceAuto, setNewWorkspaceAuto] = useState(loadNewWorkspaceAuto)
+	const autoMode = !workflowMode && (agent.auto ?? newWorkspaceAuto ?? autoConfig.data?.config.defaultAuto ?? false)
 	const [pickerOpen, setPickerOpen] = useState(false)
+	const [modelPickerOpen, setModelPickerOpen] = useState(false)
 	const [sendNow, setSendNow] = useState(loadSendNow)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
@@ -183,6 +202,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const displayedEffort = workflowMode ? planningRole?.effort : (agent.effort ?? inheritedEffort)
 	const anyAgentChoice = Object.keys(agent).length > 0
 	const stageAgent = useCallback((patch: AgentPatch) => useApp.getState().stageAgent(NEW_WORKSPACE_DRAFT, patch), [])
+	const changeAuto = (active: boolean) => {
+		setNewWorkspaceAuto(active)
+		saveNewWorkspaceAuto(active)
+		stageAgent({ auto: active })
+	}
 
 	// A user can enable Plan on Claude and then pick another provider. Remove the
 	// now-hidden choice so workspace creation never carries an option Conductor
@@ -259,11 +283,12 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key !== 'Escape') return
 			if (pickerOpen) setPickerOpen(false)
+			else if (modelPickerOpen) setModelPickerOpen(false)
 			else close()
 		}
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
-	}, [close, pickerOpen])
+	}, [close, modelPickerOpen, pickerOpen])
 
 	// Portalled to <body> for the same reason as ConnectSheet/LogsSheet: the drawer <aside> it's
 	// opened from has a `transform`, which would make `fixed inset-0` mean "the drawer", not "the screen".
@@ -281,7 +306,14 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				</button>
 			</header>
 
-			<div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+			{/* ModelPicker opens upward from the composer. Keep this scroller from clipping it
+			    while its modal backdrop is up; scrolling is already unavailable in that state. */}
+			<div
+				className={cn(
+					'flex min-h-0 flex-1 flex-col gap-3 p-3',
+					modelPickerOpen ? 'overflow-visible' : 'overflow-y-auto'
+				)}
+			>
 				<div className="relative">
 					<button
 						type="button"
@@ -353,11 +385,13 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 					<div className="mt-1 flex items-start gap-1 px-1">
 						<AgentControls
 							auto={autoMode}
-							onAutoChange={!workflowMode ? active => stageAgent({ auto: active }) : undefined}
+							onAutoChange={!workflowMode ? changeAuto : undefined}
 							model={selectedModel ?? 'Model'}
 							providerModel={workflowMode ? (planningRole?.model ?? null) : selectedModel}
 							agentType={workflowMode && planningRole ? (modelAgentType(planningRole.model) ?? null) : null}
 							models={models}
+							modelPickerOpen={modelPickerOpen}
+							onModelPickerOpenChange={setModelPickerOpen}
 							modelsFetching={modelCatalog.isFetching}
 							modelsError={modelCatalog.isError}
 							defaultModel={defaultModel}
