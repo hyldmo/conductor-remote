@@ -186,6 +186,7 @@ export const routes = {
 	uploadAttachment: param('POST', '/api/sessions/:sessionId/attachments'),
 	/** Copy a chat into a fresh tab beside it, as a Conductor attachment (src/files/attachments.ts). */
 	splitChat: param('POST', '/api/sessions/:sessionId/split'),
+	joinChatHistory: param('POST', '/api/sessions/:sessionId/history'),
 	/** Lightweight tracked delegation from a chat outside an active Workflow. */
 	delegateTask: param('POST', '/api/sessions/:sessionId/delegate'),
 	/** Dismiss a prompt parked behind the lock screen (src/delivery/parked.ts). */

@@ -273,6 +273,28 @@ a semantic AX menu operation with coordinates plus private bundle internals. It
 is useful for diagnosis and as a manually enabled experiment; the AX path remains
 the safer shipping mechanism.
 
+### ✓ Compact keeps one conversation in the PWA
+The phone's Compact control appears only on the latest response and uses the same
+`splitChat` request and formats as Fork: Last message only, Concise, With reasoning,
+and Full transcript. Older responses retain Fork. The fresh agent still receives the selected attachment;
+the reader keeps the **entire old conversation inline**, above a horizontal
+"Context reset" divider. Repeated compactions stack these sections in order.
+
+`src/transcript/chat-history.ts` persists only predecessor links and the original
+tab title/order in `stateDir()/chat-history.json`. Messages are read from their
+original Conductor sessions, including hidden chats; nothing writes Conductor's DB.
+`GET /api/workspaces/:id/sessions` carries the links to every device, and the PWA
+groups the chain under its newest chat id. The composer, status and context meter
+use that newest session. Earlier sections load once into the same scroller, using
+the ordinary message renderer with reasoning/tool disclosures and copy/fork cuts.
+Archived workspaces retain the stitched view too.
+
+Both real Conductor tabs stay open. `web/src/components/session/chat-handoff.ts`
+moves the unsent draft, attachments and staged agent choices, then joins the chats
+through `POST /api/sessions/:id/history`. A failed join leaves both chats and the
+prepared draft available; Retry joins only the metadata, never forks again. No
+provider-history edits or native `/compact` command are involved.
+
 ### ✓ Closed chat restoration through the workspace deep link
 Source-verified in Conductor 0.84.2 (2026-09-05): the parser accepts
 `conductor://workspace?id=<workspace>&session=<chat>` and navigates with

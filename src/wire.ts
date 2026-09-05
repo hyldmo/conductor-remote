@@ -574,8 +574,17 @@ export interface WorkspaceResponse {
 /** GET /api/workspaces/:id/sessions */
 export interface SessionsResponse {
 	sessions: SessionRow[]
+	/** Compact joins real Conductor chats into one tab in the PWA. Keyed by successor id. */
+	chat_history?: Record<string, ChatHistoryLink>
 	/** Worktree-owned role identity for chips/tool output. */
 	session_roles?: Record<string, SessionRoleAssignment>
+}
+
+export interface ChatHistoryLink {
+	previousSessionId: string
+	/** Keep the original conversation's label and position as new contexts are added. */
+	title: string
+	createdAt: string
 }
 
 /** GET /api/workspaces/:id/sessions/closed — fetched only while the picker is open. */

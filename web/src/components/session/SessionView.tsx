@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Workflow, X } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useClearChatNotification } from '../../hooks/push.ts'
 import { useDiff, useFileDiff, useWorkspaceFiles } from '../../hooks/review.ts'
@@ -12,6 +12,7 @@ import { buildResolver, MentionResolverProvider } from '../../lib/fileMentions.t
 import { shortModel, timestampMs, workspaceStatus, workspaceTitle } from '../../lib/format.ts'
 import { isLockedError } from '../../lib/lock.ts'
 import { type PromptIndicatorState, promptIndicator } from '../../lib/prompts/pending.ts'
+import { conversationTabs, latestChat, previousChats } from '../../lib/transcript/history.ts'
 import type { WorkflowRoleName } from '../../lib/types.ts'
 import { useApp, WORKING_HINT_MS } from '../../store.ts'
 import { ContextBreakdownSheet } from '../agents/ContextBreakdownSheet.tsx'
@@ -28,6 +29,7 @@ import { useWorkspaceActions, WorkspaceMenu } from '../workspaces/WorkspaceMenu.
 import { ArchivedChat } from './ArchivedChat.tsx'
 import { ClosedTabsSheet } from './ClosedTabsSheet.tsx'
 import { Composer } from './Composer.tsx'
+import { type ChatHistoryRetry, handoffChat, joinChatHistory } from './chat-handoff.ts'
 import { DiffButton, DiffPanel, MobileDiffNavigator } from './DiffPanel.tsx'
 import { SubagentReplyNotice } from './SessionNotices.tsx'
 import { SessionTabs, TabCloseNotice } from './SessionTabs.tsx'
@@ -65,6 +67,11 @@ export function SessionView() {
 	const [closingChat, setClosingChat] = useState<string | null>(null)
 	const [confirmingClose, setConfirmingClose] = useState<string | null>(null)
 	const [closeError, setCloseError] = useState<string | null>(null)
+	const [closeRetryId, setCloseRetryId] = useState<string | null>(null)
+	const [compactingChat, setCompactingChat] = useState<string | null>(null)
+	const compactInFlight = useRef(false)
+	const [historyError, setHistoryError] = useState<ChatHistoryRetry | null>(null)
+	const [joiningHistory, setJoiningHistory] = useState(false)
 	const [closedTabsFor, setClosedTabsFor] = useState<string | null>(null)
 	const [focusComposerFor, setFocusComposerFor] = useState<string | null>(null)
 	const [contextSession, setContextSession] = useState<{
@@ -94,7 +101,6 @@ export function SessionView() {
 	const pending = useApp(s => s.pending)
 	const readMarks = useApp(s => s.readMarks)
 	const markRead = useApp(s => s.markRead)
-	const setDraft = useApp(s => s.setDraft)
 	const online = useApp(s => s.online)
 	const showFolders = useApp(s => s.view.showFolders)
 	const setView = useApp(s => s.setView)
@@ -121,18 +127,21 @@ export function SessionView() {
 		[worktree, files]
 	)
 
-	const sessions = sessionsData?.sessions ?? []
-	const visibleActiveSession =
-		ws?.active_session_id && sessions.some(s => s.id === ws.active_session_id) ? ws.active_session_id : null
+	const chatHistory = sessionsData?.chat_history ?? {}
+	const sessions = conversationTabs(sessionsData?.sessions ?? [], chatHistory)
+	const pickedChat = latestChat(pickedSession, chatHistory)
+	const desktopChat = latestChat(ws?.active_session_id ?? null, chatHistory)
+	const visibleActiveSession = desktopChat && sessions.some(s => s.id === desktopChat) ? desktopChat : null
 	const sessionId =
 		// A named chat that isn't here — hidden, or a stale link from an old notification —
 		// falls through to the usual pick rather than showing an empty pane. Switching
 		// workspace drops the parameter with the rest of the URL, so no pick outlives it.
-		(pickedSession && sessions.some(s => s.id === pickedSession) ? pickedSession : null) ??
+		(pickedChat && sessions.some(s => s.id === pickedChat) ? pickedChat : null) ??
 		visibleActiveSession ??
 		sessions[0]?.id ??
 		null
 	const activeSession = sessions.find(s => s.id === sessionId)
+	const historySessionIds = previousChats(sessionId, chatHistory)
 	const pickSubagent = (toolUseId: string | null) => {
 		if (!sessionId) return
 		setSearchParams(toolUseId ? { session: sessionId, subagent: toolUseId } : { session: sessionId }, { replace: true })
@@ -288,6 +297,7 @@ export function SessionView() {
 		setClosingChat(id)
 		setConfirmingClose(null)
 		setCloseError(null)
+		setCloseRetryId(null)
 		try {
 			const result = await client.closeChat(id, ws.id, closeRunning)
 			if (!result.ok) throw new Error(result.error ?? 'Could not close this chat')
@@ -310,37 +320,73 @@ export function SessionView() {
 				setConfirmingClose(id)
 			} else {
 				setCloseError(error instanceof Error ? error.message : 'Could not close this chat')
+				setCloseRetryId(id)
 			}
 		} finally {
 			setClosingChat(null)
 		}
 	}
 
-	// The relay writes the transcript and opens the selected destination. Its returned
-	// text contains Conductor's attachment token, which belongs in the new composer
-	// until the user adds the question that starts the fork.
-	const forkChat = async (
-		{ thinking, tools, through, only, destination = 'chat' }: SplitFormat,
-		continuation?: string
-	) => {
+	// Compact keeps Fork's context handoff and joins the real chats only in our UI.
+	const forkChat = async (format: SplitFormat, continuation?: string, replace = false) => {
 		if (!sessionId) return
-		const split = await client.splitChat(sessionId, ws.id, thinking, tools, through, only, destination)
-		if (!split.ok) throw new Error(split.error ?? 'Could not fork this chat')
-		const draftKey = split.sessionId ?? (destination === 'workspace' ? split.workspaceId : null)
-		if (!draftKey) throw new Error('The new chat opened, but its id was not available')
-		setDraft(draftKey, [split.text, continuation?.trim()].filter(Boolean).join('\n'))
-		if (split.sessionId) setFocusComposerFor(split.sessionId)
-		if (destination === 'workspace') {
-			await queryClient.invalidateQueries({ queryKey: ['state'] })
-			navigate(
-				split.sessionId
-					? `/w/${split.workspaceId}?session=${encodeURIComponent(split.sessionId)}`
-					: `/w/${split.workspaceId}`
-			)
-			return
+		const result = await handoffChat({ sessionId, workspaceId: ws.id }, format, {
+			replace,
+			continuation,
+			onReady: async split => {
+				if (split.sessionId) setFocusComposerFor(split.sessionId)
+				if (split.destination === 'workspace') {
+					await queryClient.invalidateQueries({ queryKey: ['state'] })
+					navigate(
+						split.sessionId
+							? `/w/${split.workspaceId}?session=${encodeURIComponent(split.sessionId)}`
+							: `/w/${split.workspaceId}`
+					)
+					return
+				}
+				await queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
+				if (split.sessionId) pickSession(split.sessionId)
+			}
+		})
+		if (replace) {
+			setHistoryError(result.historyError ?? null)
 		}
-		await queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
-		if (split.sessionId) pickSession(split.sessionId)
+	}
+	const retryHistory = async () => {
+		if (!historyError || joiningHistory) return
+		setJoiningHistory(true)
+		try {
+			await joinChatHistory(historyError)
+			await queryClient.invalidateQueries({ queryKey: ['sessions', historyError.workspaceId] })
+			setHistoryError(null)
+		} catch (error) {
+			setHistoryError({ ...historyError, message: error instanceof Error ? error.message : 'Could not join history' })
+		} finally {
+			setJoiningHistory(false)
+		}
+	}
+	const compactUnavailable = !online
+		? 'Reconnect to compact this chat'
+		: working || activeSession?.background_tasks.length
+			? 'Wait for this turn to finish before compacting'
+			: pending.some(p => p.sessionId === sessionId) || ws.parked_prompts?.some(p => p.sessionId === sessionId)
+				? 'Send or dismiss pending prompts before compacting'
+				: historyError?.workspaceId === ws.id
+					? 'Retry joining conversation history first'
+					: compactingChat || closingChat
+						? 'A tab action is already in progress'
+						: undefined
+	const compactChat = async (format: SplitFormat) => {
+		if (!sessionId || compactInFlight.current) return
+		if (compactUnavailable) throw new Error(compactUnavailable)
+		compactInFlight.current = true
+		setCompactingChat(sessionId)
+		try {
+			await forkChat(format, undefined, true)
+		} finally {
+			compactInFlight.current = false
+			setCompactingChat(null)
+		}
 	}
 	const closeDiff = () => {
 		setDiffOpen(false)
@@ -486,6 +532,16 @@ export function SessionView() {
 						<div className="flex shrink-0 items-center gap-2 border-b border-del/30 bg-del/5 px-3 py-2 text-xs text-del">
 							<span className="min-w-0 flex-1">{closeError}</span>
 							{isLockedError(closeError) ? <UnlockLink /> : null}
+							{closeRetryId ? (
+								<button
+									type="button"
+									onClick={() => void closeChat(closeRetryId)}
+									disabled={!!closingChat || !online}
+									className="shrink-0 rounded-lg px-2 py-1 font-medium active:bg-surface-2 disabled:opacity-50"
+								>
+									Retry close
+								</button>
+							) : null}
 							<button
 								type="button"
 								onClick={() => setCloseError(null)}
@@ -493,6 +549,21 @@ export function SessionView() {
 								className="p-1"
 							>
 								<X size={14} />
+							</button>
+						</div>
+					) : null}
+					{historyError?.workspaceId === ws.id ? (
+						<div className="flex shrink-0 items-center gap-2 border-b border-del/30 bg-del/5 px-3 py-2 text-xs text-del">
+							<span className="min-w-0 flex-1">
+								The new chat is ready, but joining its history failed. {historyError.message}
+							</span>
+							<button
+								type="button"
+								className="shrink-0 rounded-lg px-2 py-1 font-medium disabled:opacity-50"
+								onClick={() => void retryHistory()}
+								disabled={joiningHistory || !online}
+							>
+								{joiningHistory ? 'Joining…' : 'Retry joining history'}
 							</button>
 						</div>
 					) : null}
@@ -533,6 +604,7 @@ export function SessionView() {
 						) : (
 							<Transcript
 								sessionId={sessionId}
+								historySessionIds={historySessionIds}
 								workspaceId={ws.id}
 								working={working}
 								workingSince={workingSince}
@@ -544,6 +616,8 @@ export function SessionView() {
 								selectedSubagentId={pickedSubagent}
 								queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
 								onFork={forkChat}
+								onCompact={compactChat}
+								compactUnavailable={compactUnavailable}
 								onSelectSession={pickSession}
 								onSelectSubagent={pickSubagent}
 								onDismissDelegation={delegationId => void dismissDelegation(delegationId)}
@@ -577,7 +651,8 @@ export function SessionView() {
 							workspaceId={ws.id}
 							working={working}
 							actuator={actuator}
-							onFork={prompt => forkChat({ thinking: true, tools: false }, prompt)}
+							onCompact={() => compactChat({ thinking: true, tools: false })}
+							compactUnavailable={compactUnavailable}
 							onCall={canCall ? openCall : undefined}
 							callActive={voiceActive}
 							onContext={

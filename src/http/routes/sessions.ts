@@ -24,6 +24,7 @@ export function createSessionsRoutes(
 		| 'sleep'
 		| 'attachmentHeaderName'
 		| 'readAttachmentBody'
+		| 'chatHistory'
 	>
 ): RouteHandler {
 	const {
@@ -41,6 +42,32 @@ export function createSessionsRoutes(
 	} = services
 	return async (req, res, url) => {
 		const { pathname } = url
+
+		// PWA presentation only: preserve both real tabs and all their original messages.
+		const joinHistoryOf = routeParam(routes.joinChatHistory, req.method, pathname)
+		if (joinHistoryOf) {
+			const body = JSON.parse((await readBody(req)) || '{}') as { workspaceId?: unknown; previousSessionId?: unknown }
+			if (typeof body.workspaceId !== 'string' || typeof body.previousSessionId !== 'string') {
+				return json(req, res, 400, { error: 'workspaceId and previousSessionId are required' })
+			}
+			const { workspaceId, previousSessionId } = body
+			if (
+				reads.sessionWorkspaceId(previousSessionId) !== workspaceId ||
+				reads.sessionWorkspaceId(joinHistoryOf) !== workspaceId
+			) {
+				return json(req, res, 404, { error: 'chats not found in that workspace' })
+			}
+			const source =
+				reads.listSessions(workspaceId).find(s => s.id === previousSessionId) ??
+				reads.listClosedSessions(workspaceId).find(s => s.id === previousSessionId)
+			if (!source) return json(req, res, 404, { error: 'source chat not found' })
+			try {
+				services.chatHistory.join(workspaceId, previousSessionId, joinHistoryOf, source)
+			} catch (error) {
+				return json(req, res, 409, { error: error instanceof Error ? error.message : 'Could not join chat history' })
+			}
+			return json(req, res, 200, { ok: true })
+		}
 
 		// GET /api/sessions/:id/messages?after=<rowid>
 		const messagesOf = routeParam(routes.messages, req.method, pathname)

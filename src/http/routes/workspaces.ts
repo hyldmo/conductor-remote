@@ -25,6 +25,7 @@ export function createWorkspacesRoutes(
 		| 'locateChat'
 		| 'sleep'
 		| 'devServers'
+		| 'chatHistory'
 	>
 ): RouteHandler {
 	const { reads, json, delegationStore, attachWorkflowState, openChat, readBody, locateChat, sleep, devServers } =
@@ -55,6 +56,7 @@ export function createWorkspacesRoutes(
 			const sessionRoles = { ...(roles?.sessions ?? {}), ...(enriched?.session_roles ?? {}) }
 			return json(req, res, 200, {
 				sessions: reads.listSessions(listSessionsIn),
+				chat_history: services.chatHistory.forWorkspace(listSessionsIn),
 				...(Object.keys(sessionRoles).length ? { session_roles: sessionRoles } : {})
 			})
 		}

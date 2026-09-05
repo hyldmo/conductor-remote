@@ -434,6 +434,12 @@ export const client = {
 			},
 			ACTION_TIMEOUT_MS
 		),
+	/** Join chat history in our UI without touching Conductor's tabs. Safe to retry. */
+	joinChatHistory: (sessionId: string, workspaceId: string, previousSessionId: string) =>
+		api<{ ok: boolean; error?: string }>(routes.joinChatHistory.path(sessionId), {
+			method: routes.joinChatHistory.method,
+			body: JSON.stringify({ workspaceId, previousSessionId })
+		}),
 	/** Repos a new workspace can be created in. */
 	repos: () => api<ReposResponse>(routes.repos.path()),
 	/** Model-picker labels the relay has already read from Conductor. This never opens the desktop UI. */
