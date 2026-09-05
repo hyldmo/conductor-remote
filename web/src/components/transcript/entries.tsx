@@ -188,7 +188,7 @@ export function PendingEntry({
 	return (
 		<QueueBubble
 			state={failed ? 'failed' : 'pending'}
-			meta={failed ? p.error || 'Didn’t send' : 'Sending…'}
+			meta={failed ? p.error || 'Didn’t send' : p.queue ? 'Queueing…' : 'Sending…'}
 			actions={
 				failed
 					? [
@@ -198,7 +198,7 @@ export function PendingEntry({
 					: []
 			}
 			dataUserMessage={messagePreview(p.text)}
-			dataMessageState={failed ? 'failed' : 'sending'}
+			dataMessageState={failed ? 'failed' : p.queue ? 'queueing' : 'sending'}
 		>
 			<div>
 				<Markdown>{p.text}</Markdown>
