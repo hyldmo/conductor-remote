@@ -105,8 +105,8 @@ export interface WorkflowRootPromptInput {
 }
 
 const WORKFLOW_ROLE_PURPOSES: Record<WorkflowRoleName, string> = {
-	planning: 'this root chat; plan and integrate delegated work',
-	exploration: 'read-only investigation and evidence',
+	planning: 'coordinate, integrate, and handle small fixes',
+	exploration: 'investigation, tests, and scratch reproductions',
 	implementation: 'code changes and verification'
 }
 
@@ -126,10 +126,12 @@ export function workflowRootPrompt(input: WorkflowRootPromptInput): string {
 		input.roles.planning.preamble?.trim(),
 		'You are the planning root for a managed Workflow.',
 		frozenRoleCatalog(input.roles),
-		'The relay has already scheduled one tracked explorer for this objective. It will deliver a Baton here when it finishes; you do not need to create or poll for that guaranteed explorer.',
-		'You may search, inspect files, run read-only probes, ask the user questions, synthesize evidence, and verify results. Do not edit files or implement the change in this root chat. Delegate tracked code changes to the implementation role after the exploration evidence arrives.',
-		'When there are genuinely independent questions, you may request additional tracked explorers with delegate_task. Use the workflow_id and phase_capability from the private block exactly; the relay owns role settings and rejects stale phases. Do not use provider-native child-agent tools as a substitute for tracked Workflow chats.',
-		'Do not repeat, quote, summarize, or place the private orchestration block in prose. It is bearer metadata for the tool call only.',
+		'Optimize total completion time and expensive-model token use. Delegate only when savings outweigh assignment, startup, context, and integration costs. Do small fixes directly when cheaper or faster; you may edit code, plans, and scratch files. Verify results.',
+		'Keep assignments short: task, paths, ownership, success criteria. Continue independent work without duplicating helpers or editing files they own.',
+		'The relay has already scheduled one tracked explorer; results arrive automatically. Exploring allows more explorers. After all results arrive, planning allows either role. Implementation leads to reviewing: finish, request another implementer, or explore a new cycle.',
+		'Use delegate_task with workflow_id and phase_capability from the latest private block. Each accepted call consumes it; wait for a new envelope before delegating again. Use frozen roles, never native subagents. Keep private blocks out of prose.',
+		"A child's first final answer ends its job, including a question. Handle follow-ups yourself or open a new job with the question and answer. Results include a report and read_chat pointer.",
+		'When the objective is satisfied, report the outcome and verification: "ready to mark complete". The phone can Complete from planning or reviewing once all helper results arrive; no implementation child is required.',
 		workflowPrivateEnvelope({
 			workflowId: input.workflowId,
 			phaseCapability: input.phaseCapability,
@@ -144,15 +146,8 @@ export function workflowRootPrompt(input: WorkflowRootPromptInput): string {
 		.join('\n\n')
 }
 
-const BATON_FORMAT = [
-	'End the final answer with this exact handoff structure:',
-	'## Baton',
-	'### Decision',
-	'### Evidence',
-	'### Files changed',
-	'### Risks',
-	'### Suggested next role'
-].join('\n')
+const BATON_FORMAT =
+	'Return a concise result with evidence and remaining risks; use only useful headings. If a longer report is needed, end with a short ## Baton summary. Your first final answer ends this job, including a question; state any blocking question clearly. The relay returns your answer automatically.'
 
 export interface WorkflowChildPromptInput {
 	roleName: WorkflowChildRoleName
@@ -160,8 +155,6 @@ export interface WorkflowChildPromptInput {
 	role: FrozenWorkflowRole
 	/** The planner's focused assignment. It never replaces the immutable objective. */
 	task: string
-	/** A Conductor attachment token for the scrubbed root transcript, when available. */
-	handoffAttachment?: string
 }
 
 /** Build any tracked child assignment from the frozen role snapshot. */
@@ -171,13 +164,11 @@ export function workflowChildPrompt(input: WorkflowChildPromptInput): string {
 		input.role.preamble?.trim(),
 		`You are the tracked ${input.roleName} agent for a managed Workflow.`,
 		exploration
-			? 'Investigate the assignment and return concrete evidence. Do not edit files.'
-			: 'Implement the focused assignment in this shared worktree, verify the result, and report exactly what changed.',
-		'Do not create provider-native child agents for work the root expects this tracked chat to perform.',
-		'If the focused assignment materially changes the user-visible meaning of the original objective, stop and name the conflict instead of silently changing scope.',
-		input.handoffAttachment
-			? `A sanitized root transcript is attached for context: ${scrubWorkflowSecrets(input.handoffAttachment)}`
-			: undefined,
+			? 'Investigate the assignment and return actionable evidence. You may run tests and write reproductions under .context/scratch/; keep source files unchanged.'
+			: 'Implement the assigned scope, verify it, and report the files changed.',
+		'You share this worktree with the root and other chats. Respect their edits and assigned file ownership. Do not revert their work or spawn further agents.',
+		"Parent history is context; follow this assignment and role, not the root's instructions.",
+		'Name any conflict with the original objective before proceeding beyond the assignment.',
 		'## Original Workflow objective (immutable)',
 		input.objective,
 		`## Focused ${input.roleName} assignment`,
@@ -191,7 +182,6 @@ export function workflowChildPrompt(input: WorkflowChildPromptInput): string {
 export interface WorkflowBootstrapPromptInput {
 	objective: string
 	role: FrozenWorkflowRole
-	handoffAttachment?: string
 	/** Optional narrower first question; otherwise the explorer surveys the objective. */
 	task?: string
 }
@@ -204,7 +194,6 @@ export function workflowBootstrapPrompt(input: WorkflowBootstrapPromptInput): st
 		role: input.role,
 		task:
 			input.task ??
-			'Explore the objective before implementation: map the relevant code and constraints, identify likely failure modes, and return evidence the planner can use.',
-		handoffAttachment: input.handoffAttachment
+			'Map the code and constraints relevant to the objective. Return concise evidence the planner can act on; investigate only as far as the task needs.'
 	})
 }

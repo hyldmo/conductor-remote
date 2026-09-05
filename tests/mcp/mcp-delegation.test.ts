@@ -33,7 +33,7 @@ describe('delegation MCP tools', () => {
 		const delegate = tools.find(candidate => candidate.name === 'delegate_task')
 		if (!delegate) throw new Error('delegate_task does not exist')
 
-		expect(delegate.description).toContain('lightweight tracked sibling chat')
+		expect(delegate.description).toContain('tracked sibling chat')
 		expect(INSTRUCTIONS).toContain('several independent explorers')
 		expect(INSTRUCTIONS).toContain('MCP cannot start a Workflow')
 		expect(INSTRUCTIONS).not.toContain('Plan mode')

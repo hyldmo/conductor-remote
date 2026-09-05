@@ -37,8 +37,12 @@ export function createListRolesTool(call: RelayCall): Tool {
 export function createDelegateTaskTool(call: RelayCall): Tool {
 	return {
 		name: 'delegate_task',
-		description:
-			'Spawn one lightweight tracked sibling chat in a subtab. From an ordinary chat, pass session_id, a valid role from list_roles, and a focused prompt. Choose a configured role whose instructions fit the task; repeat for independent questions so children can run concurrently. This does not start a Workflow or turn the parent into a planner. The role must use a different provider than the parent. The child follows the configured preamble and assignment and receives a frozen parent transcript plus a read_chat reference. The relay returns a short completion notice with a report attachment containing the final reply. Read the report for the result; use the child chat reference for earlier investigation when needed. Queue mode delivers behind the current turn by default; use steer if the result is needed during this turn. Keep working and integrate the result. For an active Workflow, only its root may call with workflow_id and current phase_capability from the private envelope; its frozen settings, role restrictions, transcript boundary, and Baton routing apply. Returns immediately with a delegation id; list_delegations observes progress. The relay later opens/configures/sends the child through the Mac UI. This tool cannot start or recover a Workflow.',
+		description: [
+			'Spawn a tracked sibling chat when the saved time or expensive-model work outweighs assignment, startup, context, and integration costs. Keep the prompt focused; handle small tasks directly when cheaper or faster.',
+			'Ordinary chat: pass session_id, a valid role from list_roles on a different provider, and prompt. The child follows that role and receives parent context. Use return_mode="steer" for a result needed this turn; the default "queue" returns behind it. Continue independent work and integrate the returned report.',
+			'Active Workflow: only the root may delegate, using workflow_id and the latest private phase_capability. Each accepted call consumes it; wait for the next envelope before another call. Frozen roles and phase rules apply; the focused assignment is primary and root history is optional.',
+			'Returns a delegation id immediately; list_delegations shows progress. The relay opens, configures, and prompts the child through the Mac UI, then returns its report and chat pointer. Cannot start or recover a Workflow.'
+		].join('\n\n'),
 		inputSchema: {
 			type: 'object',
 			properties: {

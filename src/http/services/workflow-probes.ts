@@ -166,7 +166,7 @@ export function createWorkflowProbesServices(
 		}
 	}
 
-	function stableWorkflowAttachment(worktree: string, jobId: string, name: string, body: string): string {
+	function stableWorkflowFile(worktree: string, jobId: string, name: string, body: string) {
 		// Conductor requires six alphanumerics. Preserve all six characters' entropy
 		// instead of truncating a hex digest to only 24 bits for a long-lived stable path.
 		const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
@@ -184,7 +184,12 @@ export function createWorkflowProbesServices(
 				throw new Error(`the stable Workflow handoff path ${path.join(ATTACHMENT_DIR, id, safeName)} is occupied`)
 			}
 		}
-		return attachmentToken(safeName, path.join(ATTACHMENT_DIR, id, safeName))
+		return { name: safeName, relPath: path.join(ATTACHMENT_DIR, id, safeName) }
+	}
+
+	function stableWorkflowAttachment(worktree: string, jobId: string, name: string, body: string): string {
+		const file = stableWorkflowFile(worktree, jobId, name, body)
+		return attachmentToken(file.name, file.relPath)
 	}
 
 	function workflowWorkspaceCandidate(ws: Workspace) {
@@ -274,6 +279,7 @@ export function createWorkflowProbesServices(
 		sessionMatchesWorkflowRole,
 		workflowDeliveryCursor,
 		stableWorkflowAttachment,
+		stableWorkflowFile,
 		sendWorkflowPrompt,
 		workflowSessionId,
 		assertWorkflowRootStillPristine,
