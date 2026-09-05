@@ -1,8 +1,21 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, GitFork, Hourglass, Loader2, Waypoints } from 'lucide-react'
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Check, ChevronDown, Copy, GitFork, Hourglass, Loader2, Waypoints } from 'lucide-react'
+import {
+	Fragment,
+	memo,
+	type ReactNode,
+	type RefObject,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState
+} from 'react'
+import { createPortal } from 'react-dom'
+import { renderTranscript, transcriptThrough } from '../../../src/shared.ts'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
+import { copyText } from '../lib/clipboard.ts'
 import { cn } from '../lib/cn.ts'
 import { elapsed, messagePreview, messageTime, timeAgo, timestampMs } from '../lib/format.ts'
 import { languageForTool, languageForToolOutput } from '../lib/highlight.ts'
@@ -18,7 +31,7 @@ import { ChatLink, Markdown, sourceReference } from './Markdown.tsx'
 import { MessageNav } from './MessageNav.tsx'
 import { Patch } from './Patch.tsx'
 import { QueueBubble } from './QueueBubble.tsx'
-import { CopyButton, Empty, Spinner, UnlockLink } from './ui.tsx'
+import { Empty, Spinner, UnlockLink } from './ui.tsx'
 
 /** The transcript cuts the fork control exposes. */
 export interface SplitFormat {
@@ -256,6 +269,7 @@ export function Transcript({
 										{!showingSubagent && inlineActions.has(rowKey(row.node.e)) ? (
 											<ChatActions
 												text={row.node.e.text}
+												entries={entries}
 												at={row.node.e.ts}
 												startedAt={turnStarts.get(row.node.e)}
 												rowid={row.node.e.rowid}
@@ -272,6 +286,7 @@ export function Transcript({
 							{!showingSubagent && actionTarget ? (
 								<ChatActions
 									text={actionTarget.text}
+									entries={entries}
 									at={actionTarget.ts}
 									startedAt={turnStarts.get(actionTarget)}
 									rowid={actionTarget.rowid}
@@ -627,6 +642,7 @@ const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
  */
 function ChatActions({
 	text,
+	entries,
 	at,
 	startedAt,
 	working,
@@ -635,6 +651,7 @@ function ChatActions({
 	onFork
 }: {
 	text: string
+	entries: TranscriptEntry[]
 	/** When the response landed — the second half of the meta line. */
 	at: string
 	/** When its turn started, against which that response is how long the answer took. */
@@ -646,7 +663,12 @@ function ChatActions({
 	through?: number
 	onFork?: (format: SplitFormat) => Promise<void>
 }) {
-	const [menuOpen, setMenuOpen] = useState(false)
+	const [menuOpen, setMenuOpen] = useState<'copy' | 'fork' | null>(null)
+	const [copied, setCopied] = useState<'response' | 'chat' | null>(null)
+	const [copyError, setCopyError] = useState<string | null>(null)
+	const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+	const copyMenuButton = useRef<HTMLButtonElement>(null)
+	const forkMenuButton = useRef<HTMLButtonElement>(null)
 	const [forking, setForking] = useState(false)
 	const [forkError, setForkError] = useState<string | null>(null)
 	const [destination, setDestination] = useState<'chat' | 'workspace'>('chat')
@@ -657,17 +679,44 @@ function ChatActions({
 	const [now, setNow] = useState(() => Date.now())
 	useEffect(() => {
 		const timer = setInterval(() => setNow(Date.now()), 60_000)
-		return () => clearInterval(timer)
+		return () => {
+			clearInterval(timer)
+			if (copyTimer.current) clearTimeout(copyTimer.current)
+		}
 	}, [])
 
 	const took = startedAt ? timestampMs(at) - timestampMs(startedAt) : Number.NaN
 	const meta = [took > 0 ? elapsed(took) : null, timeAgo(at, now)].filter(Boolean).join(' · ')
 
-	const fork = async (cut: { thinking: boolean; tools: boolean; only?: boolean }) => {
+	const copy = async (cut: TranscriptCut = { thinking: false, tools: false, only: true }) => {
+		setMenuOpen(null)
+		setCopyError(null)
+		try {
+			let value = text
+			if (!cut.only) {
+				// The loaded transcript also contains the live outbox. Like Fork, copy only
+				// dispatched messages, and keep every entry of an older response's source row.
+				const saved = entries.filter(entry => !entry.queued)
+				const selected = through === undefined ? saved : transcriptThrough(saved, through)?.entries
+				if (!selected) throw new Error('Response no longer available')
+				value = renderTranscript(selected, cut).text
+			}
+			// Stay in the tap's user gesture so copying also works in the installed iOS PWA.
+			await copyText(value)
+			setCopied(cut.only ? 'response' : 'chat')
+			if (copyTimer.current) clearTimeout(copyTimer.current)
+			copyTimer.current = setTimeout(() => setCopied(null), 1800)
+		} catch {
+			setCopied(null)
+			setCopyError('Could not copy to the clipboard. Try again.')
+		}
+	}
+
+	const fork = async (cut: TranscriptCut) => {
 		if (!onFork || forking) return
 		setForking(true)
 		setForkError(null)
-		setMenuOpen(false)
+		setMenuOpen(null)
 		try {
 			await onFork({
 				thinking: cut.thinking,
@@ -685,13 +734,36 @@ function ChatActions({
 
 	return (
 		<div className="flex max-w-full flex-col items-start gap-1">
-			<div className="flex items-center gap-2">
+			<div className="flex max-w-full flex-wrap items-center gap-2">
 				{!working && meta ? <span className="text-[11px] tabular-nums text-faint">{meta}</span> : null}
-				<CopyButton
-					text={text}
-					label="response"
-					className="size-7 rounded-lg border border-border-soft bg-surface/70"
-				/>
+				<div className="relative">
+					<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
+						<button
+							type="button"
+							onClick={() => void copy()}
+							aria-label={copied ? `Copied ${copied}` : 'Copy response'}
+							className="flex size-7 items-center justify-center transition active:bg-surface-2"
+						>
+							{copied ? <Check size={14} className="text-accent" /> : <Copy size={14} />}
+						</button>
+						<button
+							ref={copyMenuButton}
+							type="button"
+							onClick={() => setMenuOpen(open => (open === 'copy' ? null : 'copy'))}
+							aria-label="Choose copy options"
+							aria-haspopup="menu"
+							aria-expanded={menuOpen === 'copy'}
+							className="flex size-7 items-center justify-center border-l border-border-soft transition active:bg-surface-2"
+						>
+							<ChevronDown size={14} className={cn('transition-transform', menuOpen === 'copy' && 'rotate-180')} />
+						</button>
+					</div>
+					{menuOpen === 'copy' ? (
+						<TranscriptMenu label="Copy options" anchor={copyMenuButton} onClose={() => setMenuOpen(null)}>
+							<TranscriptOptions onSelect={cut => void copy(cut)} />
+						</TranscriptMenu>
+					) : null}
+				</div>
 				{onFork ? (
 					<div className="relative">
 						<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
@@ -713,77 +785,53 @@ function ChatActions({
 								{destination === 'workspace' ? 'Fork workspace' : 'Fork'}
 							</button>
 							<button
+								ref={forkMenuButton}
 								type="button"
-								onClick={() => setMenuOpen(open => !open)}
+								onClick={() => setMenuOpen(open => (open === 'fork' ? null : 'fork'))}
 								disabled={forking}
 								aria-label="Choose fork options"
 								aria-haspopup="menu"
-								aria-expanded={menuOpen}
+								aria-expanded={menuOpen === 'fork'}
 								className="flex size-7 items-center justify-center border-l border-border-soft transition active:bg-surface-2 disabled:opacity-50"
 							>
-								<ChevronDown size={14} className={cn('transition-transform', menuOpen && 'rotate-180')} />
+								<ChevronDown size={14} className={cn('transition-transform', menuOpen === 'fork' && 'rotate-180')} />
 							</button>
 						</div>
-						{menuOpen ? (
-							<>
-								<div className="fixed inset-0 z-20" onClick={() => setMenuOpen(false)} aria-hidden />
-								<div
-									role="menu"
-									aria-label="Fork options"
-									className="absolute bottom-full left-0 z-30 mb-1 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+						{menuOpen === 'fork' ? (
+							<TranscriptMenu label="Fork options" anchor={forkMenuButton} onClose={() => setMenuOpen(null)}>
+								<button
+									type="button"
+									role="menuitemcheckbox"
+									aria-checked={destination === 'workspace'}
+									onClick={() => setDestination(current => (current === 'chat' ? 'workspace' : 'chat'))}
+									className="flex w-full items-center gap-3 border-b border-border-soft px-3 py-2 text-left active:bg-surface-2"
 								>
-									<button
-										type="button"
-										role="menuitemcheckbox"
-										aria-checked={destination === 'workspace'}
-										onClick={() => setDestination(current => (current === 'chat' ? 'workspace' : 'chat'))}
-										className="flex w-full items-center gap-3 border-b border-border-soft px-3 py-2 text-left active:bg-surface-2"
+									<span className="min-w-0 flex-1">
+										<span className="block text-[12px] font-medium text-text">To new workspace</span>
+										<span className="block text-[11px] text-faint">Carry the current code into its own worktree</span>
+									</span>
+									<span
+										aria-hidden
+										className={cn(
+											'relative h-6 w-11 shrink-0 rounded-full transition-colors',
+											destination === 'workspace' ? 'bg-accent' : 'border border-border bg-surface-2'
+										)}
 									>
-										<span className="min-w-0 flex-1">
-											<span className="block text-[12px] font-medium text-text">To new workspace</span>
-											<span className="block text-[11px] text-faint">Carry the current code into its own worktree</span>
-										</span>
 										<span
-											aria-hidden
 											className={cn(
-												'relative h-6 w-11 shrink-0 rounded-full transition-colors',
-												destination === 'workspace' ? 'bg-accent' : 'border border-border bg-surface-2'
+												'absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform',
+												destination === 'workspace' ? 'translate-x-5' : 'translate-x-0'
 											)}
-										>
-											<span
-												className={cn(
-													'absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform',
-													destination === 'workspace' ? 'translate-x-5' : 'translate-x-0'
-												)}
-											/>
-										</span>
-									</button>
-									<ForkOption
-										label="Last message only"
-										detail="This response, without history"
-										onClick={() => void fork({ thinking: false, tools: false, only: true })}
-									/>
-									<ForkOption
-										label="Concise"
-										detail="Messages only"
-										onClick={() => void fork({ thinking: false, tools: false })}
-									/>
-									<ForkOption
-										label="With reasoning"
-										detail="Messages and reasoning"
-										onClick={() => void fork({ thinking: true, tools: false })}
-									/>
-									<ForkOption
-										label="Full transcript"
-										detail="Messages, reasoning, and tools"
-										onClick={() => void fork({ thinking: true, tools: true })}
-									/>
-								</div>
-							</>
+										/>
+									</span>
+								</button>
+								<TranscriptOptions onSelect={cut => void fork(cut)} />
+							</TranscriptMenu>
 						) : null}
 					</div>
 				) : null}
 			</div>
+			{copyError ? <span className="max-w-[85vw] text-[11px] text-del">{copyError}</span> : null}
 			{forkError ? (
 				<span className="max-w-[85vw] text-[11px] text-del">
 					{forkError}
@@ -794,7 +842,116 @@ function ChatActions({
 	)
 }
 
-function ForkOption({ label, detail, onClick }: { label: string; detail: string; onClick: () => void }) {
+/** Keep either dropdown inside a narrow phone viewport and outside the transcript's clipping scroller. */
+function TranscriptMenu({
+	label,
+	anchor,
+	onClose,
+	children
+}: {
+	label: string
+	anchor: RefObject<HTMLButtonElement | null>
+	onClose: () => void
+	children: ReactNode
+}) {
+	const menu = useRef<HTMLDivElement>(null)
+	const [position, setPosition] = useState({ top: 0, left: 0 })
+	useLayoutEffect(() => {
+		const trigger = anchor.current?.getBoundingClientRect()
+		const bounds = menu.current?.getBoundingClientRect()
+		if (!trigger || !bounds) return
+		const above = trigger.top - bounds.height - 4
+		setPosition({
+			top: Math.max(8, above >= 8 ? above : Math.min(trigger.bottom + 4, window.innerHeight - bounds.height - 8)),
+			left: Math.max(8, Math.min(trigger.left, window.innerWidth - bounds.width - 8))
+		})
+		menu.current?.querySelector<HTMLElement>('[role^="menuitem"]')?.focus({ preventScroll: true })
+	}, [anchor])
+	useEffect(() => {
+		const dismiss = (event: Event) => {
+			if (event.target instanceof Node && menu.current?.contains(event.target)) return
+			onClose()
+		}
+		window.addEventListener('resize', dismiss)
+		document.addEventListener('scroll', dismiss, true)
+		return () => {
+			window.removeEventListener('resize', dismiss)
+			document.removeEventListener('scroll', dismiss, true)
+		}
+	}, [onClose])
+	const close = () => {
+		onClose()
+		anchor.current?.focus({ preventScroll: true })
+	}
+	return createPortal(
+		<>
+			<div className="fixed inset-0 z-40" onClick={close} aria-hidden />
+			<div
+				ref={menu}
+				role="menu"
+				aria-label={label}
+				style={position}
+				onKeyDown={event => {
+					if (event.key === 'Escape' || event.key === 'Tab') {
+						if (event.key === 'Escape') event.preventDefault()
+						close()
+						return
+					}
+					const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]'))
+					const current = items.indexOf(document.activeElement as HTMLElement)
+					const next = {
+						ArrowDown: (current + 1) % items.length,
+						ArrowUp: (current - 1 + items.length) % items.length,
+						Home: 0,
+						End: items.length - 1
+					}[event.key]
+					if (next === undefined) return
+					event.preventDefault()
+					items[next]?.focus()
+				}}
+				className="fixed z-50 max-h-[calc(100dvh-1rem)] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border border-border bg-surface py-1 shadow-xl"
+			>
+				{children}
+			</div>
+		</>,
+		document.body
+	)
+}
+
+interface TranscriptCut {
+	thinking: boolean
+	tools: boolean
+	only?: boolean
+}
+
+function TranscriptOptions({ onSelect }: { onSelect: (cut: TranscriptCut) => void }) {
+	return (
+		<>
+			<TranscriptOption
+				label="Last message only"
+				detail="This response, without history"
+				onClick={() => onSelect({ thinking: false, tools: false, only: true })}
+			/>
+			<TranscriptOption
+				label="Concise"
+				detail="Messages only"
+				onClick={() => onSelect({ thinking: false, tools: false })}
+			/>
+			<TranscriptOption
+				label="With reasoning"
+				detail="Messages and reasoning"
+				onClick={() => onSelect({ thinking: true, tools: false })}
+			/>
+			<TranscriptOption
+				label="Full transcript"
+				detail="Messages, reasoning, and tools"
+				onClick={() => onSelect({ thinking: true, tools: true })}
+			/>
+		</>
+	)
+}
+
+function TranscriptOption({ label, detail, onClick }: { label: string; detail: string; onClick: () => void }) {
 	return (
 		<button
 			type="button"
