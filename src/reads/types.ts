@@ -74,6 +74,7 @@ export interface RepoRow {
 }
 
 export interface SessionRow {
+	auto_model?: import('../agents/auto-model/types.ts').AutoModelState
 	id: string
 	status: string | null
 	title: string | null

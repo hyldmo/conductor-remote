@@ -1,8 +1,9 @@
+import { freezeAutoModelConfig } from '../../agents/auto-model/config.ts'
 import type { ParkedAgentPatch } from '../../delivery/parked.ts'
 import { stagedAttachments } from '../../files/staged-attachments.ts'
 import { isRoute, routes } from '../../routes.ts'
 
-import type { CreateWorkspaceRequest } from '../../wire.ts'
+import type { AutoModelConfig, CreateWorkspaceRequest } from '../../wire.ts'
 
 import { EFFORT_LABELS } from '../../writes/agent-options.ts'
 import { NOT_HANDLED, type RouteHandler } from '../router-types.ts'
@@ -12,7 +13,8 @@ export function createCreateWorkspaceRoutes(
 	services: Pick<
 		RelayServices,
 		'readBody' | 'json' | 'STAGED_ATTACHMENTS_DIR' | 'reads' | 'createWorkspaceAndRead' | 'firstPrompts'
-	>
+	> &
+		Partial<Pick<RelayServices, 'autoModels' | 'autoModelConfig' | 'modelCache'>>
 ): RouteHandler {
 	const { readBody, json, STAGED_ATTACHMENTS_DIR, reads, createWorkspaceAndRead, firstPrompts } = services
 	return async (req, res, url) => {
@@ -23,6 +25,22 @@ export function createCreateWorkspaceRoutes(
 		if (isRoute(routes.createWorkspace, req.method, pathname)) {
 			const body = JSON.parse((await readBody(req)) || '{}') as CreateWorkspaceRequest
 			const attachmentIds = body.attachmentIds ?? []
+			if (body.auto !== undefined && typeof body.auto !== 'boolean')
+				return json(req, res, 400, { error: 'auto must be a boolean' })
+			if (body.auto && [body.model, body.effort, body.fast, body.plan].some(value => value !== undefined))
+				return json(req, res, 400, {
+					error: 'Auto chooses the agent settings. Omit manual model, effort, Fast, and Plan.'
+				})
+			let autoConfig: AutoModelConfig | undefined
+			if (body.auto) {
+				if (!services.autoModels || !services.autoModelConfig || !services.modelCache)
+					return json(req, res, 503, { error: 'Auto is unavailable.' })
+				try {
+					autoConfig = freezeAutoModelConfig(services.autoModelConfig.read(), services.modelCache.list())
+				} catch (error) {
+					return json(req, res, 409, { error: error instanceof Error ? error.message : 'Invalid Auto settings.' })
+				}
+			}
 			if ('workflow' in body) return json(req, res, 400, { error: 'Workflow starts through POST /api/workflows.' })
 			if (body.model !== undefined && typeof body.model !== 'string')
 				return json(req, res, 400, { error: 'model must be a picker label' })
@@ -59,7 +77,7 @@ export function createCreateWorkspaceRoutes(
 			const repo = body.repo ? reads.listRepos().find(r => r.name === body.repo) : undefined
 			if (body.repo && !repo) return json(req, res, 404, { error: `unknown repo ${body.repo}` })
 			if (repo && !repo.root_path) return json(req, res, 409, { error: `${repo.name} has no checkout path` })
-			const { result, created } = await createWorkspaceAndRead(prompt, repo?.root_path ?? null, repo?.name)
+			const { result, created } = await createWorkspaceAndRead(prompt, repo?.root_path ?? null, repo?.name, !!body.auto)
 			if (!result.ok) return json(req, res, 502, result)
 			if (!created) {
 				return json(req, res, 502, {
@@ -69,6 +87,25 @@ export function createCreateWorkspaceRoutes(
 				})
 			}
 			// Return as soon as the row exists (~2s) — waiting for delivery would block the
+			if (autoConfig && services.autoModels) {
+				const sessions = reads.listSessions(created.id)
+				services.autoModels.accept({
+					workspaceId: created.id,
+					sessionId: sessions.length === 1 ? sessions[0].id : undefined,
+					text: prompt,
+					repo: created.repo_name ?? body.repo ?? '',
+					config: autoConfig,
+					attachmentIds,
+					sendImmediately: body.sendImmediately
+				})
+				return json(req, res, 200, {
+					ok: true,
+					workspaceId: created.id,
+					workspace: created,
+					pendingPrompt: prompt || undefined,
+					sent: false
+				})
+			}
 			// request through Conductor's whole setup, measured at 30s+ on a real repo and
 			// past any budget a phone should hold a request open for. The queue delivers on
 			// its own schedule and the phone watches it in /api/state; `send:true` opts API

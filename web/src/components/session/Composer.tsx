@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowUp, Info, LoaderCircle, Minimize2, PhoneCall, Snowflake, Square, WifiOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useContextBreakdown, useWorkflowRoleReadiness } from '../../hooks/agents.ts'
+import { useAutoModelConfig, useContextBreakdown, useWorkflowRoleReadiness } from '../../hooks/agents.ts'
 import { useSendPrompt } from '../../hooks/send.ts'
 import { client } from '../../lib/api.ts'
 import { cn } from '../../lib/cn.ts'
@@ -100,8 +100,12 @@ export function Composer({
 	const [compacting, setCompacting] = useState(false)
 	const [compactError, setCompactError] = useState<string | null>(null)
 	const workflowMode = useApp(s => !!sessionId && s.workflowDrafts[sessionId] === true)
+	const autoConfig = useAutoModelConfig()
+	const stagedAuto = useApp(s => (sessionId ? s.agentDrafts[sessionId]?.auto : undefined))
+	const stageAgent = useApp(s => s.stageAgent)
 	const setWorkflowDraft = useApp(s => s.setWorkflowDraft)
 	const setWorkflowMode = (active: boolean) => {
+		if (sessionId && active) stageAgent(sessionId, { auto: false })
 		if (sessionId) setWorkflowDraft(sessionId, active)
 	}
 	const ref = useRef<HTMLTextAreaElement>(null)
@@ -130,6 +134,11 @@ export function Composer({
 						? 'Wait until this tab is idle before starting a Workflow.'
 						: undefined
 	const workflowPristine = !workflowEligibilityProblem
+	const autoMode =
+		workflowPristine &&
+		!workflowMode &&
+		(stagedAuto ?? (session?.auto_model?.status === 'draft' || autoConfig.data?.config.defaultAuto === true))
+	const autoPending = ['waiting', 'selecting', 'failed'].includes(session?.auto_model?.status ?? '')
 	const workflowVisible = workflowMode || workflowPristine
 	const {
 		roles,
@@ -193,6 +202,7 @@ export function Composer({
 			!sessionId ||
 			!online ||
 			workflowSendPending ||
+			autoPending ||
 			(workflowMode && !workflowReady)
 		)
 			return
@@ -201,7 +211,8 @@ export function Composer({
 			sessionId,
 			workspaceId,
 			text: prompt,
-			queue: startingWorkflow ? false : queue,
+			queue: startingWorkflow || autoMode ? false : queue,
+			auto: autoMode,
 			workflow: startingWorkflow
 		}).then(accepted => {
 			if (accepted && startingWorkflow) {
@@ -265,6 +276,7 @@ export function Composer({
 		!uploading &&
 		!attachmentError &&
 		!workflowSendPending &&
+		!autoPending &&
 		(!workflowMode || workflowReady)
 	const coldCache = !working && canSend && session && onCompact ? coldPromptCache(session) : null
 
@@ -354,6 +366,14 @@ export function Composer({
 				<div className="mt-1 flex items-start gap-1">
 					{session ? (
 						<AgentBar
+							auto={autoMode}
+							onAutoChange={
+								workflowPristine && !workflowMode
+									? active => {
+											if (sessionId) stageAgent(sessionId, { auto: active })
+										}
+									: undefined
+							}
 							session={session}
 							workspaceId={workspaceId}
 							frozenWorkflow={

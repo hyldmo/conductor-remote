@@ -3,6 +3,22 @@ import { describe, expect, test, vi } from 'vitest'
 import { ModelPicker } from '../../web/src/components/agents/ModelPicker.tsx'
 
 describe('model picker default', () => {
+	test('Auto comes before concrete models and offers its own settings', () => {
+		const html = renderToStaticMarkup(
+			<ModelPicker
+				open
+				models={['5.6 Luna']}
+				autoSelected
+				onSelectAuto={vi.fn()}
+				onAutoSettings={vi.fn()}
+				onSelect={vi.fn()}
+			/>
+		)
+		expect(html.indexOf('>Auto</span>')).toBeLessThan(html.indexOf('>5.6 Luna</span>'))
+		expect(html).toContain('aria-label="Auto model settings"')
+		const ordinary = renderToStaticMarkup(<ModelPicker open models={['5.6 Luna']} onSelect={vi.fn()} />)
+		expect(ordinary).not.toContain('>Auto</span>')
+	})
 	test('renders a separate starred action without nesting it in the select button', () => {
 		const html = renderToStaticMarkup(
 			<ModelPicker

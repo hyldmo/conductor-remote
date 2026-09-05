@@ -5,6 +5,8 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { AutoModelConfigStore, DEFAULT_AUTO_MODEL_CONFIG } from '../../src/agents/auto-model/config.ts'
+import { AutoModelQueue } from '../../src/agents/auto-model/queue.ts'
 import type { Config } from '../../src/config.ts'
 import { SendOnce } from '../../src/delivery/sendonce.ts'
 import { createRelayServer } from '../../src/http/router.ts'
@@ -118,6 +120,86 @@ async function listen(services: RelayServices) {
 			headers: { ...(authenticated ? { authorization: `Bearer ${token}` } : {}), ...init.headers }
 		})
 }
+
+async function autoFixture() {
+	const f = fixture()
+	const directory = await mkdtemp(path.join(os.tmpdir(), 'auto-http-test-'))
+	temporaryDirectories.push(directory)
+	f.services.autoModelConfig = new AutoModelConfigStore(path.join(directory, 'config.json'))
+	f.services.modelCache = {
+		list: () => [{ agentType: 'codex', updatedAt: 1, models: DEFAULT_AUTO_MODEL_CONFIG.profiles.map(p => p.model) }]
+	} as RelayServices['modelCache']
+	f.services.inspectAutoTarget = vi.fn(() => ({ sessionId: 'chat-1', ready: true }))
+	f.services.autoModels = new AutoModelQueue(path.join(directory, 'jobs'), {
+		inspect: f.services.inspectAutoTarget,
+		locked: async () => false,
+		choose: async () => {
+			throw new Error('HTTP intake must not run a classifier inline')
+		},
+		deliver: async () => {
+			throw new Error('HTTP intake must not drive the UI')
+		},
+		materialize: () => undefined,
+		cursor: () => ({ rowid: 0, outboxIds: [] }),
+		received: () => false
+	})
+	return { ...f, request: await listen(f.services) }
+}
+
+describe('Auto HTTP intake', () => {
+	test('accepts and persists before returning, replays retries, and prevents a competing prompt', async () => {
+		const f = await autoFixture()
+		const body = { workspaceId: 'workspace-1', text: 'Move a button.', auto: true }
+		for (let n = 0; n < 2; n++) {
+			const response = await f.request('/api/sessions/chat-1/prompt', { method: 'POST', body: JSON.stringify(body) })
+			expect(response.status).toBe(202)
+			expect(await response.json()).toMatchObject({ parked: true, queued: { autoModel: true, text: body.text } })
+		}
+		expect(f.services.autoModels.list()).toHaveLength(1)
+		expect(f.deliverPrompt).not.toHaveBeenCalled()
+		const conflict = await f.request('/api/sessions/chat-1/prompt', {
+			method: 'POST',
+			body: JSON.stringify({ ...body, auto: false, text: 'Another prompt' })
+		})
+		expect(conflict.status).toBe(409)
+		const cancelled = await f.request('/api/sessions/chat-1/prompt', { method: 'DELETE' })
+		expect(cancelled.status).toBe(200)
+		expect(f.services.autoModels.get('chat-1')?.status).toBe('cancelled')
+	})
+	test('rejects manual settings, invalid flags, and non-pristine targets before accepting', async () => {
+		const f = await autoFixture()
+		const body = { workspaceId: 'workspace-1', text: 'Move a button.', auto: true }
+		for (const extra of [{ agent: { model: '5.6 Sol' } }, { queue: true }, { auto: 'yes' }]) {
+			const response = await f.request('/api/sessions/chat-1/prompt', {
+				method: 'POST',
+				body: JSON.stringify({ ...body, ...extra })
+			})
+			expect(response.status).toBe(400)
+		}
+		f.services.inspectAutoTarget = () => ({ ready: true, error: 'This chat already belongs to Workflow.' })
+		// Recreate the handler to take the updated service dependency.
+		const request = await listen(f.services)
+		const response = await request('/api/sessions/chat-1/prompt', { method: 'POST', body: JSON.stringify(body) })
+		expect(response.status).toBe(409)
+		expect(f.services.autoModels.list()).toHaveLength(0)
+	})
+	test('serves editable configuration and validates changes without touching Conductor', async () => {
+		const f = await autoFixture()
+		expect((await (await f.request('/api/auto-model')).json()).config.defaultAuto).toBe(false)
+		const saved = await f.request('/api/auto-model', {
+			method: 'PATCH',
+			body: JSON.stringify({ ...DEFAULT_AUTO_MODEL_CONFIG, defaultAuto: true })
+		})
+		expect(saved.status).toBe(200)
+		expect(f.services.autoModelConfig.read().defaultAuto).toBe(true)
+		const invalid = await f.request('/api/auto-model', {
+			method: 'PATCH',
+			body: JSON.stringify({ ...DEFAULT_AUTO_MODEL_CONFIG, fallback: 'missing' })
+		})
+		expect(invalid.status).toBe(400)
+		expect(f.services.autoModelConfig.read().defaultAuto).toBe(true)
+	})
+})
 
 describe('relay HTTP routing', () => {
 	test('authenticates before reads and 404s, while static paths stay outside the API gate', async () => {

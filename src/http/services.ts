@@ -1,3 +1,4 @@
+import { createAutoModelServices } from './services/auto-model.ts'
 import { createBaseServices } from './services/base.ts'
 import { createDelegationsServices } from './services/delegations.ts'
 import { createDeliveryServices } from './services/delivery.ts'
@@ -18,11 +19,13 @@ export function createRelayServices() {
 	const delivery = createDeliveryServices({ ...base })
 	const delegations = createDelegationsServices({ ...base, ...delivery })
 	const workflowState = createWorkflowStateServices({ ...base, ...responses })
+	const autoModel = createAutoModelServices({ ...base, ...delivery, ...workflowState })
 	const workflowProbes = createWorkflowProbesServices({ ...base, ...delivery })
 	const workflow = createWorkflowServices({ ...base, ...workflowProbes, ...delivery, ...delegations })
 	const files = createFilesServices({ ...responses, ...base })
 	return {
 		...base,
+		...autoModel,
 		...responses,
 		...mcp,
 		...voice,

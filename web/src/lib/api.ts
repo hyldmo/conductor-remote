@@ -8,6 +8,8 @@ import type {
 	AgentPatch,
 	AgentResult,
 	ArchiveResult,
+	AutoModelConfig,
+	AutoModelConfigResponse,
 	CloseChatResult,
 	ClosedSessionsResponse,
 	ConfirmUiStableRequest,
@@ -222,6 +224,12 @@ function cachedObjectUrl(path: string): Promise<string> {
 }
 
 export const client = {
+	autoModelConfig: () => api<AutoModelConfigResponse>(routes.autoModelConfig.path()),
+	updateAutoModelConfig: (config: AutoModelConfig) =>
+		api<AutoModelConfigResponse>(routes.updateAutoModelConfig.path(), {
+			method: routes.updateAutoModelConfig.method,
+			body: JSON.stringify(config)
+		}),
 	state: () => api<StateResponse>(routes.state.path()),
 	/** Mint a short-lived native-call URI using the same bearer this PWA already holds. */
 	voiceTicket: () => api<VoiceTicketResponse>(routes.voiceTicket.path(), { method: routes.voiceTicket.method }),
@@ -313,13 +321,14 @@ export const client = {
 		workspaceId: string,
 		agent?: AgentPatch,
 		clientId?: string,
-		queue?: boolean
+		queue?: boolean,
+		auto?: boolean
 	) =>
 		api<SendResult>(
 			routes.sendPrompt.path(sessionId),
 			{
 				method: routes.sendPrompt.method,
-				body: JSON.stringify({ text, workspaceId, agent, clientId, queue } satisfies SendPromptRequest)
+				body: JSON.stringify({ text, workspaceId, agent, clientId, queue, auto } satisfies SendPromptRequest)
 			},
 			SEND_TIMEOUT_MS
 		),

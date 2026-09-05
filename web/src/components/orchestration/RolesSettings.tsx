@@ -103,7 +103,8 @@ export function RoleEditorCard({
 	invalid,
 	onChange,
 	onRemove,
-	canRemove
+	canRemove,
+	showPreamble = true
 }: {
 	name: string
 	role: DelegatedRole
@@ -113,6 +114,7 @@ export function RoleEditorCard({
 	onChange: (role: DelegatedRole) => void
 	onRemove: () => void
 	canRemove: boolean
+	showPreamble?: boolean
 }) {
 	const effectiveAgentType = agentType ?? modelAgentType(role.model) ?? null
 	const effortAvailable = agentTypeCanExposeEffort(effectiveAgentType)
@@ -189,16 +191,18 @@ export function RoleEditorCard({
 					<span>{invalid}</span>
 				</p>
 			) : null}
-			<details className="mt-2">
-				<summary className="cursor-pointer select-none text-[11px] text-faint">Role preamble</summary>
-				<textarea
-					value={role.preamble ?? ''}
-					onChange={event => onChange({ ...role, preamble: event.target.value })}
-					rows={4}
-					aria-label={`${name} role preamble`}
-					className="mt-1.5 block w-full resize-y rounded-xl border border-border bg-bg px-2.5 py-2 text-base leading-relaxed outline-none focus:border-accent/60"
-				/>
-			</details>
+			{showPreamble ? (
+				<details className="mt-2">
+					<summary className="cursor-pointer select-none text-[11px] text-faint">Role preamble</summary>
+					<textarea
+						value={role.preamble ?? ''}
+						onChange={event => onChange({ ...role, preamble: event.target.value })}
+						rows={4}
+						aria-label={`${name} role preamble`}
+						className="mt-1.5 block w-full resize-y rounded-xl border border-border bg-bg px-2.5 py-2 text-base leading-relaxed outline-none focus:border-accent/60"
+					/>
+				</details>
+			) : null}
 		</section>
 	)
 }

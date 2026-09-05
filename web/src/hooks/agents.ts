@@ -24,6 +24,10 @@ export function useModelCatalog() {
 	})
 }
 
+export function useAutoModelConfig() {
+	return useQuery({ queryKey: ['auto-model-config'], queryFn: client.autoModelConfig, staleTime: 60_000, retry: false })
+}
+
 /** Provider-specific defaults shown by both the Models sheet and the new-chat composer. */
 export function useModelDefaults() {
 	return useQuery<ModelDefaultsResponse>({

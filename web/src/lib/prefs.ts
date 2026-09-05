@@ -41,6 +41,7 @@ function cleanAgent(raw: unknown): AgentPatch {
 	const value = object(raw)
 	if (!value) return {}
 	const agent: AgentPatch = {}
+	if (typeof value.auto === 'boolean') agent.auto = value.auto
 	if (typeof value.model === 'string') agent.model = value.model
 	if (typeof value.effort === 'string') agent.effort = value.effort
 	if (typeof value.plan === 'boolean') agent.plan = value.plan
@@ -101,7 +102,7 @@ function cleanDraft(raw: unknown): SyncedDraft | null {
 }
 
 function sameAgent(a: AgentPatch, b: AgentPatch): boolean {
-	return a.model === b.model && a.effort === b.effort && a.plan === b.plan && a.fast === b.fast
+	return a.auto === b.auto && a.model === b.model && a.effort === b.effort && a.plan === b.plan && a.fast === b.fast
 }
 
 function sameDraft(a: SyncedDraft, b: SyncedDraft): boolean {

@@ -124,6 +124,8 @@ export const routes = {
 	pushTest: flat('POST', '/api/push/test'),
 	/** Global picker-backed delegated-role definitions. */
 	roles: flat('GET', '/api/roles'),
+	autoModelConfig: flat('GET', '/api/auto-model'),
+	updateAutoModelConfig: flat('PATCH', '/api/auto-model'),
 	updateRoles: flat('PATCH', '/api/roles'),
 	/** Active and failed jobs; optionally filtered with `?workspaceId=`. */
 	delegations: flat('GET', '/api/delegations'),

@@ -66,6 +66,7 @@ function sanitizeAgent(raw: unknown): ParkedAgentPatch {
 	const value = object(raw)
 	if (!value) return {}
 	const agent: ParkedAgentPatch = {}
+	if (typeof value.auto === 'boolean') agent.auto = value.auto
 	if (typeof value.model === 'string' && value.model.length <= MAX_AGENT_LABEL_LENGTH) agent.model = value.model
 	if (typeof value.effort === 'string' && value.effort.length <= MAX_AGENT_LABEL_LENGTH) agent.effort = value.effort
 	if (typeof value.plan === 'boolean') agent.plan = value.plan

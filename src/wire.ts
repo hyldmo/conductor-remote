@@ -25,6 +25,15 @@ import type { DefaultEfforts } from './agents/conductor-settings.ts'
 import type { CachedModelGroup } from './agents/model-cache.ts'
 import type { FirstPrompt } from './delivery/firstprompt.ts'
 import type { ParkedAgentPatch, ParkedPrompt } from './delivery/parked.ts'
+
+export type {
+	AutoModelConfig,
+	AutoModelConfigResponse,
+	AutoModelProfile,
+	AutoModelState,
+	AutoModelTuple
+} from './agents/auto-model/types.ts'
+
 import type { DevRunConfig } from './dev-server/run-configs.ts'
 import type { DevServerForward, DevServerResult, DevServerState } from './dev-server/types.ts'
 import type { UpdateStatus } from './host/autoupdate.ts'
@@ -725,6 +734,7 @@ export interface StageAttachmentResult {
 
 /** POST /api/sessions/:id/prompt — the relay retries inside the request, hence `attempts`. */
 export interface SendPromptRequest {
+	auto?: boolean
 	text: string
 	workspaceId?: string
 	agent?: ParkedAgentPatch

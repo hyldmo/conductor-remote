@@ -132,17 +132,19 @@ export function SubagentResult({ text, failed }: { text: string; failed?: boolea
  */
 export function QueuedEntry({
 	queued,
+	dismissError,
 	onRetry,
 	onDismiss
 }: {
 	queued: PendingPrompt
+	dismissError?: string
 	onRetry?: () => void
 	onDismiss: () => void
 }) {
 	const failed = queued.status === 'failed'
 	// A parked entry names its chat, a first prompt carries no `sessionId` (src/wire.ts) — and only
 	// the parked one is held by the lock screen, only for as long as it hasn't given up.
-	const unlock = !failed && !!queued.sessionId
+	const unlock = !failed && !!queued.sessionId && (!queued.autoModel || queued.reason?.includes('unlock'))
 	return (
 		<QueueBubble
 			state={failed ? 'failed' : 'pending'}
@@ -162,13 +164,20 @@ export function QueuedEntry({
 							...(onRetry ? [{ label: 'Retry', onClick: onRetry, primary: true }] : []),
 							{ label: 'Dismiss prompt', onClick: onDismiss }
 						]
-					: []
+					: queued.autoModel
+						? [{ label: 'Dismiss prompt', onClick: onDismiss }]
+						: []
 			}
 			dataUserMessage={messagePreview(queued.text)}
 			dataMessageState="queued"
 		>
 			<div>
 				<Markdown>{queued.text}</Markdown>
+				{dismissError ? (
+					<p className="mt-2 text-xs text-del" role="alert">
+						{dismissError}
+					</p>
+				) : null}
 			</div>
 		</QueueBubble>
 	)

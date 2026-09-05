@@ -26,7 +26,8 @@ export function createWorkspacesRoutes(
 		| 'sleep'
 		| 'devServers'
 		| 'chatHistory'
-	>
+	> &
+		Partial<Pick<RelayServices, 'autoModels'>>
 ): RouteHandler {
 	const { reads, json, delegationStore, attachWorkflowState, openChat, readBody, locateChat, sleep, devServers } =
 		services
@@ -55,7 +56,9 @@ export function createWorkspacesRoutes(
 			if (enriched) attachWorkflowState([enriched])
 			const sessionRoles = { ...(roles?.sessions ?? {}), ...(enriched?.session_roles ?? {}) }
 			return json(req, res, 200, {
-				sessions: reads.listSessions(listSessionsIn),
+				sessions: reads
+					.listSessions(listSessionsIn)
+					.map(session => ({ ...session, auto_model: services.autoModels?.state(session.id, listSessionsIn) })),
 				chat_history: services.chatHistory.forWorkspace(listSessionsIn),
 				...(Object.keys(sessionRoles).length ? { session_roles: sessionRoles } : {})
 			})

@@ -52,7 +52,9 @@ export function AgentBar({
 	session,
 	workspaceId,
 	workflow,
-	frozenWorkflow
+	frozenWorkflow,
+	auto = false,
+	onAutoChange
 }: {
 	session: Session
 	workspaceId: string
@@ -60,6 +62,8 @@ export function AgentBar({
 	workflow?: WorkflowAgentBar
 	/** Explicit role ownership from WorkflowRunWire + this session's assignment. */
 	frozenWorkflow?: FrozenWorkflowAgentBar
+	auto?: boolean
+	onAutoChange?: (active: boolean) => void
 }) {
 	const [picking, setPicking] = useState(false)
 	const [settingDefault, setSettingDefault] = useState<string>()
@@ -109,6 +113,9 @@ export function AgentBar({
 	useEffect(() => {
 		if (roleFrozen) setPicking(false)
 	}, [roleFrozen])
+	useEffect(() => {
+		if (['selecting', 'waiting', 'failed'].includes(session.auto_model?.status ?? '')) setPicking(false)
+	}, [session.auto_model?.status])
 
 	// A Plan choice can survive in synced/local drafts after switching away from
 	// Claude. Drop it as soon as the effective model no longer has Conductor's
@@ -144,7 +151,7 @@ export function AgentBar({
 			if (!result.ok) throw new Error(result.error ?? 'could not set the default model')
 			// Conductor's star is "set default and select", so it supersedes any model
 			// staged before the star was tapped. Preserve the other staged controls.
-			stageAgent(session.id, { model: undefined })
+			stageAgent(session.id, { model: undefined, auto: false })
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: ['model-catalog'] }),
 				queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] }),
@@ -159,6 +166,9 @@ export function AgentBar({
 
 	return (
 		<AgentControls
+			auto={auto || ['selecting', 'waiting'].includes(session.auto_model?.status ?? '')}
+			onAutoChange={onAutoChange}
+			disabled={['selecting', 'waiting', 'failed'].includes(session.auto_model?.status ?? '')}
 			model={roleFrozen ? workflowModel : displayedModel}
 			providerModel={roleFrozen ? (workflowRole?.model ?? null) : providerModel}
 			agentType={roleFrozen ? (workflowAgentType ?? null) : session.agent_type}
@@ -179,7 +189,7 @@ export function AgentBar({
 			fastStaged={!roleFrozen && staged.fast !== undefined}
 			effortStaged={!roleFrozen && staged.effort !== undefined}
 			planStaged={staged.plan !== undefined}
-			onModelChange={model => stage({ model: change(model, staged.model) })}
+			onModelChange={model => stage({ model: auto ? model : change(model, staged.model), auto: false })}
 			onFastChange={() => stage({ fast: change(!fastOn, dbFast) })}
 			onEffortChange={() => stage({ effort: change(nextEffort(effort), dbEffort) })}
 			onPlanChange={() => stage({ plan: change(!planOn, dbPlan) })}
@@ -213,6 +223,10 @@ export function AgentBar({
 					</span>
 				) : settingDefault ? (
 					'Setting default and selecting…'
+				) : auto ? (
+					'Chooses a model from your first message'
+				) : session.auto_model?.decision ? (
+					`Auto chose ${session.auto_model.decision.model} · ${session.auto_model.decision.reason}`
 				) : anyStaged ? (
 					sending ? (
 						'Applying…'

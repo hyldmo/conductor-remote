@@ -25,7 +25,8 @@ export function createSessionsRoutes(
 		| 'attachmentHeaderName'
 		| 'readAttachmentBody'
 		| 'chatHistory'
-	>
+	> &
+		Partial<Pick<RelayServices, 'autoModels'>>
 ): RouteHandler {
 	const {
 		json,
@@ -42,6 +43,15 @@ export function createSessionsRoutes(
 	} = services
 	return async (req, res, url) => {
 		const { pathname } = url
+		const changingAgent =
+			routeParam(routes.agent, req.method, pathname) ?? routeParam(routes.defaultModel, req.method, pathname)
+		if (changingAgent) {
+			const auto = services.autoModels?.get(changingAgent)
+			if (auto && ['selecting', 'waiting', 'failed'].includes(auto.status))
+				return json(req, res, 409, {
+					error: 'Auto owns the initial settings until this submission is delivered or dismissed.'
+				})
+		}
 
 		// PWA presentation only: preserve both real tabs and all their original messages.
 		const joinHistoryOf = routeParam(routes.joinChatHistory, req.method, pathname)

@@ -43,6 +43,7 @@ export function useSendPrompt() {
 
 	return useCallback(
 		async (opts: {
+			auto?: boolean
 			id?: string
 			sessionId: string
 			workspaceId: string
@@ -61,12 +62,14 @@ export function useSendPrompt() {
 				(opts.workflow
 					? workflowClientId(workflowAttemptKey, workflowStartFingerprint(text, workflowTarget))
 					: crypto.randomUUID())
-			addPending({ id, sessionId, workspaceId, text, queue: opts.queue, workflow: opts.workflow })
+			const auto = !opts.workflow && (opts.auto ?? useApp.getState().agentDrafts[sessionId]?.auto ?? false)
+			addPending({ id, sessionId, workspaceId, text, queue: opts.queue, workflow: opts.workflow, auto })
 			try {
 				// Read at send time, not through the closure: the user may have changed the
 				// model between mounting the composer and tapping send.
 				const staged = useApp.getState().agentDrafts[sessionId]
-				const agent = !opts.workflow && staged && Object.keys(staged).length ? staged : undefined
+				const manual = staged && Object.fromEntries(Object.entries(staged).filter(([key]) => key !== 'auto'))
+				const agent = !auto && !opts.workflow && manual && Object.keys(manual).length ? manual : undefined
 				// `id` goes to the relay as well as into the bubble: it is the send's identity,
 				// so a Retry of this same bubble is answered rather than sent again. Which is
 				// the duplicate the chats here hold — the prompt landed, the answer didn't.
@@ -90,9 +93,9 @@ export function useSendPrompt() {
 					return true
 				}
 
-				const r = await client.sendPrompt(sessionId, text, workspaceId, agent, id, opts.queue)
+				const r = await client.sendPrompt(sessionId, text, workspaceId, agent, id, opts.queue, auto)
 				if (r.ok || r.parked) {
-					const appliedDraft = agent
+					const appliedDraft = auto ? staged : { ...agent, auto: staged?.auto }
 					if (appliedDraft) {
 						// Ordinary choices were applied or parked with the prompt.
 						clearAgentDraft(sessionId, appliedDraft)

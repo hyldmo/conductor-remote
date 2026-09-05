@@ -30,6 +30,8 @@ export type ParkedStatus = 'waiting' | 'failed'
 
 /** Staged agent settings riding with the prompt (mirrors the phone's `AgentPatch`). */
 export interface ParkedAgentPatch {
+	/** Draft preference; consumed by Auto intake, never passed to a UI write. */
+	auto?: boolean
 	effort?: string
 	plan?: boolean
 	fast?: boolean
@@ -37,6 +39,7 @@ export interface ParkedAgentPatch {
 }
 
 export interface ParkedPrompt {
+	autoModel?: true
 	workspaceId: string
 	sessionId: string
 	text: string
