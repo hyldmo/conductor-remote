@@ -109,6 +109,7 @@ export function Composer({
 		removeReady: removeDraftAttachment
 	})
 	const uploading = attachmentUploads.uploading
+	const attachmentError = attachmentUploads.hasError
 	const prompt = [...readyAttachments.map(attachment => attachment.token), text.trim()].filter(Boolean).join('\n')
 	const workflowSendPending = useApp(s => s.pending.some(p => p.sessionId === sessionId && !!p.workflow))
 	const workflowPristine =
@@ -170,6 +171,7 @@ export function Composer({
 		if (
 			!prompt ||
 			uploading ||
+			attachmentError ||
 			forking ||
 			!sessionId ||
 			!online ||
@@ -199,7 +201,7 @@ export function Composer({
 	}
 
 	const forkDraft = async () => {
-		if (!(onFork && prompt) || uploading || forking || !online) return
+		if (!(onFork && prompt) || uploading || attachmentError || forking || !online) return
 		setForking(true)
 		setForkError(null)
 		try {
@@ -246,6 +248,7 @@ export function Composer({
 	const canSend =
 		(!!text.trim() || readyAttachments.length > 0) &&
 		!uploading &&
+		!attachmentError &&
 		!workflowSendPending &&
 		(!workflowMode || workflowReady)
 	const coldCache = !working && canSend && session && onFork ? coldPromptCache(session) : null
