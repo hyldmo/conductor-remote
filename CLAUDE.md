@@ -754,9 +754,14 @@ Two asymmetric halves — keep them separate:
     itself, and changing only git would leave Conductor's cached and durable state
     describing the old branch. So the phone passes the chat it is showing, the AX
     path focuses and asserts that tab, and then finds an exact-name Continue button
-    at the shallowest bounded level of the web area. Shallowest is load-bearing: the
-    transcript hangs off the same root and can contain controls of its own; zero or
-    several hits refuses rather than guesses. AXPress is only acceptance — the
+    among the workspace pane's direct buttons and one level of groups. Never fall
+    back to searching the web area: a missing action sent the old ten-level scan
+    through 584 unrelated nodes at depth four and exhausted its 28s ceiling before
+    any click (2026-09-05). `workspaceActionButtons` filters names in one Apple event
+    per container, skips the composer, and never descends into transcript messages.
+    A short bounded poll lets Conductor refresh the PR after focus. Zero or several
+    hits refuses rather than guesses, and the selected button must have its native
+    Archive sibling. AXPress is only acceptance — the
     native checkout/fetch continues asynchronously — so `src/http/routes/workspaces.ts` waits for the
     read-only `workspaces.branch` value to differ before answering. The action is
     rendered only by the live diff view when GitHub says the current PR is merged;

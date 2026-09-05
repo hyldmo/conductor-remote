@@ -97,35 +97,31 @@ on buttonsUnder(root, maxDepth)
 	return acc
 end buttonsUnder
 
-on shallowButtonsNamed(root, maxDepth, wanted)
-	-- Exact-name buttons at the first depth that contains one. Continue lives in
-	-- Conductor's workspace action bar, while a chat transcript hangs much deeper
-	-- off the same web area. Stopping at the shallowest hit both avoids walking a
-	-- long transcript and keeps a similarly named control inside a message from
-	-- impersonating the workspace action.
-	set level to {root}
-	set depth to 0
+on childButtonsNamed(root, wanted)
+	-- Filter in one Apple event. Reading every button's name separately makes
+	-- even a shallow miss depend on the size of the surrounding UI.
 	tell application "System Events" to tell process "Conductor"
-		repeat while (count of level) > 0 and depth < maxDepth
-			set found to {}
-			set nextLevel to {}
-			repeat with entry in level
-				set node to contents of entry
-				try
-					repeat with candidate in (get UI elements of node whose role is "AXButton")
-						set controlEl to contents of candidate
-						if (my axName(controlEl)) is wanted then set end of found to controlEl
-					end repeat
-					set nextLevel to nextLevel & (get UI elements of node)
-				end try
-			end repeat
-			if (count of found) > 0 then return found
-			set level to nextLevel
-			set depth to depth + 1
-		end repeat
+		return get UI elements of root whose role is "AXButton" and name is wanted
 	end tell
-	return {}
-end shallowButtonsNamed
+end childButtonsNamed
+
+on workspaceActionButtons(pane, wanted)
+	-- The header and git action bar belong to the asserted workspace pane: their
+	-- buttons are direct children or inside one group. Never search the whole web
+	-- area or recurse into those groups. On a missing Continue, the old ten-level
+	-- sweep reached 584 unrelated nodes at depth four and hit the 28s run ceiling.
+	-- This also keeps a Continue inside a transcript, composer or modal out of the
+	-- candidate set. Keep every match at the shallowest level so ambiguity refuses.
+	set found to my childButtonsNamed(pane, wanted)
+	if (count of found) > 0 then return found
+	repeat with entry in (my axKids(pane))
+		set node to contents of entry
+		if (my axRole(node)) is "AXGroup" and (my axName(node)) is not "composer" then
+			set found to found & (my childButtonsNamed(node, wanted))
+		end if
+	end repeat
+	return found
+end workspaceActionButtons
 
 on hasSiblingButtonNamed(controlEl, wanted)
 	-- The live merged action is the pair Continue + Archive. Requiring that pair
@@ -147,11 +143,22 @@ on continueWorkspaceOnNewBranch()
 	-- state that cannot be reproduced safely from the relay: it checks out a fresh
 	-- branch at the PR's target, updates the workspace row, keeps every chat, and
 	-- stages Branch continued.md in the selected chat. The relay never writes the
-	-- database; server.ts watches `workspaces.branch` for the receipt.
+	-- database; the HTTP route watches `workspaces.branch` for the receipt.
 	set strips to my tabGroups()
 	if (count of strips) is 0 then error "couldn't find the chat pane to continue from"
-	my assertWorkspace(item 1 of strips)
-	set found to my shallowButtonsNamed(my webArea(), 10, "Continue")
+	set strip to item 1 of strips
+	set found to {}
+	-- Focusing a workspace starts its asynchronous PR refresh. Give the native
+	-- action time to appear, using only the bounded pane read on each attempt.
+	repeat with attempt from 1 to 8
+		my assertWorkspace(strip)
+		tell application "System Events" to tell process "Conductor"
+			set pane to value of attribute "AXParent" of strip
+		end tell
+		set found to my workspaceActionButtons(pane, "Continue")
+		if (count of found) > 0 then exit repeat
+		if attempt < 8 then delay 0.25
+	end repeat
 	if (count of found) is 0 then error "Conductor isn't offering Continue for this workspace - it appears after its pull request is merged and refreshed"
 	if (count of found) > 1 then error "more than one Continue button is visible - close any dialog and try again"
 	set continueEl to item 1 of found
