@@ -67,9 +67,29 @@ export interface RealtimeUsage {
 	output_token_details?: TokenDetails
 }
 
-/** USD estimate for the model whose rates are pinned in the design and documentation. */
+// USD per million tokens: https://developers.openai.com/api/docs/models/gpt-realtime-2.1
+// Mini remains configurable: https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini
+const REALTIME_RATES = new Map([
+	[
+		'gpt-realtime-2.1',
+		{
+			text: { input: 4, cached: 0.4, output: 24 },
+			audio: { input: 32, cached: 0.4, output: 64 }
+		}
+	],
+	[
+		'gpt-realtime-2.1-mini',
+		{
+			text: { input: 0.6, cached: 0.06, output: 2.4 },
+			audio: { input: 10, cached: 0.3, output: 20 }
+		}
+	]
+])
+
+/** USD estimate from the configured model's published text and audio rates. */
 export function estimateRealtimeCost(model: string, usage: RealtimeUsage): number | null {
-	if (model !== 'gpt-realtime-2.1-mini') return null
+	const rates = REALTIME_RATES.get(model)
+	if (!rates) return null
 	const input = usage.input_token_details ?? {}
 	const output = usage.output_token_details ?? {}
 	const cachedText = input.cached_tokens_details?.text_tokens ?? 0
@@ -77,12 +97,12 @@ export function estimateRealtimeCost(model: string, usage: RealtimeUsage): numbe
 	const uncachedText = Math.max(0, (input.text_tokens ?? 0) - cachedText)
 	const uncachedAudio = Math.max(0, (input.audio_tokens ?? 0) - cachedAudio)
 	return (
-		(uncachedText * 0.6 +
-			cachedText * 0.06 +
-			uncachedAudio * 10 +
-			cachedAudio * 0.3 +
-			(output.text_tokens ?? 0) * 2.4 +
-			(output.audio_tokens ?? 0) * 20) /
+		(uncachedText * rates.text.input +
+			cachedText * rates.text.cached +
+			uncachedAudio * rates.audio.input +
+			cachedAudio * rates.audio.cached +
+			(output.text_tokens ?? 0) * rates.text.output +
+			(output.audio_tokens ?? 0) * rates.audio.output) /
 		1_000_000
 	)
 }

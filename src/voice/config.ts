@@ -56,7 +56,7 @@ const EMPTY: Omit<VoiceConfig, 'mcpToken' | 'trunkSecret'> = {
 	pin: null,
 	projectId: null,
 	publicBaseUrl: null,
-	model: 'gpt-realtime-2.1-mini',
+	model: 'gpt-realtime-2.1',
 	voice: 'marin',
 	sipHost: 'sip.api.openai.com'
 }
