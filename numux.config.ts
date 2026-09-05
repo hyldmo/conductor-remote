@@ -32,6 +32,7 @@ const conductorPort = Number(process.env.CONDUCTOR_PORT) || 0
 const webPort = conductorPort || 5173
 // Loopback bind + Vite proxy target must match; only prod auto-binds the Tailscale NIC.
 const relayPort = conductorPort ? await freePort() : 8787
+const voicePort = process.env.VOICE_PORT ?? String(conductorPort ? await freePort() : 8788)
 
 export default defineConfig({
 	processes: {
@@ -48,6 +49,7 @@ export default defineConfig({
 			// with the token, in place of its own (src/config.ts, src/server.ts ▸ listen).
 			env: {
 				RELAY_PORT: String(relayPort),
+				VOICE_PORT: voicePort,
 				RELAY_HOST: process.env.RELAY_HOST ?? '127.0.0.1',
 				RELAY_DEV: '1',
 				WEB_PORT: String(webPort)

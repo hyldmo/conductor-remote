@@ -112,6 +112,8 @@ import {
 	stagedAttachments
 } from './staged-attachments.ts'
 import { driftWarningLines, readExposeMode, tailscaleBin } from './tailscale.ts'
+import { isToolUsageRange } from './tool-usage.ts'
+import { ToolUsageService } from './tool-usage-service.ts'
 import { renderTranscript, transcriptMessage, transcriptThrough } from './transcript.ts'
 import { recoverExpiredUiLease } from './ui-lease-watchdog.ts'
 import { VoiceBriefBoard } from './voice/brief.ts'
@@ -229,6 +231,7 @@ function stagedAttachmentIdsInObjective(objective: string): string[] {
 // from a list before Conductor has created its first chat.
 const modelCache = new ModelCache(path.join(stateDir(), 'model-cache.json'))
 const planUsage = new PlanUsageService()
+const toolUsage = new ToolUsageService(cfg.dbPath)
 const roleStore = new RoleStore(path.join(stateDir(), 'roles.json'))
 const orchestration = new OrchestrationDb(path.join(stateDir(), 'orchestration.db'), {
 	processProbe: processIdentityAlive
@@ -2594,6 +2597,12 @@ const server = http.createServer(async (req, res) => {
 			// explicit user action in the sheet, never a background poll.
 			if (isRoute(routes.planUsage, req.method, pathname)) {
 				return json(req, res, 200, await planUsage.read(url.searchParams.get('refresh') === '1'))
+			}
+
+			if (isRoute(routes.toolUsage, req.method, pathname)) {
+				const range = url.searchParams.get('range') ?? '24h'
+				if (!isToolUsageRange(range)) return json(req, res, 400, { error: 'Choose 24h, 7d, or 30d for tool usage.' })
+				return json(req, res, 200, await toolUsage.read(range, url.searchParams.get('refresh') === '1'))
 			}
 
 			if (isRoute(routes.roles, req.method, pathname)) {

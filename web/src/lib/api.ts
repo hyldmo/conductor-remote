@@ -56,6 +56,8 @@ import type {
 	StateResponse,
 	StatusResult,
 	StopResult,
+	ToolUsageRange,
+	ToolUsageResponse,
 	UpdateRolesResult,
 	UploadAttachmentResult,
 	VoiceCallResponse,
@@ -300,6 +302,8 @@ export const client = {
 		}),
 	/** Exact last-turn context total plus estimated categories and fork payload sizes. */
 	contextBreakdown: (sessionId: string) => api<ContextBreakdownResponse>(routes.context.path(sessionId)),
+	toolUsage: (range: ToolUsageRange, refresh = false) =>
+		api<ToolUsageResponse>(`${routes.toolUsage.path()}?range=${range}${refresh ? '&refresh=1' : ''}`, {}, 75_000),
 	/** Stage one phone file in the selected workspace, then add its returned token to a prompt. */
 	uploadAttachment: (sessionId: string, workspaceId: string, file: File) =>
 		upload<UploadAttachmentResult>(

@@ -77,6 +77,11 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   defaults in ~/.conductor/settings.toml; preserves every unrelated TOML line
   plan-usage.ts   prompt-free Claude/Codex CLI allowance reads → normalized rolling windows;
                   concurrent, single-flight and cached (Cursor/OpenCode report unavailable)
+  tool-usage.ts   pairs saved tool calls/results by chat and call ID for 24h/7d/30d estimates;
+                  includes archived/hidden chats, skips mirrored child internals and binary payloads
+  tool-usage-service.ts + tool-usage-worker.ts  on-demand read-only SQLite scans off the HTTP
+                  thread, serialized and cached for one minute; only names/counts/token estimates
+                  leave the worker, never tool arguments or result text
   roles.ts        strict v1 global role config in stateDir()/roles.json; exact picker/provider
                   validation, immutable resolved snapshots, no Plan field
   workflow.ts     validates/freezes all three Workflow roles and builds the root/child/Baton
@@ -156,7 +161,8 @@ web/              React PWA (Vite root)
                   DevServerControls, ClosedTabsSheet, ContextBreakdownSheet, SearchSheet + SearchPane + CommandResults (one
                   ⌘K box for chats and actions), ArchivedChat (a hit whose
                   worktree is gone), NewWorkspaceSheet, PlanUsageSheet (the Models panel:
-                  provider defaults plus usage), LogsSheet, TokenGate, QRCode +
+                  provider defaults plus usage, with ToolUsageSection ranking tool context
+                  by total/per-call/largest payload and filtering by provider/period), LogsSheet, TokenGate, QRCode +
                   QRScanner, ReloadPrompt, ui, and ConnectSheet
                   (the Notifications switch with "send a test", plus the Mac section: keep-awake
                   windows and the fallback-network picker). Patch.tsx renders a unified diff for

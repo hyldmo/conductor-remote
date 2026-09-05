@@ -175,4 +175,21 @@ describe('context category estimates', () => {
 		expect(estimateTextTokens('1234')).toBe(1)
 		expect(estimateTextTokens('🙂')).toBe(1)
 	})
+
+	test('excludes MCP images serialized as JSON text in a tool result', () => {
+		const estimated = estimateContextCategories(
+			[
+				sdk('user', [
+					{
+						type: 'tool_result',
+						content: JSON.stringify({ content: [{ type: 'image', mimeType: 'image/png', data: 'x'.repeat(400_000) }] })
+					}
+				]),
+				result()
+			],
+			200_000
+		)
+		expect(estimated.categories.tools).toBeLessThan(100)
+		expect(total(estimated.categories)).toBe(200_000)
+	})
 })

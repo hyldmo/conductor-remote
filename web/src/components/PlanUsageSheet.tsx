@@ -16,6 +16,7 @@ import type {
 } from '../lib/types.ts'
 import { planName, resetLabel } from '../lib/usage.ts'
 import { ProviderMark } from './AgentIcons.tsx'
+import { ToolUsageSection } from './ToolUsageSection.tsx'
 import { Empty } from './ui.tsx'
 
 function UsageBar({ window }: { window: PlanUsageWindow }) {
@@ -255,11 +256,12 @@ export function PlanUsageSheet({ onClose }: { onClose: () => void }) {
 					{defaults.isError ? (
 						<p className="text-xs text-del">{(defaults.error as Error)?.message ?? 'Could not read model defaults.'}</p>
 					) : null}
+					<ToolUsageSection />
 				</div>
 
 				{usage.data ? (
 					<div className="shrink-0 border-t border-border-soft px-4 py-2.5 text-[11px] text-faint">
-						Updated {clockTime(usage.data.fetchedAt)} · cached for one minute
+						Plan usage updated {clockTime(usage.data.fetchedAt)} · cached for one minute
 					</div>
 				) : null}
 			</div>

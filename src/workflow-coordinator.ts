@@ -415,12 +415,14 @@ function promptRole(role: FrozenWorkflowRole): PromptRole {
 
 export class WorkflowCoordinator {
 	private readonly waking = new Map<string, Promise<WorkflowRunProjection>>()
+	private readonly db: OrchestrationDb
+	private readonly relay: RelayIdentity
+	private readonly deps: WorkflowCoordinatorDeps
 
-	constructor(
-		private readonly db: OrchestrationDb,
-		private readonly relay: RelayIdentity,
-		private readonly deps: WorkflowCoordinatorDeps
-	) {
+	constructor(db: OrchestrationDb, relay: RelayIdentity, deps: WorkflowCoordinatorDeps) {
+		this.db = db
+		this.relay = relay
+		this.deps = deps
 		this.db.registerRelayInstance({ ...relay, canDriveUi: true })
 	}
 
