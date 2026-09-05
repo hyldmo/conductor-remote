@@ -24,6 +24,9 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { attachmentToken } from '../shared.ts'
+
+export { attachmentToken } from '../shared.ts'
 
 /** Where Conductor keeps them, relative to the worktree. */
 export const ATTACHMENT_DIR = path.join('.context', 'attachments')
@@ -63,11 +66,6 @@ export function attachmentName(name: string): string {
 		clipped += char
 	}
 	return clipped.trim() || 'attachment'
-}
-
-/** The composer's own syntax for an attached file. `encodeURIComponent` matches it exactly, `/` included. */
-export function attachmentToken(name: string, relPath: string): string {
-	return `@⟦${name}⟧(${encodeURIComponent(relPath)})`
 }
 
 /** Compose a fork handoff, leaving an empty line for the user's added context when needed. */

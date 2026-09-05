@@ -447,6 +447,11 @@ export interface AttachmentToken {
 
 const ATTACHMENT_PREFIX = '.context/attachments/'
 
+/** Conductor's attachment syntax encodes the whole relative path, including slashes. */
+export function attachmentToken(name: string, relPath: string): string {
+	return `@⟦${name}⟧(${encodeURIComponent(relPath)})`
+}
+
 /**
  * Read Conductor attachment tokens from prompt text.
  *

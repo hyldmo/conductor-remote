@@ -224,7 +224,7 @@ export function createPromptsRoutes(
 		// route so it inherits the retry loop, the transcript confirm and the parked queue.
 		// For a tab, that also keeps ⌘T plus a send from becoming two UI turns inside one
 		// request (28s + 55s against the MCP client's 75s); for a workspace it leaves the
-		// staged handoff as the same editable draft the phone already presents for a tab.
+		// staged context waiting for the user's first message, just as a tab fork does.
 		const splitFrom = routeParam(routes.splitChat, req.method, pathname)
 
 		if (splitFrom) {

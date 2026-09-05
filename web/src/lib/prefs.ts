@@ -7,7 +7,7 @@
  */
 import { isAgentEffort } from '../../../src/shared.ts'
 import { AGENT_DRAFT_PREFIX } from './prompts/agent-draft.ts'
-import { DRAFT_PREFIX } from './prompts/draft.ts'
+import { DRAFT_PREFIX, legacyForkContent } from './prompts/draft.ts'
 import { READ_MARKS_KEY, type ReadMarks } from './read.ts'
 import type { AgentPatch, DraftAttachment, Prefs, SyncedDraft } from './types.ts'
 
@@ -70,6 +70,7 @@ function cleanAttachment(raw: unknown): DraftAttachment | null {
 		path: value.path,
 		bytes: Number(value.bytes),
 		token: value.token,
+		...(value.source === 'fork' ? { source: 'fork' as const } : {}),
 		...(value.stageId ? { stageId: value.stageId } : {})
 	}
 }
@@ -119,6 +120,7 @@ function sameDraft(a: SyncedDraft, b: SyncedDraft): boolean {
 				attachment.path === other.path &&
 				attachment.bytes === other.bytes &&
 				attachment.token === other.token &&
+				attachment.source === other.source &&
 				attachment.stageId === other.stageId
 			)
 		})
@@ -183,6 +185,7 @@ export class LocalPrefs {
 			}
 			this.prefs = { readMarks: this.readRawMarks(), drafts }
 		}
+		this.migrateForkDrafts()
 		this.persistAll()
 	}
 
@@ -316,6 +319,10 @@ export class LocalPrefs {
 			needsUpload = true
 		}
 
+		if (this.migrateForkDrafts()) {
+			changed = true
+			needsUpload = true
+		}
 		if (changed) this.persistAll()
 		return { state: this.project(), needsUpload }
 	}
@@ -333,6 +340,18 @@ export class LocalPrefs {
 		this.prefs.drafts[id] = liveDraft(text, cleanAgent(agent), attachments, this.tick())
 		this.touched.add(id)
 		this.changed()
+	}
+
+	private migrateForkDrafts(): boolean {
+		let changed = false
+		for (const [id, draft] of Object.entries(this.prefs.drafts)) {
+			if (draft.deleted) continue
+			const content = legacyForkContent(draft.text, draft.attachments)
+			if (!content) continue
+			this.prefs.drafts[id] = { ...draft, ...content, updatedAt: this.tick() }
+			changed = true
+		}
+		return changed
 	}
 
 	private changed(): void {

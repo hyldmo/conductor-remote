@@ -25,6 +25,15 @@ afterEach(() => {
 })
 
 describe('host preference store', () => {
+	test.each([42, 30 * 1024 * 1024])('retains fork context when saving and reloading a %i-byte transcript', bytes => {
+		const { store, file } = testStore()
+		const context = { ...attachment, bytes, source: 'fork' as const }
+		store.patch({
+			drafts: { chat: { text: '', agent: {}, attachments: [context], updatedAt: 10, deleted: false } }
+		})
+		expect(new PrefsStore(file).read().drafts.chat.attachments).toEqual([context])
+	})
+
 	test('keeps known effort values and drops unsupported values from stored drafts', () => {
 		const { store } = testStore()
 		const prefs = store.patch({

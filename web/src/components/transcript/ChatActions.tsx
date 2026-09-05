@@ -225,7 +225,7 @@ export function ChatActions({
 								onClick={() => void fork({ thinking: true, tools: false }, true)}
 								disabled={!!transferring || !!compactUnavailable}
 								aria-label="Compact chat with reasoning"
-								title={compactUnavailable ?? 'Start fresh context and keep the conversation above a divider'}
+								title={compactUnavailable ?? 'Toggle fresh context for your next message'}
 								className="flex h-7 items-center gap-1 whitespace-nowrap px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
 							>
 								{transferring === 'compact' ? <Loader2 size={13} className="animate-spin" /> : <Minimize2 size={13} />}
