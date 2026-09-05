@@ -46,6 +46,21 @@ live agent status, workspace status, PR
 status, and an `updated_since`/`updated_before` time window; each spoken row says
 how recently its selected chat changed.
 
+Overviews distinguish workspaces from chats: one workspace can have several
+running chats and several waiting for input. Every waiting sibling is reachable
+when you ask to continue through the questions, independently of the newest
+activity pages. **Needs input** means an explicit live input or plan request;
+an idle reply that asks a question is a **possible follow-up**, not a confirmed
+blocker. Unread updates alone do not count as input requests.
+
+When Compact continues a conversation in a new chat, the overview suppresses its
+older context only after a successor turn has been dispatched. An unsent handoff
+keeps the predecessor visible. Independent siblings, running predecessors, and
+predecessors messaged after the successor was created remain visible. These
+replacement rules apply before status and date filters, so filtering for waiting
+work cannot bring an obsolete question back. Cached decisions also skip chats
+that were replaced, resumed, closed, or updated since the roll call.
+
 Past calls are available only when you ask. After reconnecting, ask **“What did
 we just talk about?”** to read the preceding call, or **“What did we talk about
 yesterday?”** to look up calls by date. You can also search a remembered topic.

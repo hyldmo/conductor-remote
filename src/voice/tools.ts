@@ -94,17 +94,21 @@ export const VOICE_TOOL_DEFINITIONS: readonly VoiceToolDefinition[] = [
 	{
 		name: 'voice_workspace_overview',
 		description:
-			'Get a fresh overview in newest-activity-first order, with a waitingForYou count and waiting list of chats needing answers even beyond this page. Inactive work fades out after three days; running agents stay visible. Merged and Done are excluded unless requested. Call on every fleet overview request. Keep the same filters when continuing with its cursor.',
+			'Get a fresh overview in newest-activity-first order. waitingForYou counts workspaces; waitingChatCount counts explicit input waits. Each workspace includes chat/running/waiting counts and possible follow-ups separately. Confirmed replaced contexts are excluded. Inactive work fades out after three days; running agents stay visible. Merged and Done are excluded unless requested. Call on every fleet overview request. Continue activity with cursor and questions with waitingCursor, keeping the same filters.',
 		inputSchema: {
 			type: 'object',
 			properties: {
 				cursor: { type: 'number', description: 'The cursor returned by the previous overview page; default 0.' },
+				waiting_cursor: {
+					type: 'number',
+					description: 'The waitingCursor returned by the previous question page; default 0. Independent of cursor.'
+				},
 				repo: { type: 'string', description: 'Only this exact repository name.' },
 				agent_status: {
 					type: 'string',
 					enum: ['working', 'idle', 'error', 'needs-you'],
 					description:
-						'Only matching chats. needs-you includes live input/plan waits and idle chats whose latest reply asks a question; unread alone does not qualify.'
+						'Only matching chats. needs-you includes explicit live input/plan waits. Idle prose questions are possible follow-ups, not confirmed waits; unread alone does not qualify.'
 				},
 				workspace_status: {
 					type: 'string',
@@ -347,6 +351,8 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 			...definition('voice_workspace_overview'),
 			run: async args => {
 				const cursor = typeof args.cursor === 'number' && Number.isFinite(args.cursor) ? args.cursor : 0
+				const waitingCursor =
+					typeof args.waiting_cursor === 'number' && Number.isFinite(args.waiting_cursor) ? args.waiting_cursor : 0
 				const filters: WorkspaceOverviewFilters = {}
 				const repo = optional(args, 'repo')
 				const agentStatus = optional(args, 'agent_status') as WorkspaceOverviewFilters['agentStatus']
@@ -363,7 +369,7 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 				if (typeof args.include_done === 'boolean') filters.includeDone = args.include_done
 				if (typeof args.include_merged === 'boolean') filters.includeMerged = args.include_merged
 				if (typeof args.include_dormant === 'boolean') filters.includeDormant = args.include_dormant
-				return answer(await context.board.workspaceOverview(cursor, filters))
+				return answer(await context.board.workspaceOverview(cursor, filters, waitingCursor))
 			}
 		},
 		{
