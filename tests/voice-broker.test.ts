@@ -126,6 +126,9 @@ describe('the call accept payload', () => {
 						'voice_roll_call',
 						'voice_workspace_overview',
 						'voice_next_decision',
+						'voice_list_repos',
+						'voice_create_workspace_preview',
+						'voice_create_workspace',
 						'voice_send_preview',
 						'voice_send'
 					]

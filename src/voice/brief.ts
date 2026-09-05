@@ -6,6 +6,7 @@ import { clipExact, oneLine, speechText } from '../speech.ts'
 const DORMANT_MS = 7 * 24 * 60 * 60 * 1000
 const DORMANT_LABELS = new Set(['backlog', 'done', 'canceled', 'cancelled'])
 const OVERVIEW_PAGE_SIZE = 3
+const OVERVIEW_AGENT_STATUSES = new Set(['working', 'idle', 'error', 'needs-you'])
 
 export interface VoiceDecision {
 	situation: string
@@ -56,10 +57,27 @@ export interface WorkspaceOverviewItem {
 
 export interface WorkspaceOverview {
 	spoken: string
+	/** Relay time used for relative dates and filters. */
+	asOf: string
 	current: number
 	dormant: number
+	completed: number
+	filtered: number
 	cursor: number | null
 	workspaces: WorkspaceOverviewItem[]
+}
+
+export interface WorkspaceOverviewFilters {
+	repo?: string
+	agentStatus?: 'working' | 'idle' | 'error' | 'needs-you'
+	workspaceStatus?: string
+	prStatus?: string
+	/** A named calendar boundary, relative duration such as `24h`/`7d`, or ISO date/time. */
+	updatedSince?: string
+	/** Exclusive upper bound, as an ISO date/time or date-only local day. */
+	updatedBefore?: string
+	includeDone?: boolean
+	includeMerged?: boolean
 }
 
 interface BriefDeps {
@@ -142,11 +160,103 @@ function statusLabel(workspace: Workspace): string | null {
 	return workspace.manual_status ?? workspace.derived_status
 }
 
-function isDormant(state: SessionState, workspace: Workspace, now: number): boolean {
+function normalizedStatus(value: string | null | undefined): string {
+	return (value ?? '').trim().toLowerCase().replaceAll('_', '-').replaceAll(' ', '-')
+}
+
+function isDormant(
+	state: SessionState,
+	workspace: Workspace,
+	now: number,
+	options: { ignoreAge?: boolean; includeDone?: boolean; includedWorkspaceStatus?: string } = {}
+): boolean {
 	if (state.status !== 'idle' && state.status) return false
 	const old = now - parseDate(state.updatedAt) > DORMANT_MS
-	const labelled = DORMANT_LABELS.has((statusLabel(workspace) ?? '').toLowerCase())
-	return old || labelled
+	const label = normalizedStatus(statusLabel(workspace))
+	const explicitlyIncluded = options.includedWorkspaceStatus === label || (options.includeDone && label === 'done')
+	const labelled = DORMANT_LABELS.has(label) && !explicitlyIncluded
+	return (!options.ignoreAge && old) || labelled
+}
+
+function isDone(workspace: Workspace): boolean {
+	return normalizedStatus(statusLabel(workspace)) === 'done'
+}
+
+function isMerged(workspace: Workspace): boolean {
+	return workspace.pr_status === 'merged'
+}
+
+function parseOverviewDate(value: string, now: number, field: string): number {
+	const normalized = value.trim().toLowerCase()
+	if (
+		normalized === 'today' ||
+		normalized === 'yesterday' ||
+		normalized === 'this-week' ||
+		normalized === 'this-month'
+	) {
+		const current = new Date(now)
+		const boundary = new Date(current.getFullYear(), current.getMonth(), current.getDate())
+		if (normalized === 'yesterday') boundary.setDate(boundary.getDate() - 1)
+		if (normalized === 'this-week') {
+			const daysSinceMonday = (boundary.getDay() + 6) % 7
+			boundary.setDate(boundary.getDate() - daysSinceMonday)
+		}
+		if (normalized === 'this-month') boundary.setDate(1)
+		return boundary.getTime()
+	}
+	const relative = /^(\d+)(h|d|w)$/.exec(normalized)
+	if (relative) {
+		const amount = Number(relative[1])
+		const unit = relative[2]
+		const multiplier = unit === 'h' ? 60 * 60 * 1000 : unit === 'd' ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000
+		if (amount > 0 && amount <= 10_000) return now - amount * multiplier
+	}
+	if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+		const [year, month, day] = normalized.split('-').map(Number)
+		const date = new Date(year, month - 1, day)
+		if (date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day) return date.getTime()
+	}
+	const parsed = Date.parse(value)
+	if (Number.isFinite(parsed)) return parsed
+	throw new Error(
+		`${field} must be today, yesterday, this-week, this-month, a duration like 24h or 7d, or an ISO date/time`
+	)
+}
+
+function agentStatus(state: SessionState): WorkspaceOverviewFilters['agentStatus'] {
+	if (state.status === 'needs_user_input' || state.status === 'needs_plan_response') return 'needs-you'
+	if (state.status === 'working' || state.status === 'error') return state.status
+	return 'idle'
+}
+
+function spokenUpdateAge(value: string, now: number): string {
+	const at = parseDate(value)
+	if (!at) return 'Update time unavailable.'
+	const elapsed = Math.max(0, now - at)
+	const minutes = Math.floor(elapsed / (60 * 1000))
+	if (minutes < 1) return 'Updated just now.'
+	if (minutes < 60) return `Updated ${minutes} minute${minutes === 1 ? '' : 's'} ago.`
+	const hours = Math.floor(elapsed / (60 * 60 * 1000))
+	if (hours < 24) return `Updated ${hours} hour${hours === 1 ? '' : 's'} ago.`
+	const days = Math.floor(elapsed / (24 * 60 * 60 * 1000))
+	if (days === 1) return 'Updated yesterday.'
+	if (days < 31) return `Updated ${days} days ago.`
+	const date = new Date(at)
+	const month = [
+		'January',
+		'February',
+		'March',
+		'April',
+		'May',
+		'June',
+		'July',
+		'August',
+		'September',
+		'October',
+		'November',
+		'December'
+	][date.getUTCMonth()]
+	return `Updated on ${month} ${date.getUTCDate()}, ${date.getUTCFullYear()}.`
 }
 
 function overviewRank(state: SessionState): number {
@@ -250,7 +360,23 @@ export class VoiceBriefBoard {
 	}
 
 	/** A deliberately uncached read: a new overview must not replay the call-opening tally. */
-	async workspaceOverview(cursor = 0): Promise<WorkspaceOverview> {
+	async workspaceOverview(cursor = 0, filters: WorkspaceOverviewFilters = {}): Promise<WorkspaceOverview> {
+		if (filters.agentStatus && !OVERVIEW_AGENT_STATUSES.has(filters.agentStatus))
+			throw new Error('agent_status must be working, idle, error, or needs-you')
+		const now = this.now()
+		const updatedSince = filters.updatedSince ? parseOverviewDate(filters.updatedSince, now, 'updated_since') : null
+		const updatedBefore = filters.updatedBefore ? parseOverviewDate(filters.updatedBefore, now, 'updated_before') : null
+		if (updatedSince !== null && updatedBefore !== null && updatedSince >= updatedBefore)
+			throw new Error('updated_since must be earlier than updated_before')
+		const wantedWorkspaceStatus = filters.workspaceStatus ? normalizedStatus(filters.workspaceStatus) : null
+		const completedOnly = wantedWorkspaceStatus === 'done' || filters.prStatus === 'merged'
+		const includeDone = filters.includeDone === true || completedOnly
+		const includeMerged = filters.includeMerged === true || completedOnly
+		const ignoreDormantAge =
+			updatedSince !== null ||
+			updatedBefore !== null ||
+			wantedWorkspaceStatus !== null ||
+			filters.prStatus !== undefined
 		const workspaces = new Map(this.deps.reads.listWorkspaces().map(workspace => [workspace.id, workspace]))
 		const grouped = new Map<string, SessionState[]>()
 		for (const state of this.deps.reads.listSessionStates()) {
@@ -261,11 +387,47 @@ export class VoiceBriefBoard {
 		}
 
 		let dormant = 0
+		let completed = 0
+		let filtered = 0
 		const items: (WorkspaceOverviewItem & { rank: number })[] = []
 		for (const [workspaceId, workspace] of workspaces) {
-			const current = (grouped.get(workspaceId) ?? []).filter(state => !isDormant(state, workspace, this.now()))
-			if (!current.length) {
+			if (filters.repo && workspace.repo_name?.toLowerCase() !== filters.repo.toLowerCase()) {
+				filtered++
+				continue
+			}
+			if (wantedWorkspaceStatus && normalizedStatus(statusLabel(workspace)) !== wantedWorkspaceStatus) {
+				filtered++
+				continue
+			}
+			if (filters.prStatus && (workspace.pr_status ?? 'none') !== filters.prStatus) {
+				filtered++
+				continue
+			}
+			if ((!includeDone && isDone(workspace)) || (!includeMerged && isMerged(workspace))) {
+				completed++
+				continue
+			}
+			const live = (grouped.get(workspaceId) ?? []).filter(
+				state =>
+					!isDormant(state, workspace, now, {
+						ignoreAge: ignoreDormantAge,
+						includeDone,
+						includedWorkspaceStatus: wantedWorkspaceStatus ?? undefined
+					})
+			)
+			if (!live.length) {
 				dormant++
+				continue
+			}
+			const current = live.filter(state => {
+				if (filters.agentStatus && agentStatus(state) !== filters.agentStatus) return false
+				const at = parseDate(state.updatedAt)
+				if (updatedSince !== null && at < updatedSince) return false
+				if (updatedBefore !== null && at >= updatedBefore) return false
+				return true
+			})
+			if (!current.length) {
+				filtered++
 				continue
 			}
 			current.sort((a, b) => overviewRank(a) - overviewRank(b) || parseDate(b.updatedAt) - parseDate(a.updatedAt))
@@ -274,7 +436,10 @@ export class VoiceBriefBoard {
 			items.push({
 				workspaceId,
 				sessionId: state.sessionId,
-				title: state.sessionTitle ? `${state.workspaceTitle}, ${state.sessionTitle}` : state.workspaceTitle,
+				title: oneLine(
+					state.sessionTitle ? `${state.workspaceTitle}, ${state.sessionTitle}` : state.workspaceTitle,
+					100
+				),
 				status: overviewStatus(state, workspace),
 				updatedAt: state.updatedAt,
 				update: oneLine(speechText(said, 150), 150),
@@ -289,17 +454,23 @@ export class VoiceBriefBoard {
 		const next = offset + page.length < items.length ? offset + page.length : null
 		const noun = items.length === 1 ? 'workspace' : 'workspaces'
 		const lines = page.map(
-			item => `${item.title} ${item.status}.${item.update ? ` ${item.update}` : ' No agent update yet.'}`
+			item =>
+				`${item.title} ${item.status}. ${spokenUpdateAge(item.updatedAt, now)}${item.update ? ` ${item.update}` : ' No agent update yet.'}`
 		)
 		const more = next === null ? '' : ` ${items.length - next} more current; ask me to continue.`
-		const none = items.length ? '' : ' Nothing is active right now.'
+		const none = items.length ? '' : filtered ? ' Nothing matches those filters.' : ' Nothing is active right now.'
+		const completedSummary = completed ? `, ${completed} completed hidden` : ''
+		const filteredSummary = filtered ? `, ${filtered} outside filters` : ''
 		return {
 			spoken: clipExact(
-				`Fresh overview: ${items.length} current ${noun}, ${dormant} dormant. ${lines.join(' ')}${more}${none}`.trim(),
+				`Fresh overview: ${items.length} current ${noun}${completedSummary}${filteredSummary}, ${dormant} dormant. ${lines.join(' ')}${more}${none}`.trim(),
 				700
 			),
+			asOf: new Date(now).toISOString(),
 			current: items.length,
 			dormant,
+			completed,
+			filtered,
 			cursor: next,
 			workspaces: page
 		}

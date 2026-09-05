@@ -72,9 +72,9 @@ port is live; a mapping already in place is kept wherever it is.
 
 **Voice (optional).** The phone button immediately left of **+** opens one
 fleet-wide control-room call over WebRTC. Its orchestrator can give a fresh,
-paged summary of current workspace progress, bring forward one decision at a
-time, and dispatch an exact prompt
-only after reading it back and hearing confirmation. The call survives
+paged and filterable summary of current workspace progress, bring forward one
+decision at a time, create a workspace, and dispatch an exact prompt. Both
+writes require a spoken preview and confirmation. The call survives
 workspace navigation, includes live captions and a typed fallback, and needs
 only a locally stored OpenAI key; it does not need SIP, Twilio, a webhook, or
 public ingress. A separate dial-in transport remains available for

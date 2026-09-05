@@ -51,6 +51,9 @@ describe('the browser voice seam', () => {
 		).toEqual({ kind: 'tool', itemId: 'call_1', name: 'voice_roll_call' })
 		expect(voiceToolLabel('voice_roll_call')).toBe('Checking the fleet')
 		expect(voiceToolLabel('voice_workspace_overview')).toBe('Refreshing workspace overview')
+		expect(voiceToolLabel('voice_list_repos')).toBe('Checking repositories')
+		expect(voiceToolLabel('voice_create_workspace_preview')).toBe('Preparing a workspace')
+		expect(voiceToolLabel('voice_create_workspace')).toBe('Creating the approved workspace')
 		expect(parseVoiceEvent({ type: 'response.created' })).toEqual({ kind: 'response-started' })
 		expect(parseVoiceEvent({ type: 'response.done', response: {} })).toEqual({ kind: 'response-done' })
 		expect(parseVoiceEvent({ type: 'error', error: { message: 'connection lost' } })).toEqual({

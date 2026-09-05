@@ -116,6 +116,12 @@ export function voiceToolLabel(name: string): string {
 			return 'Refreshing workspace overview'
 		case 'voice_next_decision':
 			return 'Opening the next decision'
+		case 'voice_list_repos':
+			return 'Checking repositories'
+		case 'voice_create_workspace_preview':
+			return 'Preparing a workspace'
+		case 'voice_create_workspace':
+			return 'Creating the approved workspace'
 		case 'voice_send_preview':
 			return 'Preparing a guarded send'
 		case 'voice_send':

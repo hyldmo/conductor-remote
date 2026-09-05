@@ -212,8 +212,8 @@ export function VoiceCallSheet() {
 							</div>
 							<h3 className="text-xl font-semibold tracking-tight">Call your fleet</h3>
 							<p className="mt-2 text-sm leading-relaxed text-muted">
-								One orchestrator checks every workspace, brings you one decision at a time, and can queue an exact
-								prompt only after reading it back for confirmation.
+								One orchestrator checks every workspace, brings you one decision at a time, and can create workspaces or
+								queue exact prompts after reading them back for confirmation.
 							</p>
 
 							<div className="mt-7 grid w-full grid-cols-2 gap-3 text-left">

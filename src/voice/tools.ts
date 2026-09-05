@@ -1,9 +1,9 @@
 /** The deliberately small MCP surface a Realtime voice session is allowed to reach. */
 import type { Tool } from '../mcp-tools.ts'
 import type { SessionState } from '../reads.ts'
-import { oneLine } from '../speech.ts'
-import type { VoiceBriefBoard } from './brief.ts'
-import type { PreviewRefusal, PreviewStore, SendPreview } from './preview.ts'
+import { clipExact, oneLine } from '../speech.ts'
+import type { VoiceBriefBoard, WorkspaceOverviewFilters } from './brief.ts'
+import type { PreviewRefusal, PreviewStore, SendPreview, WorkspacePreview } from './preview.ts'
 
 export interface VoiceDispatchResult {
 	ok: boolean
@@ -11,13 +11,27 @@ export interface VoiceDispatchResult {
 	error?: string
 }
 
+export interface VoiceWorkspaceCreateResult {
+	ok: boolean
+	workspaceId?: string
+	warning?: string
+	error?: string
+}
+
+export interface VoiceRepo {
+	name: string
+	defaultBranch: string | null
+}
+
 export interface VoiceToolContext {
 	callId: string
 	board: VoiceBriefBoard
 	previews: PreviewStore
 	findSession: (sessionId: string) => SessionState | null
+	listRepos: () => VoiceRepo[]
+	createWorkspace: (preview: WorkspacePreview) => Promise<VoiceWorkspaceCreateResult>
 	dispatch: (preview: SendPreview) => Promise<VoiceDispatchResult>
-	/** A mid-call broker injection. Successful sends intentionally do not call it. */
+	/** A mid-call broker injection. Successful prompt sends stay silent; workspace creation reports its receipt. */
 	announce: (spoken: string) => void | Promise<void>
 }
 
@@ -37,6 +51,9 @@ export const VOICE_TOOL_NAMES = [
 	'voice_roll_call',
 	'voice_workspace_overview',
 	'voice_next_decision',
+	'voice_list_repos',
+	'voice_create_workspace_preview',
+	'voice_create_workspace',
 	'voice_send_preview',
 	'voice_send'
 ] as const
@@ -50,11 +67,39 @@ export const VOICE_TOOL_DEFINITIONS: readonly VoiceToolDefinition[] = [
 	{
 		name: 'voice_workspace_overview',
 		description:
-			'Get a fresh overview of current workspaces with each latest agent update. Call this every time the user asks for an overview or workspace status, even if one was already given. Pass the returned cursor to continue.',
+			'Get a fresh, dated overview of current workspaces with filters and the relay as-of time. Merged and Done workspaces are excluded unless explicitly included. Call this every time the user asks for an overview or workspace status, even if one was already given. Pass the same filters with the returned cursor to continue.',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				cursor: { type: 'number', description: 'The cursor returned by the previous overview page; default 0.' }
+				cursor: { type: 'number', description: 'The cursor returned by the previous overview page; default 0.' },
+				repo: { type: 'string', description: 'Only this exact repository name.' },
+				agent_status: {
+					type: 'string',
+					enum: ['working', 'idle', 'error', 'needs-you'],
+					description: 'Only workspaces whose matching chat has this live agent status.'
+				},
+				workspace_status: {
+					type: 'string',
+					enum: ['backlog', 'in-progress', 'in-review', 'done', 'canceled'],
+					description: 'Only workspaces in this Conductor sidebar status. Requesting done includes Done workspaces.'
+				},
+				pr_status: {
+					type: 'string',
+					enum: ['merged', 'draft', 'conflicts', 'checks_failed', 'checks_pending', 'mergeable', 'none'],
+					description: 'Only workspaces with this pull-request status. Requesting merged includes merged workspaces.'
+				},
+				updated_since: {
+					type: 'string',
+					description:
+						'Only chat activity since today, yesterday, this-week, this-month, a relative duration like 24h or 7d, or an ISO date/time.'
+				},
+				updated_before: {
+					type: 'string',
+					description:
+						'Only chat activity before this exclusive named boundary, relative duration, ISO date/time, or date. For yesterday alone, use updated_since yesterday and updated_before today.'
+				},
+				include_done: { type: 'boolean', description: 'Include Done workspaces; default false.' },
+				include_merged: { type: 'boolean', description: 'Include merged workspaces; default false.' }
 			}
 		}
 	},
@@ -71,6 +116,38 @@ export const VOICE_TOOL_DEFINITIONS: readonly VoiceToolDefinition[] = [
 					description: 'A session the user explicitly skipped; merely hearing it is not handled.'
 				}
 			}
+		}
+	},
+	{
+		name: 'voice_list_repos',
+		description: 'List the repositories where Conductor can create a workspace. Use before a creation preview.',
+		inputSchema: { type: 'object', properties: {} }
+	},
+	{
+		name: 'voice_create_workspace_preview',
+		description:
+			'Create a two-minute preview for a new workspace in an exact repository, with an optional first prompt. Speak its exact target and prompt and ask for yes before using voice_create_workspace.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				repo: { type: 'string', description: 'Exact repository name from voice_list_repos.' },
+				prompt: { type: 'string', description: 'Optional first prompt. Omit to create an empty workspace.' }
+			},
+			required: ['repo']
+		}
+	},
+	{
+		name: 'voice_create_workspace',
+		description:
+			'Create an exact workspace preview after the user said yes. Requires its token, repository, and unchanged prompt; never accepts raw unpreviewed creation.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				token: { type: 'string' },
+				repo: { type: 'string' },
+				prompt: { type: 'string', description: 'The unchanged preview prompt; omit only when the preview was empty.' }
+			},
+			required: ['token', 'repo']
 		}
 	},
 	{
@@ -119,6 +196,11 @@ function need(args: Record<string, unknown>, key: string): string {
 	return value.trim()
 }
 
+function optional(args: Record<string, unknown>, key: string): string | undefined {
+	const value = args[key]
+	return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
 function answer(value: unknown): string {
 	return JSON.stringify(value)
 }
@@ -126,17 +208,23 @@ function answer(value: unknown): string {
 function refusal(reason: PreviewRefusal): string {
 	switch (reason) {
 		case 'expired':
-			return 'That preview expired. Read the exact target and text back again before sending.'
+			return 'That preview expired. Read the exact action back again before approving it.'
 		case 'foreign-call':
 			return 'That preview belongs to another call and cannot be used here.'
 		case 'foreign-session':
 			return 'That preview belongs to a different chat. Preview this target again.'
+		case 'foreign-repo':
+			return 'That preview belongs to a different repository. Preview this workspace again.'
 		case 'text-mismatch':
 			return 'The send text does not exactly match the preview. Preview the changed text first.'
+		case 'prompt-mismatch':
+			return 'The first prompt does not exactly match the preview. Preview the changed workspace first.'
+		case 'wrong-action':
+			return 'That preview is for a different action. Make a new preview first.'
 		case 'already-used':
-			return 'That preview was already used. The relay will not send it twice.'
+			return 'That preview was already used. The relay will not run it twice.'
 		case 'unknown':
-			return 'That preview token is unknown. Make a new preview before sending.'
+			return 'That preview token is unknown. Make a new preview before continuing.'
 	}
 }
 
@@ -160,7 +248,22 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 			...definition('voice_workspace_overview'),
 			run: async args => {
 				const cursor = typeof args.cursor === 'number' && Number.isFinite(args.cursor) ? args.cursor : 0
-				return answer(await context.board.workspaceOverview(cursor))
+				const filters: WorkspaceOverviewFilters = {}
+				const repo = optional(args, 'repo')
+				const agentStatus = optional(args, 'agent_status') as WorkspaceOverviewFilters['agentStatus']
+				const workspaceStatus = optional(args, 'workspace_status')
+				const prStatus = optional(args, 'pr_status')
+				const updatedSince = optional(args, 'updated_since')
+				const updatedBefore = optional(args, 'updated_before')
+				if (repo) filters.repo = repo
+				if (agentStatus) filters.agentStatus = agentStatus
+				if (workspaceStatus) filters.workspaceStatus = workspaceStatus
+				if (prStatus) filters.prStatus = prStatus
+				if (updatedSince) filters.updatedSince = updatedSince
+				if (updatedBefore) filters.updatedBefore = updatedBefore
+				if (typeof args.include_done === 'boolean') filters.includeDone = args.include_done
+				if (typeof args.include_merged === 'boolean') filters.includeMerged = args.include_merged
+				return answer(await context.board.workspaceOverview(cursor, filters))
 			}
 		},
 		{
@@ -170,6 +273,73 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 				const cursor = typeof args.cursor === 'number' && Number.isFinite(args.cursor) ? args.cursor : 0
 				const next = await context.board.nextDecision(cursor)
 				return answer(next ?? { spoken: 'There are no more decisions in this call.', cursor, done: true })
+			}
+		},
+		{
+			...definition('voice_list_repos'),
+			run: async () => {
+				const repos = context.listRepos()
+				return answer({
+					spoken: repos.length
+						? clipExact(`Available repositories: ${repos.map(repo => repo.name).join(', ')}.`, 600)
+						: 'Conductor has no repository available for a new workspace.',
+					repos
+				})
+			}
+		},
+		{
+			...definition('voice_create_workspace_preview'),
+			run: async args => {
+				const requestedRepo = need(args, 'repo')
+				const repo = context.listRepos().find(candidate => candidate.name.toLowerCase() === requestedRepo.toLowerCase())
+				if (!repo)
+					return answer({
+						status: 'refused',
+						spoken: `I could not find the ${oneLine(requestedRepo, 80)} repository. Ask me to list repositories first.`
+					})
+				const prompt = optional(args, 'prompt') ?? ''
+				const preview = context.previews.createWorkspace({ callId: context.callId, repo: repo.name, prompt })
+				const detail = prompt ? ` with this first prompt: “${oneLine(prompt, 220)}”` : ' with no first prompt.'
+				return answer({
+					status: 'preview',
+					token: preview.token,
+					repo: repo.name,
+					prompt,
+					spoken: `Create a new workspace in ${oneLine(repo.name, 80)}${detail} Say yes to create it.`
+				})
+			}
+		},
+		{
+			...definition('voice_create_workspace'),
+			run: async args => {
+				const token = need(args, 'token')
+				const repo = need(args, 'repo')
+				const prompt = optional(args, 'prompt') ?? ''
+				const claimed = context.previews.claimWorkspace(token, { callId: context.callId, repo, prompt })
+				if (!claimed.ok) return answer({ status: 'refused', spoken: refusal(claimed.reason) })
+				later(async () => {
+					try {
+						const result = await context.createWorkspace(claimed.preview)
+						if (!result.ok) {
+							await context.announce(
+								`The new ${oneLine(repo, 80)} workspace was not created. ${oneLine(result.error ?? 'Try again later.', 220)}`
+							)
+							return
+						}
+						const created = prompt
+							? `Created a new ${oneLine(repo, 80)} workspace and queued its first prompt.`
+							: `Created a new empty ${oneLine(repo, 80)} workspace.`
+						await context.announce(result.warning ? `${created} ${oneLine(result.warning, 220)}` : created)
+					} catch (error) {
+						await context.announce(
+							`The new ${oneLine(repo, 80)} workspace was not created. ${oneLine(error instanceof Error ? error.message : String(error), 220)}`
+						)
+					}
+				})
+				return answer({
+					status: 'queued',
+					spoken: `Creating a new workspace in ${oneLine(repo, 80)}. I will say when it is ready.`
+				})
 			}
 		},
 		{
