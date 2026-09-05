@@ -115,7 +115,7 @@ export function delegationPipelineForParentSession(
 	const parentLegacyJobIds = new Set(parentJobs.filter(job => !job.workflowId).map(job => job.id))
 	const scopedRoles = Object.fromEntries(
 		Object.entries(roles).filter(([candidateId, assignment]) => {
-			if (candidateId === sessionId) return true
+			if (candidateId === sessionId) return !assignment.delegationId
 			if (assignment.workflowId) return assignment.workflowId === workflow?.id
 			if (!assignment.delegationId) return false
 			if (assignment.parentSessionId) return assignment.parentSessionId === sessionId

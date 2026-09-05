@@ -532,8 +532,10 @@ Two asymmetric halves — keep them separate:
     **Lightweight cross-provider delegation is a persisted sibling-chat queue**
     (`src/roles.ts`, `src/delegation-intake.ts`, `src/delegations.ts`). An ordinary
     chat calls `delegate_task` with its session id, a role, and a focused prompt;
-    use `exploration` for independent codebase reads, with its model resolved
-    from Roles. Several children can run concurrently without creating a
+    choose a role from `list_roles` whose configured instructions fit the task.
+    The model, effort, Fast mode, and preamble all come from Roles; do not infer
+    editing permissions or impose an output format from the role name.
+    Several children can run concurrently without creating a
     Workflow or assigning a planning role to the parent. Skills such as gstack
     should route helper agents through this same MCP path; the copyable user
     override lives in [docs/conductor-agent-routing.md](docs/conductor-agent-routing.md).
@@ -545,8 +547,10 @@ Two asymmetric halves — keep them separate:
     parent's provider before any UI action, then freezes the resolved provider/settings
     on a worktree-local job. The cache's `agentType` only says which chat exposed the
     picker snapshot; provider identity comes from the exact model label. Each
-    provider's newest observed menu supplies its labels, so a menu for one provider
-    cannot invalidate another provider's roles. One
+    provider's newest confirmed menu supplies its labels, so a menu for one provider
+    cannot invalidate another provider's roles. Legacy cache entries and successful
+    selections can add evidence for individual labels but cannot erase other choices.
+    One
     producer advances opening → configuring → sending → running →
     returning behind background-priority `uiTurn` calls. Side effects are at-least-
     once across a relay restart; a lock or saturated UI queue costs no attempt, and

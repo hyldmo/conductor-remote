@@ -206,6 +206,23 @@ describe('delegation MCP tools', () => {
 		expect(createTools(async <T>() => roles as T).map(candidate => candidate.name)).not.toContain('set_role')
 	})
 
+	test('shows current configured instructions and explicit Fast off without inferring settings from the name', async () => {
+		const data: RolesResponse = {
+			version: 1,
+			roles: { exploration: { model: 'Fable 5.1', effort: 'low', fast: false, preamble: 'Return only JSON.' } },
+			issues: []
+		}
+		const list = tool('list_roles', async <T>() => data as T)
+		const first = await list.run({})
+		expect(first).toContain('exploration: Fable 5.1 · low · fast off')
+		expect(first).toContain('Return only JSON.')
+		data.roles.exploration = { model: '5.6 Terra', effort: 'high', fast: true, preamble: 'Return a code review.' }
+		const changed = await list.run({})
+		expect(changed).toContain('exploration: 5.6 Terra · high · fast on')
+		expect(changed).toContain('Return a code review.')
+		expect(changed).not.toContain('Fable 5.1')
+	})
+
 	test('keeps delegation status read-only over MCP', async () => {
 		const calls: string[] = []
 		const call: RelayCall = async <T>(route: string, options?: CallOptions) => {

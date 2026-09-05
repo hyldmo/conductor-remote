@@ -284,9 +284,9 @@ describe('delegation phone surfaces', () => {
 	test('uses the latest observation per provider for role validation', () => {
 		const currentModels = ['5.6 Sol', 'opencode-go/muse-spark-1.3-contributor']
 		const groups = [
-			{ agentType: 'claude', models: ['Fable 5'], updatedAt: 0 },
-			{ agentType: 'codex', models: ['Fable 5.1'], updatedAt: 1 },
-			{ agentType: 'codex', models: currentModels, updatedAt: 2 }
+			{ agentType: 'claude', models: ['Fable 5'], snapshotAt: 0, updatedAt: 0 },
+			{ agentType: 'codex', models: ['Fable 5.1'], snapshotAt: 1, updatedAt: 1 },
+			{ agentType: 'codex', models: currentModels, snapshotAt: 2, updatedAt: 2 }
 		]
 
 		expect(roleAgentType({ model: 'Fable 5.1' }, groups)).toBe('claude')

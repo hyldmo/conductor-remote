@@ -309,26 +309,45 @@ export function newestModelSnapshot<
 }
 
 /**
- * The newest menu containing a provider owns that provider's labels. A menu for one
- * provider (including a pre-snapshotAt cache) cannot invalidate another provider's
- * roles, while a newer menu for the same provider retires renamed labels. agentType names
- * the chat that exposed the menu, not the provider of every model in it.
+ * Only an explicit whole-menu observation can retire a provider's older labels.
+ * Legacy entries have unknown provenance: successful selections used to look like
+ * menus too. They and known partial entries prove individual choices, never absence
+ * of other choices. A later real menu supersedes that positive evidence per provider.
+ * agentType names the chat that exposed the menu, not every model's provider.
  */
 export function currentModelCatalog(
-	groups: readonly { models: readonly string[]; updatedAt: number; snapshotAt?: number | null }[]
+	groups: readonly {
+		models: readonly string[]
+		updatedAt: number
+		snapshotAt?: number | null
+		snapshotModels?: readonly string[]
+		selections?: readonly { model: string; selectedAt: number }[]
+	}[]
 ): string[] {
 	const providers = new Map<string, { observedAt: number; models: string[] }>()
 	for (const group of groups) {
-		if (group.snapshotAt === null) continue
-		const observedAt = group.snapshotAt ?? group.updatedAt
-		for (const provider of groupModelPickerLabels([...group.models])) {
+		if (group.snapshotAt == null) continue
+		const observedAt = group.snapshotAt
+		for (const provider of groupModelPickerLabels([...(group.snapshotModels ?? group.models)])) {
 			const current = providers.get(provider.label)
 			if (!current || observedAt >= current.observedAt) {
 				providers.set(provider.label, { observedAt, models: provider.models })
 			}
 		}
 	}
-	return [...new Set([...providers.values()].flatMap(provider => provider.models))].sort((a, b) => a.localeCompare(b))
+	const models = new Set([...providers.values()].flatMap(provider => provider.models))
+	for (const group of groups) {
+		const selections =
+			group.selections ??
+			(group.snapshotAt == null ? group.models.map(model => ({ model, selectedAt: group.updatedAt })) : [])
+		for (const selection of selections) {
+			const model = modelPickerLabel(selection.model).trim()
+			if (!model) continue
+			const menu = providers.get(modelProvider(model))
+			if (!menu || selection.selectedAt > menu.observedAt) models.add(model)
+		}
+	}
+	return [...models].sort((a, b) => a.localeCompare(b))
 }
 
 /** Stable, case-insensitive grouping shared by every model selector. */

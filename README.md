@@ -424,15 +424,17 @@ preserves the workspace's allocated ports, run-mode policy and process-group cle
 the MCP tool cannot forbid shell commands, but removes the reason to use one here.
 
 **Lightweight codebase agents need no Workflow.** In an ordinary chat, call `list_roles`,
-then `delegate_task` with `session_id`, `role: "exploration"`, and a focused `prompt`.
-The exploration model comes from the role configuration. Repeat the call
+then `delegate_task` with `session_id`, a configured `role`, and a focused `prompt`.
+Choose a role whose instructions fit the task, usually `exploration` for investigation.
+Its model, effort, Fast mode, and preamble come from the role configuration. Repeat the call
 for independent questions: children run concurrently after their serialized UI setup,
-each appears under its parent in **Delegated agents**, and each returns a Baton.
+each appears under its parent in **Delegated agents**, and each returns its result.
 The parent keeps its own model and role. A completed child stays under the correct
 parent even after its successful job is removed. No planning or implementation phase
 is scheduled, and a Baton's suggested next role is only advice.
 
-Ordinary calls can set `return_mode` (`queue` by default, or `steer`), `through`
+Ordinary calls can set `return_mode` (`queue` behind the current turn by default;
+use `steer` to receive the result during the current turn), `through`
 (a `read_chat` cursor), and `include_thinking` (false by default). These options are
 refused on Workflow calls, where the coordinator owns the handoff and return path.
 Both active Workflow roots and their children are refused by ordinary-chat intake;

@@ -190,8 +190,10 @@ export type ResolveRoleResult = { ok: true; role: ResolvedDelegatedRole } | { ok
 
 /** Resolve and freeze the provider encoded by an exact cached picker label. */
 export function resolveRole(config: RolesConfig, name: string, groups: CachedModelGroup[]): ResolveRoleResult {
+	if (!Object.hasOwn(config.roles, name)) {
+		return { ok: false, error: issue('role_not_found', `Unknown delegated role ${name}.`) }
+	}
 	const role = config.roles[name]
-	if (!role) return { ok: false, error: issue('role_not_found', `Unknown delegated role ${name}.`) }
 	if (!currentModelCatalog(groups).includes(modelPickerLabel(role.model))) {
 		return {
 			ok: false,

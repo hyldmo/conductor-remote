@@ -114,6 +114,42 @@ describe('ordinary-chat delegation intake', () => {
 		})
 	})
 
+	test('reads changed role settings for the next task while keeping accepted tasks frozen', () => {
+		const { deps, config, jobs } = fixture()
+		expect(acceptDelegation('parent-1', request, deps)).toMatchObject({ ok: true, model: spark })
+		config.roles.exploration = {
+			model: 'Fable 5.1',
+			effort: 'low',
+			fast: false,
+			preamble: 'Return only JSON.'
+		}
+		expect(acceptDelegation('parent-1', request, deps)).toMatchObject({ ok: true, model: 'Fable 5.1' })
+		expect(jobs[1].resolvedRole).toEqual({ ...config.roles.exploration, agentType: 'claude' })
+		config.roles.exploration.effort = 'max'
+		config.roles.exploration.fast = true
+		config.roles.exploration.preamble = 'Return a review.'
+		expect(jobs[0].resolvedRole).toEqual({ model: spark, agentType: 'acp', preamble: 'Return a Baton.' })
+		expect(jobs[1].resolvedRole).toEqual({
+			model: 'Fable 5.1',
+			agentType: 'claude',
+			effort: 'low',
+			fast: false,
+			preamble: 'Return only JSON.'
+		})
+		expect(acceptDelegation('parent-1', request, deps)).toMatchObject({ ok: true })
+		expect(jobs[2].resolvedRole).toEqual({ ...config.roles.exploration, agentType: 'claude' })
+	})
+
+	test('only resolves roles actually present in the configuration', () => {
+		const { deps, config } = fixture()
+		expect(acceptDelegation('parent-1', { ...request, role: 'constructor' }, deps)).toMatchObject({
+			ok: false,
+			error: { code: 'role_not_found' }
+		})
+		Object.assign(config.roles, { constructor: config.roles.exploration })
+		expect(acceptDelegation('parent-1', { ...request, role: 'constructor' }, deps)).toMatchObject({ ok: true })
+	})
+
 	test('checks an explicit handoff boundary against the parent and preserves return choices', () => {
 		const entry: TranscriptEntry = {
 			id: 'message-17',

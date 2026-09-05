@@ -19,9 +19,14 @@ export interface CachedModelGroup {
 	/**
 	 * Time of the complete picker observation backing this entry. `null` means
 	 * the entry contains only models learned from successful selections. Older
-	 * cache files omit this field and are treated as complete snapshots.
+	 * cache files omit this field; their provenance is unknown, so they cannot
+	 * establish that other model labels have disappeared.
 	 */
 	snapshotAt?: number | null
+	/** The actual observed menu, kept separate from labels appended by later selections. */
+	snapshotModels?: string[]
+	/** Positive evidence tracked per label so selecting another row cannot refresh a stale one. */
+	selections?: Array<{ model: string; selectedAt: number }>
 	updatedAt: number
 }
 
@@ -51,7 +56,12 @@ export class ModelCache {
 	}
 
 	list(): CachedModelGroup[] {
-		return this.entries.map(entry => ({ ...entry, models: [...entry.models] }))
+		return this.entries.map(entry => ({
+			...entry,
+			models: [...entry.models],
+			...(entry.snapshotModels ? { snapshotModels: [...entry.snapshotModels] } : {}),
+			...(entry.selections ? { selections: entry.selections.map(selection => ({ ...selection })) } : {})
+		}))
 	}
 
 	/** The newest live picker read wins when upgrading from caches that disagree. */
@@ -73,6 +83,7 @@ export class ModelCache {
 			models: next,
 			defaultModel: selectedDefault,
 			snapshotAt: now,
+			snapshotModels: next,
 			updatedAt: now
 		}
 		this.entries = [...this.entries.filter(existing => existing.agentType !== key), entry]
@@ -84,16 +95,29 @@ export class ModelCache {
 	/** A model that Conductor accepted is also a useful choice for a later workspace. */
 	rememberModel(agentType: string | null | undefined, model: string | null | undefined): void {
 		if (!model) return
+		const selected = clean([model])[0]
+		if (!selected) return
 		const key = group(agentType ?? '')
 		const current = this.entries.find(entry => entry.agentType === key)
+		const now = Date.now()
+		const selections =
+			current?.selections ??
+			(current?.snapshotAt == null
+				? (current?.models ?? []).map(model => ({ model, selectedAt: current?.updatedAt ?? now }))
+				: [])
 		const entry: CachedModelGroup = {
 			agentType: key,
 			models: clean([...(current?.models ?? []), model]),
 			defaultModel: current?.defaultModel ?? this.defaultModel(),
 			// Selecting one row proves that row, not the rest of the picker. Preserve
 			// an existing whole-menu observation but mark a brand-new group partial.
-			snapshotAt: current ? (current.snapshotAt === undefined ? current.updatedAt : current.snapshotAt) : null,
-			updatedAt: Date.now()
+			snapshotAt: current?.snapshotAt ?? null,
+			...(current?.snapshotAt == null ? {} : { snapshotModels: current.snapshotModels ?? [...current.models] }),
+			selections: [
+				...selections.filter(selection => selection.model !== selected),
+				{ model: selected, selectedAt: now }
+			],
+			updatedAt: now
 		}
 		this.entries = [...this.entries.filter(existing => existing.agentType !== key), entry].sort((a, b) =>
 			a.agentType.localeCompare(b.agentType)
@@ -129,6 +153,22 @@ export class ModelCache {
 						defaultModel:
 							typeof entry.defaultModel === 'string' ? clean([entry.defaultModel])[0] || undefined : undefined,
 						...(snapshotAt === undefined ? {} : { snapshotAt }),
+						...(Array.isArray(entry.snapshotModels)
+							? {
+									snapshotModels: clean(
+										entry.snapshotModels.filter((model): model is string => typeof model === 'string')
+									)
+								}
+							: {}),
+						...(Array.isArray(entry.selections)
+							? {
+									selections: entry.selections.flatMap(selection => {
+										if (typeof selection?.model !== 'string' || !Number.isFinite(selection.selectedAt)) return []
+										const model = clean([selection.model])[0]
+										return model ? [{ model, selectedAt: selection.selectedAt }] : []
+									})
+								}
+							: {}),
 						updatedAt: Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0
 					}
 				})

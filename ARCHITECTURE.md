@@ -258,8 +258,11 @@ can run concurrently; their creation does not create a Workflow or assign a plan
 role to the parent. `sessions.json` records `parentSessionId` on each child so completed
 subtabs stay attached to their parent after the successful job file is removed. Older
 role documents without a parent retain the existing planning-parent display fallback.
-The child instruction keeps transcript content as context, limits exploration to reads,
-and treats the Baton's suggested role as advice rather than another phase to start.
+The child instruction keeps transcript content as context and prevents an ordinary task
+from launching a Workflow. Its task and output format come from the configured preamble
+and assignment; the relay does not infer editing permissions from the role's name or
+impose a Baton format. The shipped role preambles request Batons, and custom roles may
+request other formats. `list_roles` exposes those instructions alongside all set controls.
 Restart semantics remain the existing queue's at-least-once side effects and receipt-based
 Baton delivery; managed jobs keep the coordinator's stronger effect reconciliation.
 
@@ -267,7 +270,12 @@ Role validation and the role editor share `currentModelCatalog`: each provider's
 come from the newest complete menu containing that provider. The observing chat's harness
 does not own every row. A menu for one provider cannot invalidate another provider's labels, while
 a newer menu for the same provider retires renamed labels. Explicitly partial selections
-(`snapshotAt: null`) do not replace menus; pre-snapshot cache entries remain readable.
+(`snapshotAt: null`) and legacy entries with unknown provenance only add evidence for
+individual labels; they cannot erase other choices. A later confirmed menu supersedes
+that evidence. Remembering another selection never promotes a legacy entry into a menu.
+Selections retain their own timestamps, and the saved menu retains its original labels,
+so selecting one row neither revives an earlier retired choice nor changes what was
+actually observed in that menu.
 
 ## Re-deriving Conductor internals (if a Conductor update breaks something)
 

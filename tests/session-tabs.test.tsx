@@ -149,6 +149,15 @@ describe('phone chat tabs', () => {
 		expect(delegationPipelineForParentSession([workflow], [childJob], roles, 'ordinary-chat')).toBeUndefined()
 	})
 
+	test('a delegated parent does not appear as its own child when it has a nested delegation', () => {
+		const roles = {
+			parent: { role: 'exploration', delegationId: 'first-job', parentSessionId: 'root', assignedAt: 1 },
+			child: { role: 'review', delegationId: 'nested-job', parentSessionId: 'parent', assignedAt: 2 }
+		}
+		expect(delegationPipelineForParentSession([], [], roles, 'parent')?.roles).toEqual({ child: roles.child })
+		expect(delegationPipelineForParentSession([], [], roles, 'root')?.roles).toEqual({ parent: roles.parent })
+	})
+
 	test('keeps completed ad hoc children under their exact parent without a planning role', () => {
 		const roles = {
 			'child-1': { role: 'exploration', delegationId: 'job-1', parentSessionId: 'ordinary-1', assignedAt: 1 },

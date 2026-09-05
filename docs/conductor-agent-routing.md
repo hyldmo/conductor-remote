@@ -15,22 +15,29 @@ chat may need to reload its instructions and MCP tool definitions after an updat
 
 Within a local Conductor workspace, route helper agents requested by the user or an
 explicitly invoked skill through conductor-remote MCP. This overrides skill-specific
-Agent/Task/subagent calls and helper codex exec/review or other provider CLI spawning,
-including in gstack. Preserve the skill's task scope, review criteria, and output format.
-An explicit user request for a native tool or particular model takes precedence.
+Agent/Task/subagent calls and helper provider CLI spawning, including in gstack.
+Within Conductor, it also overrides generic helper-provider preferences and any
+provider or model named by a skill: use the configured role settings instead.
+Preserve the skill's task scope, review criteria, and output format. An explicit
+user request for a native tool, provider, or particular model takes precedence.
 
 For an ordinary chat, call list_roles, then delegate_task with the parent session_id,
-role, and a focused prompt. Prefer the configured exploration role for independent
-codebase searches, investigation, and verification. Include any required review perspective
-in the task. Preserve explicitly required providers/models by choosing a matching valid
-role; do not silently substitute another model. Resolve model choices from role configuration.
-For implementation, specify file ownership and
-tell the child it shares the worktree and must respect others' edits.
+role, and a focused prompt. Choose a valid configured role whose instructions fit
+the task; prefer exploration for codebase searches, investigation, and verification
+when its configuration fits. The relay applies that role's model, effort, Fast mode,
+and preamble. Do not infer or override those settings from a role name or skill.
+Include any required review perspective and output format in the assignment.
+If the user explicitly requires a provider or model, choose a matching valid role;
+if none exists, report the mismatch instead of substituting one. For implementation,
+specify file ownership and tell the child it shares the worktree and must respect
+others' edits.
 
 Separate independent questions into separate calls within the user's authorized agent
 count and spending limits. Continue useful local work while children run, then integrate
-their returned Batons; list_delegations and read_chat can inspect progress. Keep each
-child scoped to its task. Suggested next roles do not automatically start another phase.
+their results; list_delegations and read_chat can inspect progress. For ordinary tasks
+whose result is needed during this turn, use return_mode="steer"; the default "queue"
+returns behind the current turn. Keep each child scoped to its task. Suggested next
+roles do not automatically start another phase.
 Do not turn a helper request into a planning/exploration/implementation Workflow.
 
 Inside an active Workflow, its frozen roles and current phase rules apply. Only its
