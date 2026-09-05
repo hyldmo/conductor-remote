@@ -940,6 +940,14 @@ Two asymmetric halves — keep them separate:
     history is omitted. It also omits reasoning and tools, so the handoff body carries
     the selected response's prose plus the ordinary elision markers; the attachment
     header names that narrower cut.
+    **Copy has the same format dropdown, with its original one-tap action intact:**
+    pressing the copy icon still copies only the response's prose. Its dropdown offers
+    Last message only, Concise, With reasoning, and Full transcript; the chat formats
+    stop at an older response just like Fork. The phone renders from its already-loaded
+    durable entries, excluding queued prompts, so the clipboard write stays inside the
+    tap's user gesture on iOS and works offline. `renderTranscript` and the row cuts now
+    live in `src/shared.ts` (re-exported by `src/transcript.ts`) so Copy and Fork retain
+    identical role headings, reasoning/tool selection, and elision markers.
   - **Destination and transcript cut are independent.** The phone's one **To new
     workspace** switch applies to Last message only, Concise, With reasoning and Full
     transcript alike. A workspace destination still receives that selected transcript
