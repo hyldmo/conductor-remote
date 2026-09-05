@@ -210,6 +210,7 @@ describe('phone chat tabs', () => {
 				onContext={vi.fn()}
 				onNewChat={vi.fn()}
 				onClose={vi.fn()}
+				onClosedTabs={vi.fn()}
 				creating={false}
 				closingId={null}
 				online={false}
