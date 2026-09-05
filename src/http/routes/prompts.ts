@@ -1,3 +1,5 @@
+import { hasAgentSettings, sendPromptSchema } from '../../contracts/agent-inputs.ts'
+import { parseInput } from '../../contracts/validation.ts'
 import { attachmentPrompt, writeAttachment } from '../../files/attachments.ts'
 import {
 	discardStagedAttachment,
@@ -10,10 +12,8 @@ import { WorkflowCoordinatorError } from '../../orchestration/workflow/errors.ts
 import type { Workspace } from '../../reads/types.ts'
 import { routeParam, routes } from '../../routes.ts'
 import { renderTranscript, transcriptMessage, transcriptThrough } from '../../transcript/parser.ts'
-import type { SendPromptRequest } from '../../wire.ts'
-
-import { EFFORT_LABELS } from '../../writes/agent-options.ts'
 import { lockBlocked } from '../../writes/guards.ts'
+import { parseJsonBody } from '../input.ts'
 import { NOT_HANDLED, type RouteHandler } from '../router-types.ts'
 import type { RelayServices } from '../services.ts'
 
@@ -113,19 +113,13 @@ export function createPromptsRoutes(
 
 		if (promptTo) {
 			const sessionId = promptTo
-			const body = JSON.parse((await readBody(req)) || '{}') as Partial<SendPromptRequest>
-			if ('workflow' in body) {
+			const input = parseJsonBody(await readBody(req))
+			if (input && typeof input === 'object' && 'workflow' in input) {
 				return json(req, res, 400, { error: 'Workflow starts through POST /api/workflows.' })
 			}
-			if (body.text !== undefined && typeof body.text !== 'string') {
-				return json(req, res, 400, { error: 'prompt must be a string' })
-			}
-			const rawText = (body.text ?? '').trim()
-			if (!rawText) return json(req, res, 400, { error: 'empty prompt' })
-			if (body.agent !== undefined && (!body.agent || typeof body.agent !== 'object' || Array.isArray(body.agent))) {
-				return json(req, res, 400, { error: 'agent must be a settings object' })
-			}
-			const requestedAgent = body.agent && Object.keys(body.agent).length ? body.agent : undefined
+			const body = parseInput(sendPromptSchema, input)
+			const rawText = body.text
+			const requestedAgent = body.agent && hasAgentSettings(body.agent) ? body.agent : undefined
 			const frozen = workflowFrozenError(sessionId)
 			if (
 				frozen &&
@@ -141,10 +135,7 @@ export function createPromptsRoutes(
 			// One deadline for the whole request: settings eat into the send's budget
 			// rather than extending it past what the phone said it would wait.
 			const deadline = Date.now() + sendBudget(req)
-			const queue = body.queue === true
-			if (requestedAgent?.effort && !EFFORT_LABELS[requestedAgent.effort]) {
-				return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
-			}
+			const queue = body.queue
 			// One prompt per intent (src/delivery/sendonce.ts). Everything that can *say something
 			// to Conductor* sits inside, so an answer the phone never heard is replayed
 			// rather than re-performed — including the parked branches, since parking the

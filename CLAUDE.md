@@ -1140,6 +1140,15 @@ Two asymmetric halves — keep them separate:
       phone gets. Elsewhere the tool *is* the procedure, same in and same out, which
       is why `.meta` pays there and mostly does not here. Revisit past ~25 tools, or
       when something other than the phone becomes the primary client.
+    - **Zod now shares the first three write contracts.** `src/contracts/agent-inputs.ts`
+      owns prompt, workspace-creation and agent-settings inputs; `wire.ts` re-exports
+      their inferred input types. `src/mcp/define-tool.ts` exports JSON Schema with
+      `io: 'input'` (defaults stay optional) and parses every call before its HTTP hop.
+      Tools explicitly map snake_case fields and expose their existing subset of API
+      options. HTTP keeps extra-field compatibility with cached PWAs; the ordinary
+      creation/send routes reject `workflow` before parsing can strip it. Input errors
+      become HTTP 400 or MCP tool errors. Browser callers still import only types;
+      the effort values and guard in `shared.ts` need no Zod runtime in the PWA.
 
 - **Notifications are a read that pushes** — the cheap third shape, on the durable
   side of the split. `src/notifications/notify.ts` polls the same read-only SQLite for

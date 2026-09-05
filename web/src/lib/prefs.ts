@@ -5,6 +5,7 @@
  * still read them while the relay updates underneath it. A separate metadata document
  * carries revision timestamps and deletion tombstones for the host merge.
  */
+import { isAgentEffort } from '../../../src/shared.ts'
 import { AGENT_DRAFT_PREFIX } from './prompts/agent-draft.ts'
 import { DRAFT_PREFIX } from './prompts/draft.ts'
 import { READ_MARKS_KEY, type ReadMarks } from './read.ts'
@@ -42,7 +43,7 @@ function cleanAgent(raw: unknown): AgentPatch {
 	if (!value) return {}
 	const agent: AgentPatch = {}
 	if (typeof value.model === 'string') agent.model = value.model
-	if (typeof value.effort === 'string') agent.effort = value.effort
+	if (isAgentEffort(value.effort)) agent.effort = value.effort
 	if (typeof value.plan === 'boolean') agent.plan = value.plan
 	if (typeof value.fast === 'boolean') agent.fast = value.fast
 	return agent

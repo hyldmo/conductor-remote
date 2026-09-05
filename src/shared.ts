@@ -16,6 +16,13 @@
 
 import type { TranscriptEntry } from './transcript/parser.ts'
 
+/** Stable wire values used by request validation and the phone's effort controls. */
+export const AGENT_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] as const
+
+export function isAgentEffort(value: unknown): value is (typeof AGENT_EFFORTS)[number] {
+	return AGENT_EFFORTS.some(effort => effort === value)
+}
+
 /** Everything `workspaceTitle` needs — structural, because a search result is a leaner row. */
 export interface Titled {
 	id: string
