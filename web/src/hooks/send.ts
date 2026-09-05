@@ -39,6 +39,7 @@ export function useSendPrompt() {
 	const clearDraftContent = useApp(s => s.clearDraftContent)
 	const workflowClientId = useApp(s => s.workflowClientId)
 	const finishWorkflowAttempt = useApp(s => s.finishWorkflowAttempt)
+	const setWorkflowDraft = useApp(s => s.setWorkflowDraft)
 
 	return useCallback(
 		async (opts: {
@@ -74,6 +75,7 @@ export function useSendPrompt() {
 					// This also covers an inline Retry after a failed start or a page reload:
 					// every accepted path retires the synced objective in one place.
 					clearDraftContent(sessionId)
+					setWorkflowDraft(sessionId, false)
 					finishWorkflowAttempt(workflowAttemptKey, id)
 					// Workflow freezes model/effort/fast from the server-owned role snapshot.
 					// Plan remains an independent generic Conductor choice and stays staged.
@@ -122,7 +124,8 @@ export function useSendPrompt() {
 			queryClient,
 			startWorkflow,
 			workflowClientId,
-			finishWorkflowAttempt
+			finishWorkflowAttempt,
+			setWorkflowDraft
 		]
 	)
 }

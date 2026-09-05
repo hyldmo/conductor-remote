@@ -666,7 +666,10 @@ export function SessionView() {
 									: undefined
 							}
 							workflowStarted={
-								!!(sessionId && sessionRoles[sessionId]) || !!(ws.pending_prompt && sessionId === ws.active_session_id)
+								!!(sessionId && sessionRoles[sessionId]) || delegations.some(job => job.childSessionId === sessionId)
+							}
+							hasPendingPrompt={
+								!!ws.pending_prompt || !!ws.parked_prompts?.some(prompt => prompt.sessionId === sessionId)
 							}
 							workflow={sessionWorkflow}
 							workflowRole={workflowRole}
