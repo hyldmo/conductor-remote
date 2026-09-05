@@ -1,10 +1,10 @@
 /** The deliberately small MCP surface a Realtime voice session is allowed to reach. */
-import type { Tool } from '../mcp-tools.ts'
-import type { SessionState } from '../reads.ts'
-import { clipExact, oneLine } from '../speech.ts'
+import type { Tool } from '../mcp/types.ts'
+import type { SessionState } from '../reads/types.ts'
 import type { VoiceBriefBoard, WorkspaceOverviewFilters } from './brief.ts'
 import type { VoiceCallTarget, VoiceChatContext } from './context.ts'
 import type { PreviewRefusal, PreviewStore, SendPreview, WorkspacePreview } from './preview.ts'
+import { clipExact, oneLine } from './speech.ts'
 
 export interface VoiceDispatchResult {
 	ok: boolean

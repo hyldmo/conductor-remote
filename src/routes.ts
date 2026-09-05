@@ -2,7 +2,7 @@
  * Every `/api` path, declared once, for the three callers that must agree on it.
  *
  * The relay matches these, the phone builds them (`web/src/lib/api.ts`) and the MCP
- * tools build them too (`src/mcp-tools.ts`). Before this each path was spelled three
+ * tools build them too (`src/mcp/tools/`). Before this each path was spelled three
  * times: a regex here, a template literal there, another template literal in the third
  * place. `src/wire.ts` had already made the *shapes* impossible to disagree about, and
  * this is the other half — a renamed path used to typecheck cleanly in all three files
@@ -107,7 +107,7 @@ export const routes = {
 	/**
 	 * Quit Conductor and start it again. Not a workspace route: it is about the app,
 	 * and its whole reason to exist is a Conductor that looks healthy from every other
-	 * route while nothing behind it runs (src/writes.ts ▸ restartConductorApp).
+	 * route while nothing behind it runs (src/writes/system.ts ▸ restartConductorApp).
 	 */
 	restartConductor: flat('POST', '/api/conductor/restart'),
 	settings: flat('GET', '/api/settings'),
@@ -165,7 +165,7 @@ export const routes = {
 	devServer: param('GET', '/api/workspaces/:workspaceId/dev-server'),
 	startDevServer: param('POST', '/api/workspaces/:workspaceId/dev-server'),
 	stopDevServer: param('DELETE', '/api/workspaces/:workspaceId/dev-server'),
-	/** Dismiss a first prompt the relay never managed to deliver (src/firstprompt.ts). */
+	/** Dismiss a first prompt the relay never managed to deliver (src/delivery/firstprompt.ts). */
 	dismissFirstPrompt: param('DELETE', '/api/workspaces/:workspaceId/prompt'),
 
 	// ── chats ──
@@ -184,11 +184,11 @@ export const routes = {
 	sendPrompt: param('POST', '/api/sessions/:sessionId/prompt'),
 	/** Write a phone-selected file into Conductor's attachment layout for this chat's workspace. */
 	uploadAttachment: param('POST', '/api/sessions/:sessionId/attachments'),
-	/** Copy a chat into a fresh tab beside it, as a Conductor attachment (src/attachments.ts). */
+	/** Copy a chat into a fresh tab beside it, as a Conductor attachment (src/files/attachments.ts). */
 	splitChat: param('POST', '/api/sessions/:sessionId/split'),
 	/** Lightweight tracked delegation from a chat outside an active Workflow. */
 	delegateTask: param('POST', '/api/sessions/:sessionId/delegate'),
-	/** Dismiss a prompt parked behind the lock screen (src/parked.ts). */
+	/** Dismiss a prompt parked behind the lock screen (src/delivery/parked.ts). */
 	dismissParkedPrompt: param('DELETE', '/api/sessions/:sessionId/prompt')
 } as const
 

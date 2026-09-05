@@ -96,7 +96,7 @@ async function registration(): Promise<ServiceWorkerRegistration | null> {
 
 /**
  * Close any notification already on the lock screen for one chat. The relay stops
- * *sending* for a chat being read (src/notify.ts), but one delivered before it was
+ * *sending* for a chat being read (src/notifications/notify.ts), but one delivered before it was
  * opened is already there, and it outlives the news it carried.
  *
  * The notifier tags per chat, so `tag` is the session id and a sibling chat's own

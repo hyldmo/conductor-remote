@@ -1,7 +1,7 @@
 /** Deterministic, speech-bounded fleet briefing built only from Conductor's read side. */
 import type { Prefs, PrefsPatch } from '../prefs.ts'
-import type { SessionState, Workspace } from '../reads.ts'
-import { clipExact, oneLine, speechText } from '../speech.ts'
+import type { SessionState, Workspace } from '../reads/types.ts'
+import { clipExact, oneLine, speechText } from './speech.ts'
 
 const DORMANT_MS = 7 * 24 * 60 * 60 * 1000
 const DORMANT_LABELS = new Set(['backlog', 'done', 'canceled', 'cancelled'])

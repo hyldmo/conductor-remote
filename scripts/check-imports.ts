@@ -12,9 +12,9 @@
  *
  *   1. `web/src/**` may import from `src/` only with a **statement-level** `import
  *      type` / `export type`. The inline form is not good enough and this is the
- *      trap: `import { type Workspace } from '../../src/reads.ts'` emits
- *      `import {} from '…/reads.ts'` under `verbatimModuleSyntax` — a real, side-
- *      effecting runtime import of a module that opens SQLite. It typechecks, it
+ *      trap: `import { type Reads } from '../../src/reads/repository.ts'` emits
+ *      `import {} from '…/reads/repository.ts'` under `verbatimModuleSyntax` — a real, side-
+ *      effecting runtime import of Node-backed read helpers. It typechecks, it
  *      lints, and it reaches the phone as a blank screen.
  *   2. The value-importable modules — `src/shared.ts` and `src/routes.ts` — are the
  *      only exceptions, so each must stay worth being one: no `node:` import, in it or

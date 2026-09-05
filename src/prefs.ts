@@ -8,9 +8,9 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { attachmentName, attachmentToken } from './attachments.ts'
 import { stateDir } from './config.ts'
-import type { ParkedAgentPatch } from './parked.ts'
+import type { ParkedAgentPatch } from './delivery/parked.ts'
+import { attachmentName, attachmentToken } from './files/attachments.ts'
 
 /** A ready file reference carried with one unsent composer draft. The bytes stay on the host. */
 export interface DraftAttachment {

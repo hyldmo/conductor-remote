@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from '../config.ts'
-import type { ServeStatus } from '../tailscale.ts'
+import type { ServeStatus } from '../host/tailscale.ts'
 
 export const VOICE_FUNNEL_PORT = 443
 export const VOICE_FUNNEL_PATH = '/voice'

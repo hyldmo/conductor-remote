@@ -14,7 +14,7 @@
  * disagree about the same workspace.
  */
 
-import type { TranscriptEntry } from './transcript.ts'
+import type { TranscriptEntry } from './transcript/parser.ts'
 
 /** Everything `workspaceTitle` needs — structural, because a search result is a leaner row. */
 export interface Titled {
@@ -131,8 +131,8 @@ export function humanizeBranch(branch: string | null): string {
  * "managua-v2") is the last resort for a branchless workspace.
  *
  * Three callers have to agree — the sidebar list on the phone, the workspace a push
- * notification names (src/notify.ts), and the workspace an MCP tool result names
- * (src/mcp-tools.ts). A notification that titles a workspace differently from the list
+ * notification names (src/notifications/notify.ts), and the workspace an MCP tool result names
+ * (src/mcp/tools/). A notification that titles a workspace differently from the list
  * it came from reads as a different workspace.
  */
 export function workspaceTitle(w: Titled): string {
@@ -379,7 +379,7 @@ export function responseErrorMessage(error: unknown, fallback: string): string {
 }
 
 /**
- * Markers the relay wraps search hits in (src/search.ts, via FTS5 `snippet()`). They
+ * Markers the relay wraps search hits in (src/search/worker.ts, via FTS5 `snippet()`). They
  * are control characters, so they must never reach the DOM: an unsplit snippet renders
  * as invisible garbage between the words it was meant to emphasise.
  */
@@ -541,7 +541,7 @@ export function isPreviewableImage(filePath: string): boolean {
  * A transcript row that carries a tool's *output* rather than the call that produced it.
  *
  * The two are separate `session_messages` rows and reach the phone as separate entries
- * (src/transcript.ts), so three places have to agree on which is which: the phone folds
+ * (src/transcript/parser.ts), so three places have to agree on which is which: the phone folds
  * a result onto its call, a rendered transcript prints the call and leaves the output
  * behind, and `read_chat` does the same for an agent. Structural, because each of them
  * holds a slightly different view of the same row.
@@ -551,10 +551,10 @@ export function isToolResult(e: { role: string; tool?: string; output?: string }
 }
 
 /**
- * The sentence every locked-Mac refusal starts with (src/conductor.applescript), and
+ * The sentence every locked-Mac refusal starts with (src/writes/applescript/window.applescript), and
  * the one thing two sides must agree it means.
  *
- * The relay decides control flow on it — `lockBlocked` (src/writes.ts) parks the prompt
+ * The relay decides control flow on it — `lockBlocked` (src/writes/guards.ts) parks the prompt
  * rather than burning a phone's retry budget against a screen that will not answer for
  * hours — and the phone decides what to draw: a link to Screen Sharing, because the
  * relay will never unlock the Mac itself. Two matchers over one phrase, spelled out in
@@ -568,7 +568,7 @@ export function isLockedError(error: string | null | undefined): boolean {
 }
 
 /**
- * The diagnostic tail `windowEvidence()` (src/conductor.applescript) appends to every
+ * The diagnostic tail `windowEvidence()` (src/writes/applescript/window.applescript) appends to every
  * window and lock refusal: the window server's count, the lock state, every process
  * named Conductor with its window count, and the menu bar titles.
  *
@@ -576,7 +576,7 @@ export function isLockedError(error: string | null | undefined): boolean {
  * process", which is a question for the relay's log. It reached the phone as well,
  * where a tap on Fork against a locked Mac answered with four lines of red text ending
  * in "[menus: Apple, Conductor, File, Edit, View, Window, Help]" and nothing to act on.
- * So `json()` in src/server.ts cuts it on the way out and logs the full text instead.
+ * So `json()` in src/http/services/responses.ts cuts it on the way out and logs the full text instead.
  *
  * Anchored on our own format: the whole tail is one run of bracketed groups that starts
  * at "[window server:", so a single cut takes all of it and never touches a message
@@ -596,7 +596,7 @@ export function withoutClientWindowEvidence(value: string, field?: string): stri
 
 /**
  * Header naming the push device that sent a request, so the relay can tell which chat
- * that device has on screen and skip notifying it about that one chat (src/notify.ts).
+ * that device has on screen and skip notifying it about that one chat (src/notifications/notify.ts).
  *
  * It rides the transcript poll, which is already a per-second heartbeat for exactly the
  * chat being read and for no other, so this costs no request and no timer. Declared here
@@ -726,7 +726,7 @@ export function renderTranscript(
 
 	for (const e of entries) {
 		// A successful result is the output of the call printed just above it, and output is
-		// the biggest half of a chat (src/search.ts) as well as the least re-readable. So a
+		// the biggest half of a chat (src/search/coordinator.ts) as well as the least re-readable. So a
 		// render carries the call and leaves the file dumps behind — this is not an elision
 		// of a tool *call*, so it is not counted as one. A failure still prints: one line,
 		// and it is often why the answer changed course.

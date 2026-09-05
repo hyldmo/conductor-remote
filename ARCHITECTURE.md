@@ -8,184 +8,183 @@ choices lives in [CLAUDE.md](./CLAUDE.md) (the mental model and the traps) and
 
 ## File map
 
+```text
+src/                     Node relay; source runs as .ts, npm ships emitted dist-node/ JS
+  server.ts              executable startup: create services/server, listen, start timers and queues
+  mcp.ts                 stable stdio MCP entrypoint (conductor-remote mcp)
+  config.ts              paths, relay port/bind, token, write strategy, built PWA directory
+  pkg-root.ts            packageRoot(): find package.json from source or emitted modules
+  db.ts                  one read-only Conductor SQLite handle; slow-query logs omit parameters
+  routes.ts              shared API path builders and matching patterns
+  wire.ts                shared API response/request shapes; types only
+  shared.ts              browser-safe values: titles, query tokens, transcript rendering, lock phrase
+  settings.ts, prefs.ts   relay settings and durable sync of PWA read marks/draft intent
+  http/
+    services.ts          composition root: construct each service once and inject shared dependencies
+    router.ts            token gate, client priority, route dispatch, common error handling
+    router-types.ts      handler contract and NOT_HANDLED sentinel
+    services/
+      base.ts            own DBs, Reads, SessionPoller, actuator, caches, role store, shared UI lease
+      delivery.ts        prompt budgets/receipts, chat opening, first-prompt and parked queues
+      delegations.ts     ordinary-child UI adapters, completion observation, DelegationQueue
+      workflow.ts        coordinator adapters and managed effect dispatch
+      workflow-probes.ts exact root/delivery/effect evidence reads and validation
+      workflow-state.ts  HTTP error/public state projection helpers
+      mcp.ts             Streamable HTTP /mcp transport, using the same registry as stdio
+      voice.ts           voice listener/broker assembly and call-scoped relay tools
+      files.ts           static PWA, attachment and tool-image responses
+      responses.ts       authentication, body limits, conditional JSON, redaction/compression
+    routes/              state, system, workspaces, create-workspace, sessions, prompts,
+                         files, workflows, voice; injected services, no startup side effects
+  reads/
+    repository.ts        Reads facade over the same read-only ConductorDb
+    workspaces.ts        workspace/repo reads, search targets, archive metadata
+    sessions.ts          live/closed sessions, turn-start SQL, status snapshots
+    messages.ts          transcript rows plus full outbox snapshot and delivery receipts
+    worktrees.ts         resolve worktree paths; types.ts holds read-side contracts
+    background-tasks.ts  process-gated open SDK task set, shared cached process snapshot
+    session-poller.ts    one two-second base read fanned out to notifications and orchestration
+  writes/
+    types.ts             Actuator and targeting/result contracts
+    actuator.ts          AppleScript default and opt-in Sidecar actuator selection
+    ui-lock.ts           one bounded process-local priority queue; shared SQLite lease/dispatch hook
+    targeting.ts         workspace links, pane/tab assertions and restart guard injection
+    runner.ts            assemble/run AppleScript with bounded execution and temporary-file cleanup
+    guards.ts            retry/lock/pre-dispatch predicates and the node-side lock probe
+    chats.ts             create, close, restore and stop exact chats
+    workspaces.ts        create, archive, Continue, status and Run/Stop actions
+    agent-options.ts     model/effort/Fast/Plan controls and menu parsing
+    system.ts            restart and Instant Hotspot actions
+    sidecar.ts           optional JSON-RPC client over Conductor's Unix socket
+    applescript/
+      source.ts          ordered manifest and loader for one assembled AppleScript program
+      *.applescript      nine editable parts: window, workspace/chat targeting, composer,
+                         Run tasks, lifecycle, agent options, workspace status, hotspot
+  orchestration/
+    persistence/
+      db.ts              OrchestrationDb facade; connection.ts owns the one writable handle/transaction depth
+      schema.ts          Drizzle schema, inferred rows and Zod validators
+      schema.generated.ts checked-in STRICT bootstrap SQL; generated, never hand-edited
+      runs.ts            acceptance, guarded transitions and cancellation
+      jobs.ts, job-attempts.ts       logical job claims and physical attempts
+      effects.ts, effect-transitions.ts, effect-recovery.ts
+                         prepared effects, dispatch boundaries, receipts and abandoned-owner recovery
+      capabilities.ts, idempotency.ts, events.ts
+                         hashed authority, stable request results and transactional audit events
+      relays.ts, ui-lease.ts, quarantine.ts
+                         process identities, cross-process UI exclusion and unresolved-effect holds
+      records.ts, codecs.ts, projections.ts
+                         internal reads/row validation and bounded secret-free phone views
+      types.ts, values.ts, errors.ts focused persistence contracts and validation helpers
+    workflow/
+      coordinator.ts     WorkflowCoordinator facade; one wake map shared by all lifecycle operations
+      start.ts, wake.ts, root.ts      intake, coalesced advancement and root binding/delivery
+      job-dispatch.ts, job-results.ts child opening/configuration/send, outcomes and Baton barriers
+      commands.ts        scoped delegation, Retry, Adopt, Replay, Complete and Cancel
+      effects.ts, effect-recovery.ts durable UI dispatch and positive-receipt reconciliation
+      effect-runner.ts   external helper gate: persist process identity before GO; bounded group cleanup
+      machine.ts         pure phase/capability/barrier rules
+      prompts.ts         freeze configured roles and build root/child/Baton envelopes
+      http.ts            strict Workflow request parsing
+      state.ts, helpers.ts, types.ts, errors.ts shared context, guards and contracts
+    delegation/
+      intake.ts          validate ordinary-chat tasks and Workflow ownership before persistence
+      queue.ts           one ordinary-job producer, retries and stable completion observations
+      store.ts, codec.ts worktree-local JSON job/session-role storage and strict decoding
+      prompt.ts, types.ts focused child assignment and queue adapter contracts
+  agents/                agent-config.ts: model receipt before effort/Fast; model-cache.ts:
+                         observed picker labels; roles.ts: strict global roles.json;
+                         conductor-settings.ts: surgical new-chat defaults in settings.toml
+  delivery/              firstprompt.ts, parked.ts, sendonce.ts: durable ordinary prompt queues
+                         and the in-process repeated-client-id send memo
+  dev-server/            controller.ts owns preview/forward state; proxy.ts tunnels requests;
+                         ports.ts allocates owned HTTPS mounts; processes.ts owns the shared ps cache;
+                         run-configs.ts, preview-urls.ts and run-activity.ts resolve named Run tasks
+  files/                 attachments.ts, staged-attachments.ts, file-preview.ts and icons.ts:
+                         real/staged attachment bytes, allowed source/image paths and repo icons
+  git/                   diff.ts, change-stats.ts, fork-workspace.ts, pr.ts, merge.ts:
+                         worktree diffs/stats, nondisruptive snapshots and PR actions
+  search/                coordinator.ts owns query grammar/folding; worker.ts owns the synchronous
+                         FTS sidecar handles so backfill/ranking cannot block HTTP
+  transcript/            parser.ts decodes provider frames and tool images; cursor.ts builds opaque
+                         message pointers; context-breakdown.ts estimates provider-neutral context
+  usage/                 plan-usage.ts queries CLI subscription windows without prompts;
+                         tool-usage.ts/service/worker keep payload scans off the HTTP thread
+  notifications/         notify.ts: TurnWatcher + subscription store; webpush.ts: VAPID/encryption
+  host/                  Tailscale/Wi-Fi, self-update/ingress watchdog, logs, relay process identity,
+                         UI-lease watchdog and the nosleep controller/root-helper source
+  voice/                 scoped fleet/current-chat tools, call broker/history, SIP/WebRTC transports,
+                         caller gate, previews, secrets and shared speech bounding
+web/                     React PWA; Vite root
+  index.html             self-heal.js loads before the module bundle to recover a dead shell
+  src/main.tsx, app.tsx   QueryClient/router, token gate, persistent voice provider and ReloadPrompt
+  src/store.ts           Zustand state for connection, drafts, settings intent and device state
+  src/hooks/             browser gestures; workspace/agent/review/search queries; transcript/send;
+                         push lifecycle; preferences and Workflow mutations
+  src/components/
+    session/             SessionView keeps view state; SessionTabs, DiffPanel, notices, Composer
+    transcript/          Transcript shell/grouping, entries, tool details, activity, menus, Markdown/Code
+    workspaces/          list/grouping, cards/filter controls, creation, Run controls and merge/Continue
+    orchestration/       workflow summaries/warnings, role editor, agent subtabs and delegation bubbles
+    agents/, review/     model/usage/context controls and shared patch/source viewers
+    settings/            ConnectSheet and independent theme/notification/Mac rows, token/QR/log sheets
+    search/, voice/      command/chat search and call/history controls
+    Header.tsx, ui.tsx, ReloadPrompt.tsx, FileIcon.tsx, BetaBadge.tsx
+                         small cross-feature shell and display primitives
+  src/lib/               API/auth token, shared-type re-export, formatting, preference/read sync,
+                         push, commands and file mentions; prompts/, transcript/, syntax/, voice/
+                         group cohesive client helpers without importing relay-only modules
+scripts/
+  service.ts             stable LaunchAgent CLI entry: apply flags, then import the command implementation
+  service/               commands, installation, LaunchAgent plist, network/voice exposure,
+                         config/environment and status presentation
+  qr.ts, nosleep.ts, nosleep-setup.ts, gen-icons.ts
+                         phone URL QR, keep-awake commands/root setup and PWA icons
+  check-applescript.ts, copy-applescript.ts, check-imports.ts
+                         assembled-program validation, matching package assets and browser boundaries
+  generate-orchestration-schema.ts  snapshot-free Drizzle export (yarn db:schema)
+tests/                   suites grouped by domain; orchestration/{persistence,workflow,delegation},
+                         writes/, reads/, voice/, session/, transcript/, workspaces/ and other peers
+public/                  repo-root icon assets, self-heal.js and push-sw.js
+numux.config.ts          yarn dev: Vite + relay, on the workspace's allocated ports
+dist/                    built PWA; gitignored and served by the relay
+dist-node/               emitted relay/service JS plus manifest-listed AppleScript assets; gitignored
 ```
-src/              Node relay (dev: run as .ts via Node type-stripping; tarball: compiled to dist-node/)
-  server.ts       HTTP router: /api/* (token-gated) + static PWA + SPA fallback
-  config.ts       paths, port, Tailscale bind, token, write strategy, dist dir
-  pkg-root.ts     packageRoot(): walk up to package.json (works from src/ and dist-node/src/)
-  db.ts           read-only node:sqlite handle to conductor.db; logs >100ms queries without params
-  reads.ts        workspaces / sessions / messages + worktree resolution
-                  closed-tab metadata is a separate workspace-scoped, on-demand read
-  context-breakdown.ts  provider-neutral estimates for a chat's current context categories;
-                  respects compaction/turn boundaries, excludes mirrored child-agent frames,
-                  and sizes each full-history fork format
-  icons.ts        repo-icon resolution, mirroring Conductor's own precedence (repos.icon →
-                  a known filename in the repo root → the GitHub owner's avatar → a monogram)
-  transcript.ts   Claude Code SDK stream JSON → phone-renderable entries, and back out to
-                  markdown (renderTranscript: prose always, thinking/tools per flag). A tool's
-                  output travels as its own entry naming the call (`toolUseId`), capped; the
-                  markdown render prints the call and leaves the output behind. Reads every
-                  result shape — text, edit diffs, tool_reference lists — and numbers a row's
-                  images for GET /api/tool-images/:reference (toolImageAt does that lookup)
-  attachments.ts  writes a real Conductor attachment from outside Conductor: the file under
-                  .context/attachments/<id>/, and the @⟦name⟧(path) token the composer parses
-  staged-attachments.ts  files picked before a worktree exists; the ordinary first-prompt queue
-                  or Workflow root binder moves them in before sending their tokens; a conservative
-                  sweep removes week-old files absent from synced drafts, the ordinary delivery
-                  queue, and Workflow runs
-  search.ts       main-thread facade/query grammar for chat search; folds chunk hits into workspaces
-  search-worker.ts owns both synchronous SQLite handles for the FTS5 sidecar
-                  (stateDir()/search.db), so backfill, lock waits and ranking cannot stall HTTP
-  chat-cursor.ts  the opaque pointer one message in a chat is addressed by, so the MCP
-                  contract never exposes a rowid an agent would do arithmetic on
-  wire.ts         the /api contract: every shape that leaves the relay, declared once (types only)
-  routes.ts       the /api paths, declared once — one pattern builds the client path and the
-                  relay's matching regex, so the two cannot drift
-  shared.ts       what both sides must compute identically (workspaceTitle, query tokens,
-                  the locked-Mac phrase) — the one module web/ may import as a *value*
-  mcp-tools.ts    the 23 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
-                  the relay through an injected `call`, so both transports share one path
-  mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
-                  POST /mcp, which runs in-process and so is inside the UI lock natively
-  git.ts          workspace diff + aggregate line stats vs target branch (incl. untracked via
-                  --no-index), complete on-demand patches for the file open in the review UI,
-                  plus the worktree's file list (GET /api/workspaces/:id/files) that decides
-                  which file an agent named in a message becomes a link
-  fork-workspace.ts  non-disruptive Git snapshot + restore for a split sent to a new workspace;
-                  preserves source HEAD, index and working tree through short-lived private refs
-  change-stats.ts bounded, background cache of git line stats for /api/state; working rows
-                  refresh quickly while idle rows avoid spending four git calls every poll
-  run-activity.ts cached live-process read for workspace Run badges; maps each resolved
-                  worktree to Conductor's `run-run:<n>.sh` wrapper without delaying /api/state
-  file-preview.ts parses source and raster-image paths an agent wrote (absolute, or ~) and
-                  decides whether the relay may open them — the same answer whether or not
-                  the file exists
-  merge.ts        merge the workspace's open PR via `gh pr merge` (mirrors Conductor's Merge button)
-  pr.ts           the one read that leaves this box: GitHub PR state, cached and never awaited
-                  by /api/state; conflicts are computed locally with `git merge-tree`
-  sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
-  writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
-                  locally and cooperates with the relay-wide cross-process SQLite lease;
-                  merged-workspace Continue delegates the branch/store/chat transition to Conductor
-                  closed-chat restore uses the exact workspace/session deep link + visible-row receipt
-  agent-config.ts two-pass cross-provider config: model-only write + DB receipt, then
-                  reacquired effort/fast controls + final receipt (generic Plan stays available
-                  to ordinary callers and remains outside Workflow role snapshots)
-  model-cache.ts  the picker labels and starred default Conductor has shown us, keyed by
-                  harness, so a workspace with no chat yet can still show the effective model
-  conductor-settings.ts  surgical, atomic reads/writes of Claude/Codex new-chat effort
-                  defaults in ~/.conductor/settings.toml; preserves every unrelated TOML line
-  plan-usage.ts   prompt-free Claude/Codex CLI allowance reads → normalized rolling windows;
-                  concurrent, single-flight and cached (Cursor/OpenCode report unavailable)
-  tool-usage.ts   pairs saved tool calls/results by chat and call ID for 24h/7d/30d estimates;
-                  includes archived/hidden chats, skips mirrored child internals and binary payloads
-  tool-usage-service.ts + tool-usage-worker.ts  on-demand read-only SQLite scans off the HTTP
-                  thread, serialized and cached for one minute; only names/counts/token estimates
-                  leave the worker, never tool arguments or result text
-  roles.ts        strict v1 global role config in stateDir()/roles.json; exact picker/provider
-                  validation, immutable resolved snapshots, no Plan field
-  workflow.ts     validates/freezes all three Workflow roles and builds the root/child/Baton
-                  envelopes around the immutable objective; generic Plan is outside that snapshot
-  workflow-machine.ts pure phase/capability/barrier rules: exploration before implementation,
-                  delivered Batons before phase changes, and stable review
-  orchestration-schema.ts  Drizzle source of truth for the relay-owned SQLite schema,
-                  inferred row types, and derived Zod validators
-  orchestration-schema.generated.ts  checked-in STRICT bootstrap SQL generated from that schema
-  orchestration-db.ts  transactional state in stateDir()/orchestration.db: runs,
-                  jobs/attempts, effects/attempts, hashed capabilities, idempotency, events,
-                  relay identities, the cross-process UI lease, and ambiguity quarantine
-  workflow-effect-runner.ts starts external UI helpers behind a private persisted-before-GO gate;
-                  owns process-group identity and bounded termination for crash recovery
-  workflow-coordinator.ts  deterministic Workflow lifecycle, effect receipts/reconciliation,
-                  job ownership, recovery mutations, and secret-free phone projections
-  relay-processes.ts discovers compatible UI-capable relay processes by PID/start identity
-  delegation-intake.ts validates ordinary-chat tasks, role/provider and Workflow ownership
-                  before persisting a lightweight child in the worktree queue
-  delegations.ts  worktree-local JSON job/session-role queue for ad hoc children; persists
-                  their parent links and resumes accepted upgrade-era jobs too
-  session-poller.ts one two-second live-session read fanned out synchronously to notifications,
-                  ad hoc delegation progress, and Workflow receipt observation; async listener
-                  work cannot hold the clock
-  sendonce.ts     the send memo: answers a repeated clientId with the first send's outcome
-  firstprompt.ts  persisted queue for ordinary new-workspace first prompts, from setup on;
-                  managed Workflow creation/effects belong to orchestration.db instead
-  parked.ts       persisted queue for prompts that hit the lock screen — delivers on unlock, pushes the receipt
-  dev-server.ts   URL-first Conductor Run previews + live cross-process advertisements +
-                  per-port tailnet-only HTTPS forwards
-  notify.ts       status-transition watcher subscribed to SessionPoller + subscription store
-                  (~/…/conductor-remote/push.json, 0600)
-  webpush.ts      Web Push protocol: VAPID (ES256) + aes128gcm payloads, node:crypto only
-  logbuf.ts       console capture (ring + stamped stdout) + log-file tail → GET /api/logs, token redacted
-  autoupdate.ts   self-update from npm; exit()s to reload, so both queues persist to disk
-  tailscale.ts    magicdns name, expose posture (funnel|serve), tailscale binary, relay port,
-                  serve-status parser (which HTTPS port fronts the relay, and who holds the rest)
-  funnel-watchdog.ts  end-to-end probe of the PUBLIC ingress; re-registers a stale funnel, and
-                  can move the Mac to a fallback network when it has no route at all
-  settings.ts     relay preferences the phone edits (fallback SSIDs, autoRejoin) → stateDir()/settings.json
-  prefs.ts        durable sync peer for PWA read marks + draft text/agent/attachment intent
-                  → stateDir()/prefs.json (attachment bytes remain in their existing host paths)
-  wifi.ts         networksetup reads + the one narrow write (join a network macOS already knows).
-                  All async: it is slowest exactly when the link is wedged, and the relay is one thread
-  nosleep-helper.ts  the root half in one place: the shared POSIX-sh body, the helper file it is
-                  installed as, the sudoers drop-in, and helperReady() (runs the real path under sudo -n -k)
-  nosleep.ts      arming lid-closed wakefulness from the phone: detached spawn, pidfile discovery
-                  across relay restarts, liveness read through EPERM — and the `pmset sleepnow`
-                  that ends a window for real (a shut lid never replays its close event)
-  conductor.applescript  the UI script writes.ts runs; a real file, read as a sibling of the
-                  emitted module, so build:node copies it beside the JS
-web/              React PWA (Vite root)
-  index.html      loads /self-heal.js synchronously (before the module bundle) so it can catch a dead shell
-  src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
-  src/app.tsx     routes (/ list, /w/:id session) + token gate; mounts ReloadPrompt above the gate
-  src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll) / useModels (model list, SWR)
-                  / useContextBreakdown (on demand) / useRoles; dedicated Workflow start/recovery
-                  mutations; ordinary useSendPrompt applies staged agent settings, then sends
-  src/lib/        api client, types (re-export of src/wire.ts), format helpers, cn, composer
-                  drafts (draft.ts), ready attachments and staged agent settings (agentDraft.ts), local-first host
-                  preference sync (prefs.ts), read marks (read.ts, the unread this phone has
-                  seen), pending sends and stable Workflow mutation client ids (pending.ts),
-                  push (permission/subscribe/reconcile), the unlock link a locked Mac gets
-                  (lock.ts), transcript-merge (folds each tool result onto the call it answers,
-                  identity intact), transcript-tree (rebuilds native child frames and gives each
-                  spawned agent a durable virtual subtab), transcript-actions (where a Fork control may sit), highlight
-                  (eleven languages, registered one at a time), fileMentions (turns `src/git.ts`
-                  in a message into a source link, worktree file list as the existence check;
-                  explicit raster links and attachment pills also resolve ignored project-relative
-                  files, while absolute and ~ paths pass through for the relay to allow), clipboard (copyText,
-                  behind the Copy on a response and on every fenced block), commands (the ⌘K
-                  palette's registry: each view registers the actions it owns while mounted,
-                  one matcher and one shortcut dispatcher read the flat list)
-  src/components/ Header, WorkspaceList, SessionView, Transcript, Markdown + Code, DiffView
-                  (changed/all file rail with patch/source viewer), SourceLines,
-                  Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
-                  RolesSettings, WorkflowModePill, DelegationPipeline, QueueBubble,
-                  WorkspaceMenu (the status groups, plus Archive), MergeBanner (merge + continue), MessageNav,
-                  DevServerControls, ClosedTabsSheet, ContextBreakdownSheet, SearchSheet + SearchPane + CommandResults (one
-                  ⌘K box for chats and actions), ArchivedChat (a hit whose
-                  worktree is gone), NewWorkspaceSheet, PlanUsageSheet (the Models panel:
-                  provider defaults plus usage, with ToolUsageSection ranking tool context
-                  by total/per-call/largest payload and filtering by provider/period), LogsSheet, TokenGate, QRCode +
-                  QRScanner, ReloadPrompt, ui, and ConnectSheet
-                  (the Notifications switch with "send a test", plus the Mac section: keep-awake
-                  windows and the fallback-network picker). Patch.tsx renders a unified diff for
-                  both the workspace diff and an edit step's result
-  src/store.ts    zustand: token + connection status + drafts (text + ready attachments)
-                  + staged agent settings + Workflow attempt ids + read marks
-                  + this device's push subscription
-public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
-  self-heal.js    HTML-level stale-client watchdog (see the PWA self-update trap in CLAUDE.md)
-  push-sw.js      push / notificationclick handlers, pulled into the generated SW by workbox.importScripts
-numux.config.ts  `yarn dev` — Vite + relay in one numux TUI, on per-workspace ports
-scripts/         gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status)
-                 + qr.ts (dep-free QR of the phone URL, printed by service.ts)
-                 + nosleep.ts (the `nosleep [duration|setup|status]` entrypoint)
-                 + nosleep-setup.ts (installs the root helper + the scoped sudoers rule)
-                 + check-{applescript,imports}.ts (repository source/toolchain validators)
-                 + generate-orchestration-schema.ts (snapshot-free Drizzle export; `yarn db:schema`)
-tests/           Vitest unit, contract, concurrency, filesystem and shell integration tests
-dist/            built PWA (gitignored) — what the relay serves
-dist-node/       compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball
-```
+
+`src/server.ts` is the executable boundary. It calls `createRelayServices()` once,
+passes the resulting services to `createRelayServer()`, then starts listeners,
+pollers and recovery loops. Route modules receive those dependencies; importing a
+route or service implementation does not start another server. `src/http/router.ts`
+keeps authentication, UI priority and error handling around every API handler.
+
+Splitting files does not split ownership. `src/db.ts` and `reads/repository.ts` keep
+the Conductor connection read-only. `OrchestrationDb` delegates to persistence
+operations on one `PersistenceConnection`, including its nested transaction depth.
+`WorkflowCoordinator` passes one context and wake map through the root, job and
+effect lifecycles. The composition root constructs the first-prompt, parked-prompt
+and ordinary-delegation queues once; none of their consumers starts another
+producer. All UI actions import `writes/ui-lock.ts`, whose process-local priority
+queue also acquires the single cross-process lease in orchestration persistence.
+
+The AppleScript parts are editing boundaries inside one program. The manifest in
+`src/writes/applescript/source.ts` defines their exact order for runtime loading,
+compile/handler checks and package copying. The split preserved the original
+program byte for byte; joining adds no separators. Add a source part to the
+manifest, keep cross-part handler checks intact, and copy assets alongside the
+emitted loader rather than relying on a root-only shell glob.
+
+`scripts/service.ts` applies flags before dynamically importing
+`scripts/service/commands.ts`: `service/environment.ts` captures relay/voice ports
+at module load. An eager import would freeze ambient settings before CLI overrides
+were applied. The executable entry paths remain stable for `bin/cli.js` and live
+relay-process detection.
+
+Around 600 code lines, excluding comments and blanks, is a signal to check a file's
+responsibilities. Split cohesive behavior, preserve shared state and transactions,
+and group related tests with it. Prefer imports from the owning module; retain a
+facade only when it provides a real interface such as `Reads` or `OrchestrationDb`,
+not a barrel stub at an obsolete path.
+
 
 ## Deterministic Workflow and lightweight delegated chats
 
@@ -252,7 +251,9 @@ implementation goes through the implementation role. That is an orchestration an
 prompt contract, not an OS sandbox: an ordinary Conductor root still has filesystem
 tools, and the relay cannot remove them from an already-running chat.
 
-Ordinary chats use a lightweight path through `delegation-intake.ts` and `delegations.ts`.
+Ordinary chats use a lightweight path through `src/orchestration/delegation/intake.ts`
+and `src/orchestration/delegation/queue.ts`, with JSON persistence in `store.ts` and
+validation in `codec.ts` beside them.
 `delegate_task` without either Workflow credential posts to `/api/sessions/:id/delegate`.
 Intake rejects unknown fields, missing or same-provider roles, invalid transcript cuts,
 and any parent owned by an active Workflow before enqueue. If Workflow ownership cannot

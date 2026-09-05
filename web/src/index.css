@@ -30,7 +30,7 @@
 	/* An inactive provider context whose cheap/fast prompt cache may have cooled. */
 	--color-cold-cache: light-dark(#90611f, #d6a85f);
 
-	/* Workspace dot by PR state (src/pr.ts). */
+	/* Workspace dot by PR state (src/git/pr.ts). */
 	--color-pr-merged: light-dark(#7b38b5, #ac47ff);
 	--color-pr-draft: light-dark(#6e7075, #a4a3a2);
 	--color-pr-attention: light-dark(#916b00, #facc15);
@@ -77,7 +77,7 @@
 	   same 62px dead band permanently. `vh` is the one unit that kept reporting the
 	   true screen height in *both* states, so the installed app sizes off vh. Browsers
 	   stay on dvh, where vh is the *large* viewport and would bury the composer behind
-	   Safari's toolbar with no way to scroll to it. data-standalone (set in hooks.ts
+	   Safari's toolbar with no way to scroll to it. data-standalone (set in hooks/browser.ts
 	   from navigator.standalone) covers iOS versions that don't match the media query. */
 	@media (display-mode: standalone) {
 		html,
@@ -159,7 +159,7 @@
 	.pill-active {
 		@apply bg-surface-2 text-text;
 	}
-	/* Composer control (components/AgentBar.tsx): a tighter pill whose 8px gutter
+	/* Composer control (components/agents/AgentBar.tsx): a tighter pill whose 8px gutter
 	   matches the textarea's own text inset, so every label inside the composer
 	   card starts on the same vertical rule as the prompt. */
 	.ctl {
@@ -219,7 +219,7 @@
 	}
 }
 
-/* Chat markdown (rendered by components/Markdown.tsx). Preflight strips list/heading
+/* Chat markdown (rendered by components/transcript/Markdown.tsx). Preflight strips list/heading
    styles, so everything a transcript needs is restored here, scoped under .md. */
 @layer components {
 	.md > :first-child {
@@ -340,7 +340,7 @@
 		margin-right: 0.4em;
 	}
 
-	/* Highlight.js token classes (web/src/lib/highlight.ts), drawn from this app's own
+	/* Highlight.js token classes (web/src/lib/syntax/highlight.ts), drawn from this app's own
 	   palette rather than from a shipped theme: the same six colours the rest of the
 	   phone uses, so a fenced block, a Bash step and a source preview read alike.
 	   Unscoped on purpose — the class prefix is unique, and the three places that show

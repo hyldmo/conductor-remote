@@ -82,7 +82,7 @@ Two asymmetric halves — keep them separate:
     turn and nothing more, and the notifier says "done" at the wait as well as at the
     end. Measured 2026-09-02: 4,905 of 4,930 tasks closed — p50 6s, p90 98s, 7 over
     an hour, one 14h — and `sessions.status` was `idle` on 7 of the 8 chats with one
-    open. `reads.listSessions` ▸ `background_tasks` (`src/background-tasks.ts`) is the
+    open. `reads.listSessions` ▸ `background_tasks` (`src/reads/background-tasks.ts`) is the
     open set, started and not yet notified, **gated on the agent process**: Conductor
     runs one `claude --resume=<session>` child per active chat and a task dies with
     it — every one of the 25 never closed sits before a process restart — while an
@@ -93,7 +93,7 @@ Two asymmetric halves — keep them separate:
     on the largest chats here and runs only for a chat with a live process.
   - **Plan usage is provider-owned, so it is the one read that does not come from
     SQLite.** Conductor's sidebar has a `resource-usage` control, but its value is
-    absent from `conductor.db`; `/api/usage` (`src/plan-usage.ts`) asks the agent CLIs
+    absent from `conductor.db`; `/api/usage` (`src/usage/plan-usage.ts`) asks the agent CLIs
     Conductor already bundles instead. Neither path sends a model prompt. Codex has
     the clean structured shape: start `codex app-server`, initialize, then call
     `account/rateLimits/read` for its named windows, percentages and reset times.
@@ -109,7 +109,7 @@ Two asymmetric halves — keep them separate:
   - **Sidebar line changes are git-owned too, but never make `/api/state` wait.**
     `workspaces` carries no additions/deletions, and asking the full diff endpoint for
     every row would materialise megabytes of patch text every five seconds.
-    `src/change-stats.ts` therefore attaches the last `workspaceDiffStats` answer and
+    `src/git/change-stats.ts` therefore attaches the last `workspaceDiffStats` answer and
     refreshes stale worktrees behind a four-process queue. It uses the diff view's same
     merge-base and tracked-plus-untracked semantics, refreshes a newly-updated row
     immediately, keeps a working row within five seconds, and lets an idle one rest for
@@ -122,7 +122,7 @@ Two asymmetric halves — keep them separate:
   one that focuses an existing one is undocumented but public — it is what
   Conductor's own sidebar row menu copies under **"Copy link"** (Cmd+⇧C):
   **`conductor://workspace?id=<workspace>&session=<chat>`**, both ids exactly the
-  ones the relay already reads. `writes.ts` ▸ `workspaceLink` builds it and
+  ones the relay already reads. `src/writes/targeting.ts` ▸ `workspaceLink` builds it and
   `openViaDeepLink` is now the *first* step of every send, because it is not
   merely faster (~2s against the ~18s the sidebar/palette path measured) — it
   navigates by **id**, so a collapsed sidebar section stops mattering, and it
@@ -148,7 +148,7 @@ Two asymmetric halves — keep them separate:
   Conductor's own New workspace; that form is *undocumented* (every documented
   route carries a prompt) but verified live, so suspect it first if creation
   breaks. The link is fire-and-forget and only *pre-fills* the composer — someone
-  still has to press Enter. **That someone is the relay** (`src/firstprompt.ts` ▸ `FirstPromptQueue`),
+  still has to press Enter. **That someone is the relay** (`src/delivery/firstprompt.ts` ▸ `FirstPromptQueue`),
   never the phone: a phone sleeps, iOS suspends a backgrounded PWA outright, and
   the delivery hook it used to run only looked at its parked set once per app
   launch, so prompts sat unsent until the next relaunch. Don't confuse that with
@@ -194,18 +194,18 @@ Two asymmetric halves — keep them separate:
   Retry (`DELETE …/workspaces/:id/prompt` dismisses it). A waiting prompt shows
   the same way, because 30s of empty pane reads as "swallowed" and gets retyped
   — which is the same prompt sent twice.
-- **A locked Mac parks the send instead of failing it** (`src/parked.ts` ▸
+- **A locked Mac parks the send instead of failing it** (`src/delivery/parked.ts` ▸
   `ParkedPromptQueue`). The lock screen hides the whole session from
   Accessibility, so while it is up no AppleScript write can land — and it is up
   precisely when the phone is the only thing talking. The phone's own retry
   budget (~a minute) is the wrong tool for a wait that routinely lasts hours, so
   the pieces hand off: `activateConductor` names the lock in ~2s (the fast path
-  above), `deliverPrompt` stops retrying on that error (`writes.ts` ▸
+  above), `deliverPrompt` stops retrying on that error (`src/writes/guards.ts` ▸
   `lockBlocked`), and the send route parks the prompt — with any staged agent
   settings riding in the same request, so the two park and later apply
   *together* — in a persisted queue (`…/conductor-remote/parked-prompts.json`)
   and answers the phone `202 {parked:true}` in seconds. The queue polls
-  `screenLocked()` (the node-side twin in `writes.ts` — stdlib JXA, no
+  `screenLocked()` (the node-side twin in `src/writes/guards.ts` — stdlib JXA, no
   Accessibility grant) every 5s and delivers FIFO per chat on unlock, so two
   prompts parked into one conversation arrive in the order they were sent, and
   a push notification reports landed-or-failed either way — nobody is watching,
@@ -238,7 +238,7 @@ Two asymmetric halves — keep them separate:
   `[window server: 6; screen: locked] [processes: conductor=0] [menus: Apple,
   Conductor, File, …]` in 11px red, with nothing to press. So the phrase every lock
   refusal starts with is declared once (`src/shared.ts` ▸ `MAC_LOCKED`,
-  `isLockedError`) and read by both sides — the relay parks on it (`writes.ts` ▸
+  `isLockedError`) and read by both sides — the relay parks on it (`src/writes/guards.ts` ▸
   `lockBlocked`), the phone draws `UnlockLink` beside it — and that evidence tail is
   cut on the way out of `json()` (`shared.ts` ▸ `withoutWindowEvidence`) and written
   to the log instead, which `/api/logs` serves to the same phone on request. The
@@ -249,8 +249,8 @@ Two asymmetric halves — keep them separate:
   result is `sessions.is_hidden = 1`, so `DELETE /api/sessions/:id` waits for that
   chat to disappear from `reads.listSessions` rather than trusting the keystroke.
   A terminal with focus binds the same ⌘W to closing a terminal tab, so
-  `writes.ts` ▸ `closeChat` takes the usual workspace/tab assertions and
-  `conductor.applescript` ▸ `closeChatTab` presses ⌘L first, exactly like New chat
+  `src/writes/chats.ts` ▸ `closeChat` takes the usual workspace/tab assertions and
+  `src/writes/applescript/lifecycle.applescript` ▸ `closeChatTab` presses ⌘L first, exactly like New chat
   and Stop do before their context-sensitive shortcuts. A working chat draws
   **Cancel / Close anyway** (verified against the live AX tree), so the route
   refuses it before touching the UI unless `closeRunning` was explicit, and the
@@ -270,7 +270,7 @@ Two asymmetric halves — keep them separate:
   success. A retry for an already visible chat presses nothing. The relay still
   never writes Conductor's DB, and no sequence of ⌘⇧T presses may substitute for
   restoring the requested id.
-- **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
+- **Only one UI operation at a time** (`src/writes/ui-lock.ts` ▸ `uiTurn`). Every AppleScript
   here drives Conductor's single shared window, so two overlapping runs interleave
   and land a prompt in whatever the other one focused — the exact failure every
   step's fail-closed assertion *cannot* catch, since each script's reads are true
@@ -289,11 +289,11 @@ Two asymmetric halves — keep them separate:
   *interrupted* either). The subtle one: **release the lock before resolving the
   caller.** Settling first and cleaning up in a chained `.then` frees it one
   microtask late, so code that awaits a write and then reads `uiQueueDepth()` is
-  told a run is still in flight when none is. `tests/ui-lock.test.ts` exists
+  told a run is still in flight when none is. `tests/writes/ui-lock.test.ts` exists
   because `tsc` reads all of this happily and caught neither that bug nor the
   cascade behind it.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
-  interface (`src/writes.ts`), two strategies:
+  interface (`src/writes/types.ts`), implemented in `src/writes/actuator.ts` with two strategies:
   - `applescript` (**default**): drives Conductor's real UI send. **Conductor's
     webview exposes its whole tree to macOS Accessibility** (the old "Tauri shows
     no AX text" belief was wrong), so nearly nothing is keystrokes — every
@@ -364,8 +364,8 @@ Two asymmetric halves — keep them separate:
        recovered. It also runs before `activate`, so the relay never *launches*
        Conductor behind the lock screen. Only then does `restartConductor` quit and
        relaunch — **the only remaining lever**, and the one step here that can
-       destroy work, so it is gated on `RELAY_ALLOW_RESTART`, which `server.ts`
-       sets from a live DB read (`no workspace is 'working'`) — writes.ts must
+       destroy work, so it is gated on `RELAY_ALLOW_RESTART`, which `src/http/services/base.ts`
+       sets from a live DB read (`no workspace is 'working'`) — the actuator must
        never decide this itself. It is **fire-and-forget**: a cold launch doesn't fit the phone's
        budget alongside the send, so it returns as soon as the relaunch starts
        and tells the phone to send again. "Open it on your Mac" is not advice a
@@ -380,7 +380,7 @@ Two asymmetric halves — keep them separate:
        can be swallowed by a focused field. Only *rendered* rows exist in the AX
        tree, so a **collapsed sidebar section is invisible** — and the row title
        follows Conductor's precedence (manual name → PR title → humanized branch →
-       codename), so `writes.ts` tries each candidate and requires a *unique* hit.
+       codename), so `src/writes/targeting.ts` tries each candidate and requires a *unique* hit.
        Anything missing or ambiguous falls back to the command palette
        (Cmd+K → **branch name** → Enter); the branch is the palette's unique
        per-workspace key, and a looser query can match a *command* (e.g. unarchive).
@@ -430,12 +430,12 @@ Two asymmetric halves — keep them separate:
          had the box survive all three presses, and no send has ever been logged
          as rescued by a later one — so pressing is bounded at **two** and every
          press past the first is delay added to a send already failing. The value
-         is that the caller now *knows*: `sendNeverStarted` (`writes.ts`) reads
+         is that the caller now *knows*: `sendNeverStarted` (`src/writes/guards.ts`) reads
          that sentence back and `deliverPrompt` checks the transcript **once**
          instead of watching it for the full 6s, because a run that never
          consumed the draft cannot have written a row. The one check stays — an
          *earlier* attempt's row may still be arriving, and typing over that is
-         the duplicate the window exists to prevent. `tests/send-guards.test.ts`
+         the duplicate the window exists to prevent. `tests/writes/send-guards.test.ts`
          pins all three retry predicates, since each is a substring match on a
          sentence this repo writes and each fails silently.
        - **Why Enter gets ignored is still open.** The evidence says the box holds
@@ -451,7 +451,7 @@ Two asymmetric halves — keep them separate:
     rather than guessing. No private protocol, nothing to rebreak on a Conductor
     update. The remaining keystroke delays (palette fallback) are load-bearing.
 
-    **A failed send retries itself** (`deliverPrompt` in `server.ts`) — the phone
+    **A failed send retries itself** (`deliverPrompt` in `src/http/services/delivery.ts`) — the phone
     should not be handed a Retry button for what is nearly always a warm-up cost.
     What makes that safe rather than a way to send twice is that **the transcript is
     the receipt**: every run, *including* one that reported an error, is followed by
@@ -477,7 +477,7 @@ Two asymmetric halves — keep them separate:
     sends. Re-measure rather than re-guess (`SEND_ATTEMPT_MS`).
 
     **What that confirm cannot see is a copy landed by a *different request*, and that
-    is the duplicate the chats here actually hold** (`src/sendonce.ts`). The cursor is
+    is the duplicate the chats here actually hold** (`src/delivery/sendonce.ts`). The cursor is
     snapshotted when the request starts, so an earlier copy sits behind it. The failure
     is never the relay fumbling a send — it is the *answer* going missing: stale funnel
     ingress after a network change, a suspended phone, or the 75s client budget running
@@ -495,7 +495,7 @@ Two asymmetric halves — keep them separate:
     second UI run behind it; and **no key means no memo**, so an MCP caller or a PWA
     cached from before this gets exactly the old behaviour rather than a guess.
 
-    **The bubble holding that prompt is now persisted too** (`web/src/lib/pending.ts`).
+    **The bubble holding that prompt is now persisted too** (`web/src/lib/prompts/pending.ts`).
     The composer clears its draft the moment a send *starts*, so from then until a
     confirmation the optimistic bubble holds the only copy of what was typed — and it
     lived in memory alone, so the reload that follows a lost answer (or iOS discarding
@@ -531,7 +531,7 @@ Two asymmetric halves — keep them separate:
     is an `AXMenu` (labels carry badges — "Opus 5 NEW" —
     so matching prefers exact then unique-prefix, and `GET …/models` enumerates it
     live rather than hard-coding a list that would rot). **A provider-changing
-    model pick rerenders all the other composer controls**, so `src/agent-config.ts`
+    model pick rerenders all the other composer controls**, so `src/agents/agent-config.ts`
     gives the model its own UI pass, confirms the model and `agent_type` in SQLite,
     then reacquires and applies only the effort/plan/fast values that differ. Fast
     has no readable UI state and only exists for some models, so the DB decides
@@ -541,7 +541,7 @@ Two asymmetric halves — keep them separate:
     use it as an orchestration role setting, test mechanism, or completion signal.
 
     **Lightweight cross-provider delegation is a persisted sibling-chat queue**
-    (`src/roles.ts`, `src/delegation-intake.ts`, `src/delegations.ts`). An ordinary
+    (`src/agents/roles.ts`, `src/orchestration/delegation/intake.ts`, `src/orchestration/delegation/queue.ts`). An ordinary
     chat calls `delegate_task` with its session id, a role, and a focused prompt;
     choose a role from `list_roles` whose configured instructions fit the task.
     The model, effort, Fast mode, and preamble all come from Roles; do not infer
@@ -572,7 +572,7 @@ Two asymmetric halves — keep them separate:
     also used by the sidebar's pre-coordinator Workflow identity fallback.
 
     **Workflow mode is the explicit root entry point, not Conductor Plan mode**
-    (`src/workflow.ts`, `web/src/components/WorkflowModePill.tsx`). The pill in New
+    (`src/orchestration/workflow/prompts.ts`, `web/src/components/orchestration/WorkflowModePill.tsx`). The pill in New
     workspace and an untouched `+` chat replaces the ordinary model/effort/fast/Plan
     controls with the configured `planning` role. Both workflow request paths reject
     an explicit agent patch, validate and freeze that role, and record the user's
@@ -597,7 +597,7 @@ Two asymmetric halves — keep them separate:
     second time merely because `queue_order` is null.
 
     **The phone doesn't push these on tap — the send does.** A tap only *stages*
-    the change (`web/src/lib/agentDraft.ts`, keyed by session id and persisted
+    the change (`web/src/lib/prompts/agent-draft.ts`, keyed by session id and persisted
     exactly like the composer draft it belongs to), and `useSendPrompt` POSTs the
     patch *before* the prompt and drops the prompt if it didn't stick — running it
     on the model the user just moved away from is the same class of mistake as
@@ -608,7 +608,7 @@ Two asymmetric halves — keep them separate:
     for the next one instead of being swallowed). `GET …/models` is then the only
     tap-time trip left, and it's the expensive one — it activates Conductor and
     opens the real menu — so its result is cached per `agent_type` and served
-    stale-while-revalidate (`web/src/lib/models.ts` ▸ `useModels`): the picker
+    stale-while-revalidate (`web/src/hooks/agents.ts` ▸ `useModels`): the picker
     paints from the last list and refreshes behind it, and a refresh that fails
     keeps that list on screen and says so rather than emptying it.
 
@@ -731,7 +731,7 @@ Two asymmetric halves — keep them separate:
     at the shallowest bounded level of the web area. Shallowest is load-bearing: the
     transcript hangs off the same root and can contain controls of its own; zero or
     several hits refuses rather than guesses. AXPress is only acceptance — the
-    native checkout/fetch continues asynchronously — so `server.ts` waits for the
+    native checkout/fetch continues asynchronously — so `src/http/routes/workspaces.ts` waits for the
     read-only `workspaces.branch` value to differ before answering. The action is
     rendered only by the live diff view when GitHub says the current PR is merged;
     `ArchivedChat` has no diff or writes at all, and the route explicitly refuses an
@@ -769,11 +769,11 @@ Two asymmetric halves — keep them separate:
     Measured here 2026-09-02: the last agent frame in `session_messages` was 20:47:44
     and prompts kept landing as user rows for the next 2h35m, each turn flipping
     `working → idle` having written nothing — which reaches the phone as an empty
-    transcript and a notification saying "Finished its turn." (`notify.ts`'s fallback
+    transcript and a notification saying "Finished its turn." (`src/notifications/notify.ts`'s fallback
     when `lastAssistantText` finds none). Every read here is fine in that state and
     nothing on the read side can fix it, so the phone needs the one lever that isn't a
     read. Same two gates as the archive, in the same two places: the **working chats**
-    are counted from the DB by `server.ts` and refused with 409 unless `stopAgents`
+    are counted from the DB by `src/http/routes/workspaces.ts` and refused with 409 unless `stopAgents`
     says so out loud (the quit ends every turn in flight), and the **lock screen** is
     asked by `restartApp` itself, because a relaunch fired behind it comes up
     windowless and once came up wedged. `RELAY_ALLOW_RESTART` is deliberately *not*
@@ -795,7 +795,7 @@ Two asymmetric halves — keep them separate:
     "test."** Since `applescript` is now precise, sidecar buys nothing today.
 
 - **Search is a read that builds an index, and it needs its own database.**
-  `src/search.ts` full-text-searches the chat history, which is only possible because
+  `src/search/coordinator.ts` full-text-searches the chat history, which is only possible because
   of one measurement: of the 3,106 MB in `session_messages.content`, the **prose is
   122 MB** — 4%. tool_result output is 799 MB, `type:"system"` frames 522 MB,
   tool_use arguments 162 MB. So it indexes what a person would actually search for
@@ -820,11 +820,11 @@ Two asymmetric halves — keep them separate:
   inside the phone's 250ms search-as-you-type debounce, which is the only latency
   budget that binds. Re-measure rather than re-quote: the 7.6s/111k/1–7ms this file
   claimed before thinking was indexed had already drifted to 12–57ms on its own.
-  **Both SQLite handles live in `src/search-worker.ts`, never on the HTTP event
+  **Both SQLite handles live in `src/search/worker.ts`, never on the HTTP event
   loop.** `node:sqlite` is synchronous, and a dev relay can hold the sidecar's writer
   long enough for its 5s busy timeout to freeze every otherwise-unrelated API route;
   backfill parsing and a common-word FTS rank are blocking for the same reason.
-  `src/search.ts` is only the async worker facade, cached status, query grammar and
+  `src/search/coordinator.ts` is only the async worker facade, cached status, query grammar and
   result folding. Slow source queries and >100ms worker operations are relayed into
   `/api/logs`; the main `ConductorDb` handle applies the same >100ms timing so the
   next non-search event-loop stall names its SQL without logging bound values.
@@ -876,14 +876,14 @@ Two asymmetric halves — keep them separate:
     those repos own (`reads.sessionIdsInRepos`) as one `json_each` parameter *inside* the
     FTS query. Post-filtering the 300 chunks it returns looks the same and is wrong: a
     common word fills every slot from the busiest repo and a smaller one folds up to
-    nothing — `tests/search.test.ts` pins it at a limit of one, where the two answers
+    nothing — `tests/http/search.test.ts` pins it at a limit of one, where the two answers
     differ. Measured 2026-09-02 against the largest repo here (1,005 chats, 39 kB of ids):
     +0.3ms on a rare word, +60ms on the worst common-word query (165ms → 220ms), still
     inside the debounce, with no schema bump and so no rebuild. The sheet's filter is its
     own and starts at every repo each time it opens; the sidebar's View-options filter
     still does not reach into search.
 
-- **An attachment is a file plus a token, and nothing else** (`src/attachments.ts`) —
+- **An attachment is a file plus a token, and nothing else** (`src/files/attachments.ts`) —
   which is the only reason the relay can make one. Conductor's composer stores an
   attached file as `@⟦<name>⟧(<the worktree-relative path, percent-encoded>)` in the
   prompt text, beside the file itself at `<worktree>/.context/attachments/<6 chars>/<name>`.
@@ -894,7 +894,7 @@ Two asymmetric halves — keep them separate:
   this file survives intact. The near misses are quiet: `encodeURIComponent` encoding
   the slashes too *is* the format (tidying that away still sends, and simply isn't an
   attachment any more), and the brackets are `⟦⟧`, not the ASCII ones they resemble.
-  `tests/attachments.test.ts` pins both against a token Conductor itself wrote,
+  `tests/files/attachments.test.ts` pins both against a token Conductor itself wrote,
   and pins the other half — that a name built from a **chat title**, which is free text
   a model wrote and which then gets joined onto a path, cannot climb out of the worktree.
   On the phone that same token becomes a clickable pill. It resolves directly against
@@ -946,7 +946,7 @@ Two asymmetric halves — keep them separate:
     stop at an older response just like Fork. The phone renders from its already-loaded
     durable entries, excluding queued prompts, so the clipboard write stays inside the
     tap's user gesture on iOS and works offline. `renderTranscript` and the row cuts now
-    live in `src/shared.ts` (re-exported by `src/transcript.ts`) so Copy and Fork retain
+    live in `src/shared.ts` (re-exported by `src/transcript/parser.ts`) so Copy and Fork retain
     identical role headings, reasoning/tool selection, and elision markers.
   - **Destination and transcript cut are independent.** The phone's one **To new
     workspace** switch applies to Last message only, Concise, With reasoning and Full
@@ -954,7 +954,7 @@ Two asymmetric halves — keep them separate:
     attachment, but its code is a snapshot of the source worktree at the moment the
     fork is requested — not a claim that an older transcript row can reconstruct an
     older filesystem. `split_chat` exposes the same choice as `new_workspace`.
-    `src/fork-workspace.ts` mirrors the layers in Conductor's bundled checkpointer:
+    `src/git/fork-workspace.ts` mirrors the layers in Conductor's bundled checkpointer:
     an alternate index seeded from the source index captures tracked and
     untracked-not-ignored working files without touching the real index; short-lived
     private refs retain the source HEAD, index tree and worktree tree; and the fresh
@@ -988,23 +988,22 @@ Two asymmetric halves — keep them separate:
     presses **⌘L ("Focus chat input") first**, exactly as `stopTurn` does with its own
     chord, and asserts the pane before either. Both chords are Conductor's own.
 
-- **MCP is the same relay with an agent on the other end** (`src/mcp-tools.ts`).
-  Seventeen tools, and **every one of them is an HTTP call to the
+- **MCP is the same relay with an agent on the other end** (`src/mcp/registry.ts`).
+  Tool families live under `src/mcp/tools/`, and **every tool is an HTTP call to the
   running relay** — nothing here opens `conductor.db` and nothing here runs
   AppleScript. That is the load-bearing part, not a convenience: `uiTurn` is a
   *process-local* lock, so an MCP server that drove the UI itself would sit outside
   it and two agents focusing different workspaces would land each other's prompts.
   Routed through the relay, the phone, both delivery queues and every agent share
-  one lock. Requests carry `x-relay-client: mcp`, which `server.ts` turns into
+  one lock. Requests carry `x-relay-client: mcp`, which `src/http/router.ts` turns into
   `background` priority, so an agent never makes a human tap wait. It is hand-rolled
   **Two transports, one tool set.** `src/mcp.ts` is stdio (`conductor-remote mcp`),
-  spawned as a child process by a local client; `POST /mcp` in `server.ts` is the
+  spawned as a child process by a local client; `POST /mcp` in `src/http/services/mcp.ts` is the
   Streamable HTTP transport for a client that can only reach a URL. They share
-  `mcp-tools.ts` through an injected `call`, which is the only reason they cannot
+  `src/mcp/registry.ts` and `src/mcp/dispatcher.ts` through an injected `call`, which is the only reason they cannot
   drift — verified by diffing both transports' output for the same query. The HTTP
   one calls the relay's own API **over loopback rather than reaching into
-  `reads`/`writes`**: a sub-millisecond hop buys one code path, against carving every
-  handler out of a 1000-line router. It is deliberately minimal — the server never
+  `reads`/`writes`**: the hop preserves the same route validation, delivery receipts, and queue ownership for both transports. It is deliberately minimal — the server never
   initiates a message, so there is no SSE stream, `GET` answers 405 (which the spec
   allows) and no `Mcp-Session-Id` is issued. **A request carrying an `Origin` header
   is refused**: a real MCP client sends none and a browser cannot omit one, so that
@@ -1051,8 +1050,8 @@ Two asymmetric halves — keep them separate:
 
 - **One set of types, because there are now three readers of the same JSON.** The
   phone, an MCP tool and the relay all describe the same rows, and for a while each
-  kept its own copy: `web/src/lib/types.ts` was a 421-line hand mirror of `reads.ts`
-  and friends, and `src/mcp-tools.ts` declared a third set inline at every
+  kept its own copy: `web/src/lib/types.ts` was a 421-line hand mirror of the former `reads.ts`
+  and friends, and the former `src/mcp-tools.ts` declared a third set inline at every
   `call<{…}>`. Nothing checked any of them — a field renamed on the relay typechecked
   cleanly on both sides and turned up as `undefined` on a phone, which is exactly how
   `workspace_diff` came to print `+undefined -undefined` for every file (it read
@@ -1076,15 +1075,15 @@ Two asymmetric halves — keep them separate:
     promise that nothing under it ever reaches for Node.
   - **`src/routes.ts` is the other half of wire.ts: the paths, declared once.**
     `wire.ts` made the shapes impossible to disagree about and left the *addresses*
-    written three times — a regex in `server.ts`, a template literal in
-    `web/src/lib/api.ts`, another in `src/mcp-tools.ts`, 62 spellings of 27 paths.
+    written three times — a regex in the former monolithic `server.ts`, a template literal in
+    `web/src/lib/api.ts`, another in the former `src/mcp-tools.ts`, 62 spellings of 27 paths.
     A renamed path typechecked in all three and surfaced as a 404 on a phone. Now
     one pattern serves both directions: `param()` splits `/api/sessions/:id/stop` at
     the placeholder to build `path(id)` for a client and the regex the relay matches
     with, so they cannot drift. Decoding happens in `routeParam`, which is what stops
     a handler forgetting `decodeURIComponent` on a repo name. **What the table cannot
     fix is renaming a path**: both sides derive from the one string, so a typo stays
-    self-consistent and `tests/routes.test.ts` passes — and the phone runs from a
+    self-consistent and `tests/http/routes.test.ts` passes — and the phone runs from a
     service-worker cache while the relay updates itself, so an installed PWA can be a
     version behind. Treat a path rename as a breaking change to that older client.
   - **This is also the answer to "should we adopt tRPC", and `wire.ts` + `routes.ts`
@@ -1093,10 +1092,10 @@ Two asymmetric halves — keep them separate:
     What is left is worth stating accurately rather than dismissing: `@trpc/server`
     is genuinely zero-dependency, so the "91 packages" figure belongs to the MCP SDK
     and not to it. The real cost is a validator plus a `.meta`-to-MCP generator, two
-    or three packages against a `dependencies: {}` tarball that auto-updates while
+    or three packages against the original `dependencies: {}` tarball that auto-updated while
     holding a token that drives your Mac. Two things it also would not cover: the
     relay serves the PWA, the binary icon route and `/mcp` off the same port, so
-    tRPC would sit *inside* `server.ts` rather than replace it (a footnote, not an
+    tRPC would sit *inside* the HTTP router (`src/http/router.ts`) rather than replace it (a footnote, not an
     objection); and `httpBatchLink` has no conditional-request path, while `json()`
     answers the phone's three forever-polls (1s, 2s, 2.5s) with a 304 today.
     - The measurement that decides it: of the 462 lines in the tool array, ~86 are
@@ -1108,7 +1107,7 @@ Two asymmetric halves — keep them separate:
       when something other than the phone becomes the primary client.
 
 - **Notifications are a read that pushes** — the cheap third shape, on the durable
-  side of the split. `src/notify.ts` polls the same read-only SQLite for
+  side of the split. `src/notifications/notify.ts` polls the same read-only SQLite for
   `sessions.status` transitions and POSTs a Web Push message; no Conductor
   process, no AX, no window. **`working → idle` is the whole trigger** — it is
   what "done", "asked you a question" and "waiting on a permission prompt" all
@@ -1137,7 +1136,7 @@ Two asymmetric halves — keep them separate:
     **neither** (no dispatched user row with a current `turn_id` or legacy `queue_order`,
     and no session timestamp) notifies every time, because with no evidence either way,
     silence is the dangerous default. The state machine is `TurnWatcher`, split out of
-    the poll loop so `tests/notify.test.ts` can drive it a tick at a time.
+    the poll loop so `tests/notifications/notify.test.ts` can drive it a tick at a time.
   - **A fourth one: the chat already in front of you.** A turn ending on the screen you
     are reading is not news, and the drop has to happen on the relay. The service worker
     cannot swallow it — Safari treats a push that resolves without a notification as
@@ -1168,28 +1167,28 @@ Two asymmetric halves — keep them separate:
     so a missing method is a no-op.
 
   Web Push is written out of
-  `node:crypto` in `src/webpush.ts` (VAPID ES256 + `aes128gcm`) to keep the
+  `node:crypto` in `src/notifications/webpush.ts` (VAPID ES256 + `aes128gcm`) to keep the
   tarball's **zero runtime deps** — the traps there are that ES256 needs raw
   `r||s` (`dsaEncoding: 'ieee-p1363'`, not Node's default DER) and that **the
   VAPID keypair must never be regenerated behind a live subscription**, since
   `applicationServerKey` is baked in at subscribe time and a re-keyed relay is
   rejected forever after — hence the persisted `push.json` and the client-side
   `matchesKey` re-subscribe. The phone re-POSTs its subscription on **every app
-  load** from the shell (`hooks.ts` ▸ `usePushSync`, not the Connect sheet):
+  load** from the shell (`web/src/hooks/push.ts` ▸ `usePushSync`, not the Connect sheet):
   a subscription the relay has lost still looks enabled from the phone, so
   repairing it can't wait for someone to open a sheet and look. The push handlers
   live in `public/push-sw.js` (plain JS, pulled into the Workbox-generated worker
   via `workbox.importScripts`) and **must always show a notification** — iOS drops
   the subscription for a silent push. **A tap has to be routed three ways, because
   on iOS the two obvious ones both fail silently**: the payload names the chat that
-  ended (`/w/<workspace>?session=<chat>`, `notify.ts` ▸ `chatRoute`), and the worker
+  ended (`/w/<workspace>?session=<chat>`, `src/notifications/notify.ts` ▸ `chatRoute`), and the worker
   posts that to a live page — the fast path, which keeps the token gate and a
   half-typed composer. But a backgrounded home-screen web app is *resumed on the
   screen it was left on*: `openWindow`'s path is ignored and a `postMessage` to a
   frozen page is dropped, which is what "tapping the notification does nothing"
   actually is (WebKit, reported iOS 17.1 through 18.x, still open). So the worker
   also **parks the target in Cache Storage**, and the app claims it on mount and on
-  every return to the front (`hooks.ts` ▸ `usePushRouting`). Reading spends it —
+  every return to the front (`web/src/hooks/push.ts` ▸ `usePushRouting`). Reading spends it —
   once, and only within 2 minutes — or the next launch would jump somewhere from a
   tap that already landed. The chat on screen lives in that same `?session=`
   parameter rather than in state, so a repeat notification for a chat you tabbed
@@ -1208,7 +1207,7 @@ Two asymmetric halves — keep them separate:
     cheap way costs one extra `openWindow` on a platform that had already handled the
     tap; wrong the other way costs every tap. On an installed iOS web app `openWindow`
     resumes the one instance instead of adding a second, and the path it drops is
-    exactly what the parked route above carries. `tests/push-click.test.ts` pins all of
+    exactly what the parked route above carries. `tests/notifications/push-click.test.ts` pins all of
     it, since a dead tap typechecks, lints, and reports nothing anywhere.
 
 - **Keeping the Mac awake is the one write that needs *root*** — a fourth shape,
@@ -1217,7 +1216,7 @@ Two asymmetric halves — keep them separate:
   `caffeinate -i` are the wrong layer), it needs root, and **the LaunchAgent has no
   TTY to answer a sudo prompt** — which is the whole reason `nosleep setup`
   (`scripts/nosleep-setup.ts`) exists. It installs a root-owned helper plus a sudoers
-  drop-in naming exactly that one path, and `src/nosleep.ts` drives it. Four traps,
+  drop-in naming exactly that one path, and `src/host/nosleep.ts` drives it. Four traps,
   each of which turns the rule into passwordless root for everything if missed: the
   helper must live where **only root can write** — and that means *every ancestor*,
   not just the leaf, since renaming a parent replaces the path the rule names, so
@@ -1276,7 +1275,7 @@ Two asymmetric halves — keep them separate:
   `PMDisplaySleepIsBlocked` never consulted — it guards the *screen saver*, which is a
   different trigger. So `disablesleep` keeps the machine running with the lid down and
   the session locks anyway ~16s in, which is the state this product is used in most.
-  Those sends park (`src/parked.ts`), and the phone stops overclaiming: the card says
+  Those sends park (`src/delivery/parked.ts`), and the phone stops overclaiming: the card says
   *idle* screen lock rather than promising there is no lock, and `/api/settings` carries
   a live `screenLocked` (one probe per sheet open, never polled) so an armed window
   cannot say the lock is off while the lock screen is up. The only lever that would
@@ -1284,7 +1283,7 @@ Two asymmetric halves — keep them separate:
   turns off), which is their security posture and not the relay's to flip.
 - **The Mac's own Wi-Fi is readable only in the parts that don't matter.** The
   funnel watchdog can move this Mac onto a phone hotspot when its link dies
-  (`src/wifi.ts`, opt-in via `src/settings.ts`), and the guards are the design: it
+  (`src/host/wifi.ts`, opt-in via `src/settings.ts`), and the guards are the design: it
   fires only on `route -n get default` finding nothing, because **the associated SSID
   is not a usable signal** — macOS gates it behind Location Services and answers "not
   associated" while a default route is live on the same interface. Same reason
@@ -1298,7 +1297,7 @@ Two asymmetric halves — keep them separate:
   The relay has one lever of its own for that case: when a join answers "Could
   not find network" (a hotspot doesn't broadcast until asked), the watchdog
   presses the hotspot's row in Control Center's Wi-Fi popover via Accessibility
-  (`joinInstantHotspot` — writes.ts wraps the conductor.applescript handler),
+  (`joinInstantHotspot` — `src/writes/system.ts` wraps the handler in `src/writes/applescript/hotspot.applescript`),
   which wakes the phone's hotspot over Continuity exactly like clicking it. It
   needs an unlocked screen and an unattended Mac (any human click closes the
   popover), so Auto-Join `Automatic` remains the layer below it. Settings hold
@@ -1315,10 +1314,10 @@ yarn verify   # typecheck + lint + repository checks + Vitest (slowest last) —
 yarn test     # run the Vitest suite once
 yarn test:watch # rerun affected Vitest tests while editing
 yarn test:coverage # run Vitest with V8 text + HTML coverage reports
-yarn check:repo # import-boundary and AppleScript source/toolchain validation
+yarn check:repo # import boundaries, assembled AppleScript validation, generated schema check
 yarn fix      # Biome autofix (format + safe lints)
 yarn build    # Vite → dist/ (the PWA the relay serves)
-yarn build:node # tsc -p tsconfig.build.json → dist-node/, then copy src/*.applescript beside it
+yarn build:node # emit dist-node/ JS, then copy every ordered AppleScript manifest part beside its loader
 yarn start    # run the relay (node bin/cli.js)
 yarn dev      # numux TUI (numux.config.ts): Vite :5173 (HMR) proxying /api → relay :8787
 yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
@@ -1347,28 +1346,34 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   (live source). `tsconfig.build.json` uses **`rewriteRelativeImportExtensions`** so the
   sources keep their `.ts` import specifiers (which let Node run them unbuilt) and emit
   gets them rewritten to `.js` — never "fix" the `.ts` imports, they're load-bearing for
-  the dev path. The tarball still has **zero runtime deps** (relay is stdlib-only; `dist-node`
-  is plain JS + `node:*`), and `files` ships `bin`/`dist`/`dist-node` only — **no raw `.ts`**.
+  the dev path. The tarball ships compiled relay code with its declared runtime dependencies, and
+  `files` ships `bin`/`dist`/`dist-node` only — **no raw `.ts`**.
   - The dev path is still strip-only, so keep the code free of syntax that must be
-    *transformed* — **parameter-property constructors, enums, namespaces**. `db.ts`/`reads.ts`
+    *transformed* — **parameter-property constructors, enums, namespaces**. `src/db.ts`/`src/reads/repository.ts`
     use explicit field assignments for exactly this reason (they once used `constructor(private readonly …)`).
     (`tsc` in the node build *could* transform those, but the dev run can't, so the ban stands.)
   - Anything that resolves a path against the package root must anchor on `packageRoot()`
     (`src/pkg-root.ts`), **not** `import.meta.dirname/..` — the compiled files sit one dir
     deeper (`dist-node/src/…`), so a hard `..` points at `dist-node`, not the real root.
-    A *sibling* asset is the exception and the only one: `writes.ts` joins
-    `import.meta.dirname` to reach `conductor.applescript`, which works at both depths
-    precisely because the file moves with it. **`tsc` emits only `.js`**, so anything
-    non-JS that `src/` ships needs its own copy line in `build:node` — miss it and the
-    tarball is fine at typecheck, fine at lint, and dead on first import.
+    Sibling assets and worker entrypoints use their module location instead.
+    `src/writes/applescript/source.ts` resolves the nine manifest parts beside itself;
+    search and usage workers likewise stay beside their coordinators in source and
+    emitted output. **`tsc` emits only `.js`**, so `scripts/copy-applescript.ts` copies
+    every manifest part into the matching `dist-node/src/writes/applescript/` path.
+    Missing assets pass typecheck and lint but fail at runtime.
   - The one experimental bit left, `node:sqlite`, only warns — `bin/cli.js` silences
     just that warning (no re-exec).
+- **Service flags must run before service imports.** `scripts/service.ts` applies
+  CLI flags, then dynamically imports `scripts/service/commands.ts`. The latter's
+  dependency `scripts/service/environment.ts` captures relay and voice ports at
+  module load. An eager command import would freeze ambient settings before the
+  explicit flags could override them. Keep the entrypoint stable for `bin/cli.js`.
 - **The relay binds loopback; the HTTPS URL comes from Tailscale, and `EXPOSE` picks
   who can reach it.** `server.listen` uses `127.0.0.1` (override with `RELAY_HOST`), and
-  `yarn deploy` (`service.ts` → `ensureTailscale`) fronts a stable `https://<magicdns>/`
+  `yarn deploy` (`scripts/service/network.ts` ▸ `ensureTailscale`) fronts a stable `https://<magicdns>/`
   with real TLS (which the PWA service worker needs). Two modes, `EXPOSE=public|tailnet`:
   `public` (**default**) = `tailscale funnel` — reachable from **any browser on the
-  internet**, gated only by the 128-bit token (`server.ts` compares it constant-time);
+  internet**, gated only by the 128-bit token (`src/http/services/responses.ts` compares it constant-time);
   `tailnet` = `tailscale serve` — tailnet devices only. The chosen mode is persisted
   next to the token (`…/conductor-remote/expose`) so a bare re-deploy keeps posture;
   switching to `tailnet` runs `funnel reset` first. Funnel must be enabled for the
@@ -1379,7 +1384,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   listens on 443, 8443 and 10000 only, and OpenAI's cloud dials nothing but 443
   (measured 2026-09-02), so a voice listener that needs a webhook owns `:443` via
   Funnel and the relay sits tailnet-only on `:8787` — expect that to be the norm.
-  `relayServeState` (`src/tailscale.ts`) reads every `host:port` key in
+  `relayServeState` (`src/host/tailscale.ts`) reads every `host:port` key in
   `serve status --json` for the `/` mount that proxies to the relay, so `status`
   prints `https://<node>:8787/` with its QR. The writes follow one rule: a mapping is
   kept wherever it lives, a port that carries someone else's mount is never written
@@ -1389,13 +1394,13 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   The watchdog refuses its heal on the same evidence, because `funnel --bg 8787`
   mounts on :443 whatever is there.
 - **Workspace dev-server forwards are always tailnet-only, regardless of `EXPOSE`.**
-  `src/dev-server.ts` resolves Conductor's named `[scripts.run.<id>]` settings with
+  `src/dev-server/run-configs.ts` resolves Conductor's named `[scripts.run.<id>]` settings with
   their user → shared repo → repo-local → managed, per-ID merge semantics. One
   visible local config keeps the Play button's direct behavior; more than one
   makes the phone ask for an exact config on every start, regardless of a declared
   default. Legacy `scripts.run` keeps the old implicit path. The API refuses an
   unchosen or unknown multi-config start instead of inheriting whatever the Mac
-  last selected. `writes.ts` then presses the exact Run/Stop task through the same
+  last selected. `src/writes/workspaces.ts` then presses the exact Run/Stop task through the same
   fail-closed Accessibility path as other writes; Conductor still owns the process
   and its cleanup. The same controller is exposed to agents as MCP `dev_server`:
   use it instead of starting a long-lived development server from a shell, so the
@@ -1423,7 +1428,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   workspace's allocated `CONDUCTOR_PORT` from `ps eww` so it can expand that
   template (never log the snapshot — it contains environments and secrets). This
   is a process-environment read, not terminal-output scraping. If no full URL was
-  configured or advertised, `writes.ts` accepts an `AXURL` from Conductor's Open
+  configured or advertised, `src/writes/workspaces.ts` accepts an `AXURL` from Conductor's Open
   control; current Conductor builds expose only the `Open :<port>` label, so that
   port and then the base allocation remain compatibility fallbacks. Never append a
   credential in the consumer: arbitrary preview JavaScript can read its fragment.
@@ -1484,7 +1489,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   — see `.github/workflows/ci.yml`. The verify script is named `verify`, not `check`
   (collides with a Yarn Classic builtin).
 - **The log is a wire surface now, not just a file.** `installLogCapture()`
-  (`src/logbuf.ts`, called first thing in `server.ts`) wraps `console.*`: every line
+  (`src/host/logbuf.ts`, called first in `src/http/services/base.ts`) wraps `console.*`: every line
   also lands in a 600-entry ring served by `GET /api/logs`, and the stdout copy gains a
   `YYYY-MM-DD HH:MM:SS` prefix (plus `WARN`/`ERROR` for those levels) — that prefix is
   what lets `?file=relay.log` parse the *daemon's* on-disk log back into stamped, levelled
@@ -1495,7 +1500,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   now user-visible text, so don't log anything you wouldn't hand to whoever holds the
   token. The file tabs belong to the LaunchAgent, so the response carries `managed` and
   the UI says so when this relay isn't the process writing them.
-- **Editing `src/conductor.applescript`.** Inside a `tell application "System
+- **Editing `src/writes/applescript/`.** Inside a `tell application "System
   Events"` block, ordinary-looking variable names resolve as **System Events
   terms** — `tabs` and `groups` become "every tab/group of the process", so a loop
   over your own list quietly iterates the wrong thing and the handler returns
@@ -1523,14 +1528,18 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     candidate. `get` on a query that yields one or two elements buys nothing
     measurable (`tabGroups` is unchanged at ~450ms); it is there so a workspace
     with twenty chat tabs doesn't discover the trap on its own.
-  - **It is a real file, and that is load-bearing in two directions.** `writes.ts`
-    reads it as a sibling of its own module (`import.meta.dirname`, the one place
-    that may — see the `packageRoot()` rule below), so `yarn build:node` has to
-    copy it next to the emitted JS; `tsc` only emits `.js`, and without that `cp`
-    the published tarball boots to an ENOENT. It also used to live in a **TS
-    template literal**, where a backtick in a comment terminated the string and
-    `tsc` blamed a line tens of lines away — that trap is gone, and moving it back
-    would bring it back.
+  - **Nine source parts still form one AppleScript program.** The ordered manifest
+    in `src/writes/applescript/source.ts` is shared by runtime loading,
+    `scripts/check-applescript.ts`, and `scripts/copy-applescript.ts`. Parts preserve
+    their whitespace and join without separators; the split preserved the former
+    single program byte for byte. Never sort the files, compile a part
+    independently, or add a part without updating the manifest. The source reader
+    refuses missing, duplicate, and unlisted parts; the checker resolves handlers
+    across all parts and nested TypeScript callers, compiles the whole program on
+    macOS, and maps compiler line numbers back to the source part. The copy script
+    preserves paths beside the emitted loader. The program once lived in a **TS
+    template literal**, where a comment backtick ended the string; keep the real
+    `.applescript` sources to avoid that trap.
   - **JXA shell-outs that return CF objects need two guards, and the compile
     check sees neither** (the JXA lives inside a string, so `osacompile` parses
     right past it — only running the probe tells you). `$.CFBridgingRelease` is
@@ -1542,7 +1551,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     pointer, `ObjC.deepUnwrap` answers `undefined`, and the `|| {}` fallback
     turns a locked Mac into a confident "unlocked" — the silent variant of the
     same wrong verdict. Both live probes (`serverWindowCount`, `screenLocked`,
-    plus the node-side twin in `writes.ts`) carry the working pattern.
+    plus the node-side twin in `src/writes/guards.ts`) carry the working pattern.
 - **The installed PWA's viewport is not the box iOS lays it out in, and `dvh`
   reports whichever one it currently believes.** Measured in the iOS 26.5
   Simulator (iPhone 17 Pro, 874pt screen, home-screen web app): `innerHeight`,
@@ -1568,7 +1577,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   by sheet animations), and read state back with `simctl io booted screenshot`.
   Tapping the installed icon *resumes*; to load new HTML, re-add the icon.
 - **A touch iOS never ends leaves the drawer's drag holding the whole app.** The
-  edge-swipe handler (`hooks.ts` ▸ `useEdgeSwipeDrawer`) paints an inline `transform`
+  edge-swipe handler (`web/src/hooks/browser.ts` ▸ `useEdgeSwipeDrawer`) paints an inline `transform`
   and keeps `tracking`/`horizontal`, both cleared on `touchend`/`touchcancel` — and
   iOS sends neither when the system claims the swipe or suspends the PWA mid-drag.
   The stale flags then make **every later `touchmove`, anywhere on the page**, skip
@@ -1599,7 +1608,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   `longtask` under `Emulation.setCPUThrottlingRate` rather than on a Mac at full
   speed, where the whole thing hides inside one dropped frame.
   - **And the transcript is the one read that appends, so it must be single-flight**
-    (`hooks.ts` ▸ `useTranscript`). Every other read on the phone is a react-query
+    (`web/src/hooks/transcript.ts` ▸ `useTranscript`). Every other read on the phone is a react-query
     key, which replaces its data and dedupes per key; this one keeps a rowid cursor
     read when a tick starts and written when it answers, so two ticks overlapping
     that gap fetch from the same rowid and append the same rows twice. The mount is
@@ -1613,7 +1622,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     Skipping a tick costs nothing: the cursor hasn't moved, so the next fetch carries
     what the skipped one would have.
   - **A tool's output is a different row from the tool call, so the pairing is the
-    phone's job** (`web/src/lib/transcript-merge.ts`). Conductor writes the call in an
+    phone's job** (`web/src/lib/transcript/merge.ts`). Conductor writes the call in an
     assistant frame and the result in a later `type:"user"` one, and the transcript is
     polled by rowid — so anything the 1s tick outruns, which is every command worth
     watching, lands in a *later* fetch than the row it belongs to. A relay-side join
@@ -1639,7 +1648,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     results showed as an empty step** — 3,120 of them Conductor's own edit result
     (`{status, diffString}`), 205 a `tool_reference` list, 80 an image. So an edit now
     shows its **diff**, coloured by the same `Patch` the workspace diff uses (extracted
-    to `web/src/components/Patch.tsx`, because a patch that reads differently in two
+    to `web/src/components/review/Patch.tsx`, because a patch that reads differently in two
     places reads as two different changes), a tool search names what it found, and an
     unknown shape falls back to its own JSON rather than to silence, which is what keeps
     Conductor drift visible. **Images are the one output that stays behind a route**
@@ -1650,7 +1659,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     only for a step someone opened. That numbering is why `parseMessage` and `toolImageAt`
     live in one file: they must walk a row's image blocks in the same order, or the
     reference finds the wrong picture.
-  - **Syntax colour costs bundle bytes, not frames** (`web/src/lib/highlight.ts`).
+  - **Syntax colour costs bundle bytes, not frames** (`web/src/lib/syntax/highlight.ts`).
     Measured against 800 real Bash commands out of `session_messages` (median 195
     chars) and this repo's own files: highlight.js tokenises the median command in
     **0.011ms** and a 500-line file in **2.4ms**, so the runtime side never reaches
@@ -1672,7 +1681,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     for the gutter, and a token routinely covers several lines (a block comment, a
     template literal), so highlight.js's HTML string cannot be split at `\n` without
     cutting through the tag. `splitLines` cuts the *tree* and re-opens the enclosing
-    spans on the next line; `tests/highlight.test.ts` pins that the lines put the
+    spans on the next line; `tests/transcript/highlight.test.ts` pins that the lines put the
     input back together and that blank ones survive, because a line lost there
     renumbers every line below it and still looks like an ordinary file. Token colours
     come from the app's own palette in `index.css`, not from a shipped theme.
@@ -1719,11 +1728,11 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     the same answer whether or not the file exists.
     Two traps. A **fenced block with no info string reaches `ChatCode` with no class
     either**, exactly like an inline span, so the mention text is *not* trimmed — its
-    trailing newline is the whole of what tells a code block from `` `src/git.ts` ``.
+    trailing newline is the whole of what tells a code block from `` `src/git/diff.ts` ``.
     And the resolver arrives by **context**, not by prop: `ChatCode` is one entry in a
     static component map nothing threads props through, and a context read is the one
     thing that updates past `Markdown`'s `memo` when the file list lands after the
-    first paint. `tests/mention-render.test.tsx` renders the chat to static markup for
+    first paint. `tests/files/mention-render.test.tsx` renders the chat to static markup for
     the fence trap alone — it caught it — because everything else about it typechecks
     and the failure is silent in both directions.
     **An explicit raster image link does not need the git file list.** QA screenshots
@@ -1760,7 +1769,7 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   (`git push origin --force <main-sha>:refs/tags/vX.Y.Z`), then `npm deprecate` the
   burned version. (This is exactly how the stray `v1.17.0` from a reverted
   merge-button take was cleared.)
-- **The relay updates itself fine; the phone is what gets stuck.** `src/autoupdate.ts`
+- **The relay updates itself fine; the phone is what gets stuck.** `src/host/autoupdate.ts`
   pulls a new version and serves a fresh `dist/`, but an installed iOS home-screen PWA
   rarely re-fetches `sw.js` on its own, so it can keep running a stale precached shell
   while `/api/state` still reports the new relay version — the version *label* comes
@@ -1789,16 +1798,24 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   no trailing commas, 120 cols, arrow parens as-needed. Don't hand-format — run `yarn fix`.
 - **TS strict**, `verbatimModuleSyntax` (use `import type`), `.ts`/`.tsx` extensions
   in imports are required (`allowImportingTsExtensions`).
-- **Layout:** `src/` = Node relay (server, db, reads, git, transcript, sidecar,
-  writes, config) plus `conductor.applescript`, the UI script `writes.ts` runs.
-  Two files there are read by the phone as well: `src/wire.ts` (the `/api` contract,
-  types only), plus `src/shared.ts` and `src/routes.ts` (both stdlib-free, the only
-  value imports the web app may make) — see "One set of types".
-  `web/` = Vite-root React PWA (`web/src/`). `public/` = static
+- **Layout:** `src/server.ts` and `src/mcp.ts` are stable executable entrypoints.
+  `src/http/services.ts` constructs shared dependencies once; `src/http/router.ts`
+  dispatches to service-injected route groups. Domain folders own reads, writes,
+  orchestration, delivery, dev servers, agents, files, Git, host services, usage,
+  search, transcripts, notifications and voice. Three contracts remain at the root:
+  `src/wire.ts` (types only), `src/shared.ts` and `src/routes.ts` (browser-safe values,
+  the only relay value imports the web app may make) — see "One set of types".
+  `web/` = Vite-root React PWA (`web/src/`), with feature components and grouped hooks.
+  `public/` = static
   PWA assets at the **repo root** (not under `web/`) so Conductor's repo-icon lookup
   finds them (`vite.config.ts` sets `publicDir: '../public'`); `scripts/` = dev,
   icon-gen, service installer, AppleScript check. `dist/` = build output
   (gitignored, relay-served). Per-file map in [ARCHITECTURE.md](./ARCHITECTURE.md).
+- **File size is a signal:** around 600 code lines, excluding comments and blanks,
+  should trigger a responsibility review. Split cohesive behavior and nest related
+  files/tests; do not break a transaction, queue, wake map or UI lock into competing
+  owners. Import the owning module directly. Keep real facades such as `Reads`,
+  `OrchestrationDb` and `WorkflowCoordinator`; do not leave barrel stubs at old paths.
 - **Utility scripts** run under plain `node` (default type-stripping), stdlib-only —
   keep them strip-clean too (no param-property constructors/enums/namespaces).
 - **Commit author** is the GitHub noreply address (privacy) — keep it for public commits.
