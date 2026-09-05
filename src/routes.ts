@@ -82,6 +82,10 @@ export const routes = {
 	voiceCallReady: param('POST', '/api/voice/calls/:callId/ready'),
 	/** End one PWA-owned call. SIP calls remain owned by their phone leg. */
 	voiceCallEnd: param('DELETE', '/api/voice/calls/:callId'),
+	/** Durable call history remains readable even when voice is no longer configured. */
+	voiceHistory: flat('GET', '/api/voice/history'),
+	voiceTranscript: param('GET', '/api/voice/history/:callId'),
+	voiceSearch: flat('GET', '/api/voice/search'),
 	repoIcon: param('GET', '/api/repos/:repo/icon'),
 	/** A local image linked in chat Markdown, fetched with the phone's auth header. */
 	localImage: param('GET', '/api/local-images/:path'),

@@ -58,6 +58,9 @@ import type {
 	UploadAttachmentResult,
 	VoiceCallResponse,
 	VoiceCallTarget,
+	VoiceHistoryCall,
+	VoiceHistoryResponse,
+	VoiceHistorySummary,
 	VoiceLanguage,
 	VoiceTicketResponse,
 	WorkflowAdoptRequest,
@@ -261,6 +264,10 @@ export const client = {
 		api<{ ok: true }>(routes.voiceCallReady.path(callId), { method: routes.voiceCallReady.method }, ACTION_TIMEOUT_MS),
 	voiceCallEnd: (callId: string) =>
 		api<{ ok: true }>(routes.voiceCallEnd.path(callId), { method: routes.voiceCallEnd.method }, ACTION_TIMEOUT_MS),
+	voiceHistory: (offset = 0) => api<VoiceHistoryResponse>(`${routes.voiceHistory.path()}?offset=${offset}`),
+	voiceTranscript: (callId: string) => api<VoiceHistoryCall>(routes.voiceTranscript.path(callId)),
+	voiceTranscriptStatus: (callId: string) =>
+		api<VoiceHistorySummary>(`${routes.voiceTranscript.path(callId)}?summary=1`),
 	/** A repo's icon as an object URL, fetched with the auth header (token never rides in the URL). Cached per repo. */
 	repoIcon: (repoName: string): Promise<string> => cachedObjectUrl(routes.repoIcon.path(repoName)),
 	/** A local image from chat Markdown. The relay realpaths and authorizes it before reading. */

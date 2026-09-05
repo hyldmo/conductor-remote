@@ -55,6 +55,11 @@ import type {
 	StateResponse,
 	StatusResult,
 	StopResult,
+	VoiceHistoryCall,
+	VoiceHistoryEntry,
+	VoiceHistoryResponse,
+	VoiceHistorySearchResponse,
+	VoiceHistorySummary,
 	WorkflowDelegateRequest,
 	WorkflowDelegateResult,
 	WorkspaceDiff
@@ -74,7 +79,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 export const SERVER_INFO = { name: 'conductor-remote', version: '1' }
 
 export const INSTRUCTIONS =
-	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. delegate_task operates only inside a Workflow already authorized from the phone: the current root envelope supplies its workflow id and phase capability, and the relay later drives the real Mac UI to launch the tracked child. MCP cannot start a Workflow, edit its frozen roles, or perform recovery actions. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. plan_usage, dev_server status, dismiss_prompt, keep_awake and relay_logs touch no UI. Use dev_server instead of launching a long-lived development server from a shell: its start/stop actions use Conductor’s configured Run task, drive the real Mac UI and steal focus for a few seconds. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace also drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat or workspace they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
+	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. list_voice_calls, search_voice_calls and read_voice_call read saved fleet-call transcripts without driving the UI. delegate_task operates only inside a Workflow already authorized from the phone: the current root envelope supplies its workflow id and phase capability, and the relay later drives the real Mac UI to launch the tracked child. MCP cannot start a Workflow, edit its frozen roles, or perform recovery actions. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. plan_usage, dev_server status, dismiss_prompt, keep_awake and relay_logs touch no UI. Use dev_server instead of launching a long-lived development server from a shell: its start/stop actions use Conductor’s configured Run task, drive the real Mac UI and steal focus for a few seconds. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace also drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat or workspace they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
 
 /** Reads are quick; a UI write is measured in tens of seconds (writes.ts ▸ SEND_ATTEMPT_MS). */
 export const READ_TIMEOUT_MS = 10_000
@@ -194,6 +199,23 @@ function rejectUnknown(args: Record<string, unknown>, allowed: readonly string[]
 	const accepted = new Set(allowed)
 	const unknown = Object.keys(args).filter(key => !accepted.has(key))
 	if (unknown.length) throw new Error(`unknown ${unknown.length === 1 ? 'field' : 'fields'}: ${unknown.join(', ')}`)
+}
+
+function voiceCallHeader(call: VoiceHistorySummary): string[] {
+	return [
+		`call_id: ${call.callId}`,
+		`${new Date(call.startedAt).toISOString()} · ${call.status} · ${call.transport} · ${call.entryCount} entries`,
+		...(call.hasGaps ? ['! This transcript may have gaps from an interrupted connection.'] : []),
+		...(call.captureError ? [`! ${call.captureError}`] : [])
+	]
+}
+
+function voiceEntryFlags(entry: Pick<VoiceHistoryEntry, 'partial' | 'interrupted' | 'transcriptionFailed'>): string {
+	const flags = [
+		...(entry.transcriptionFailed ? ['audio could not be transcribed'] : entry.partial ? ['partial transcript'] : []),
+		...(entry.interrupted ? ['reply interrupted; generated text may include words not played'] : [])
+	]
+	return flags.length ? ` (${flags.join('; ')})` : ''
 }
 
 /** Build the tool set against a given relay transport. */
@@ -348,6 +370,136 @@ export function createTools(call: RelayCall): Tool[] {
 						return `[tool ${entry.tool ?? ''}] ${clip(entry.text, 200)}${entry.detail ? ` — ${entry.detail}` : ''}`
 					return `[${entry.role}] ${entry.text}`
 				})
+				return boundedTranscript(head, rendered, maxChars)
+			}
+		},
+		{
+			name: 'list_voice_calls',
+			description:
+				'List saved fleet voice calls on this Mac, newest first, with dates, previews and call_id values for read_voice_call. These transcripts are separate from Conductor chat history. Read-only; no live call or UI interaction.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					limit: { type: 'integer', description: 'Calls per page (default 20, max 50).' },
+					offset: {
+						type: 'integer',
+						description: 'Skip this many calls; use next_offset from the previous page (default 0).'
+					}
+				},
+				additionalProperties: false
+			},
+			run: async args => {
+				rejectUnknown(args, ['limit', 'offset'])
+				const limit = Math.min(50, Math.max(1, Math.floor(num(args.limit) ?? 20)))
+				const offset = Math.min(1_000_000, Math.max(0, Math.floor(num(args.offset) ?? 0)))
+				const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+				const data = await call<VoiceHistoryResponse>(`${routes.voiceHistory.path()}?${params}`)
+				if (!data.calls.length)
+					return 'No saved voice calls on this page. Only calls captured after transcript saving was enabled are available.'
+				return [
+					...data.calls.map(item =>
+						[...voiceCallHeader(item), clip(item.preview.replace(/\s+/g, ' '), 200)].join('\n')
+					),
+					...(data.hasMore ? [`next_offset: ${offset + data.calls.length}`] : [])
+				].join('\n\n')
+			}
+		},
+		{
+			name: 'search_voice_calls',
+			description:
+				'Search caller and assistant text across saved fleet calls. Results include matching excerpts, call_id and item_id; pass those to read_voice_call as call_id and near to read surrounding decisions. Partial and interrupted text is labeled. Read-only; no UI interaction.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					query: {
+						type: 'string',
+						maxLength: 500,
+						description:
+							'Words ranked by relevance; quote an exact phrase. Uses the same query grammar as search_chats.'
+					},
+					call_id: { type: 'string', description: 'Optional: search only this saved call.' },
+					limit: { type: 'integer', description: 'Matching utterances per page (default 12, max 50).' },
+					offset: {
+						type: 'integer',
+						description: 'Skip this many hits; use next_offset from the previous page (default 0).'
+					}
+				},
+				required: ['query'],
+				additionalProperties: false
+			},
+			run: async args => {
+				rejectUnknown(args, ['query', 'call_id', 'limit', 'offset'])
+				const query = need(args, 'query')
+				if (query.length > 500) throw new Error('query must be at most 500 characters')
+				const limit = Math.min(50, Math.max(1, Math.floor(num(args.limit) ?? 12)))
+				const offset = Math.min(1_000_000, Math.max(0, Math.floor(num(args.offset) ?? 0)))
+				const params = new URLSearchParams({ q: query, limit: String(limit), offset: String(offset) })
+				if (str(args.call_id)) params.set('callId', str(args.call_id)!)
+				const data = await call<VoiceHistorySearchResponse>(`${routes.voiceSearch.path()}?${params}`)
+				if (!data.hits.length) return `No saved voice transcript matches ${JSON.stringify(query)} on this page.`
+				return [
+					...data.hits.map(hit =>
+						[
+							...voiceCallHeader(hit.call),
+							`item_id: ${hit.itemId} · ${new Date(hit.at).toISOString()}`,
+							`[${hit.role}]${voiceEntryFlags(hit)} ${clip(unmark(hit.snippet), 500)}`
+						].join('\n')
+					),
+					...(data.hasMore ? [`next_offset: ${offset + data.hits.length}`] : [])
+				].join('\n\n')
+			}
+		},
+		{
+			name: 'read_voice_call',
+			description:
+				'Read a saved fleet-call transcript by call_id, with caller, orchestrator and tool activity in conversation order. Pass an item_id from search_voice_calls as near for surrounding context, or use older_item/newer_item from a previous read. Without near, reads the latest entries. Text can be clipped to max_chars; narrow the window or raise that budget to read more. Interrupted replies can include generated words the caller never heard. Read-only; no UI interaction.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					call_id: { type: 'string', description: 'From list_voice_calls or search_voice_calls.' },
+					near: { type: 'string', description: 'A transcript item_id from a search hit or previous read.' },
+					before: { type: 'integer', description: 'Entries before near (default 6, max 100).' },
+					after: { type: 'integer', description: 'Entries after near (default 6, max 100).' },
+					limit: { type: 'integer', description: 'Latest entries when near is omitted (default 20, max 200).' },
+					max_chars: { type: 'integer', description: 'Hard output budget (default 12000, min 1000, max 40000).' }
+				},
+				required: ['call_id'],
+				additionalProperties: false
+			},
+			run: async args => {
+				rejectUnknown(args, ['call_id', 'near', 'before', 'after', 'limit', 'max_chars'])
+				const callId = need(args, 'call_id')
+				const data = await call<VoiceHistoryCall>(routes.voiceTranscript.path(callId))
+				const entries = data.entries.filter(entry => entry.role !== 'relay')
+				const near = str(args.near)
+				const anchor = near ? entries.findIndex(entry => entry.id === near) : -1
+				if (near && anchor === -1) throw new Error('near item is not in that saved call')
+				const count = (value: unknown, fallback: number, max: number) =>
+					Math.min(max, Math.max(0, Math.floor(num(value) ?? fallback)))
+				const limit = Math.max(1, count(args.limit, 20, 200))
+				let start = near ? Math.max(0, anchor - count(args.before, 6, 100)) : Math.max(0, entries.length - limit)
+				let end = near ? Math.min(entries.length, anchor + count(args.after, 6, 100) + 1) : entries.length
+				const maxChars = Math.max(1_000, count(args.max_chars, 12_000, 40_000))
+				const heading = (entry: VoiceHistoryEntry) =>
+					`[${entry.role}] item_id: ${entry.id} · ${new Date(entry.at).toISOString()}${voiceEntryFlags(entry)}\n`
+				// Keep identities and caveats readable even for a tiny budget. Shrink the
+				// window around its anchor, then advertise the omitted sides for paging.
+				while (end - start > 1) {
+					const minRow = Math.max(...entries.slice(start, end).map(entry => heading(entry).length)) + 80
+					if (voiceCallHeader(data).join('\n').length + 240 + (end - start) * (minRow + 2) <= maxChars) break
+					if (!near || anchor - start > end - anchor - 1) start += 1
+					else end -= 1
+				}
+				const selected = entries.slice(start, end)
+				const head = [
+					...voiceCallHeader(data),
+					`Showing ${selected.length} of ${entries.length} entries.`,
+					...(start > 0 && selected[0] ? [`older_item: ${selected[0].id} (use as near with before > 0)`] : []),
+					...(end < entries.length && selected.at(-1)
+						? [`newer_item: ${selected.at(-1)!.id} (use as near with after > 0)`]
+						: [])
+				]
+				const rendered = selected.map(entry => `${heading(entry)}${entry.text}`)
 				return boundedTranscript(head, rendered, maxChars)
 			}
 		},
