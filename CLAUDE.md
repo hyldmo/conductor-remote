@@ -578,6 +578,17 @@ Two asymmetric halves — keep them separate:
     later identical prompt, and cancellation fails visibly without undoing the cancel.
     New ad hoc jobs never mark an ordinary parent as `planning`: that marker is
     also used by the sidebar's pre-coordinator Workflow identity fallback.
+    **A helper's final reply is the report source** (`src/orchestration/delegation/return.ts`).
+    The ordinary queue freezes the complete reply in its outcome and returns a short
+    completion notice with one report attachment. Do not paste the reply into that
+    notice or rebuild the attachment from the live transcript: that duplicates the
+    answer and can include later turns or reasoning. The attachment preserves the
+    full reply, including sections before a Baton; failures include their reason
+    and label any last assistant message as partial. Each notice includes the child
+    session id and completion cursor for `read_chat` with `after: 0`. Helpers also
+    receive their parent's id and a transcript cut frozen at task acceptance.
+    Existing queued returns keep their saved text for receipt matching. Managed
+    Workflow Batons retain their capability and phase-delivery contract.
 
     **Workflow mode is the explicit root entry point, not Conductor Plan mode**
     (`src/orchestration/workflow/prompts.ts`, `web/src/components/orchestration/WorkflowModePill.tsx`). The pill in New

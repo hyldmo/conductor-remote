@@ -186,4 +186,16 @@ describe('ordinary-chat delegation intake', () => {
 			error: { code: 'state_invalid', message: 'disk unavailable', retryable: false }
 		})
 	})
+
+	test('freezes the default parent cut before later replies arrive while the child waits to open', () => {
+		const entries: TranscriptEntry[] = [
+			{ id: 'message-17', rowid: 17, role: 'user', text: 'Inspect this.', ts: '2026-09-05', queued: false }
+		]
+		const { deps, jobs } = fixture({ getMessages: () => entries })
+		expect(acceptDelegation('parent-1', request, deps)).toMatchObject({ ok: true })
+		entries.push({ ...entries[0], id: 'message-18', rowid: 18, role: 'assistant', text: 'A later reply.' })
+		expect(jobs[0].throughRowid).toBe(17)
+		expect(acceptDelegation('parent-1', request, deps)).toMatchObject({ ok: true })
+		expect(jobs[1].throughRowid).toBe(18)
+	})
 })

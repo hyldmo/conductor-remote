@@ -14,6 +14,7 @@ import { MessageReads } from '../../../src/reads/messages.ts'
 import type { Reads } from '../../../src/reads/repository.ts'
 import { SessionPoller } from '../../../src/reads/session-poller.ts'
 import type { SessionRow, Workspace } from '../../../src/reads/types.ts'
+import { attachmentTokens } from '../../../src/shared.ts'
 import type { Actuator } from '../../../src/writes/types.ts'
 
 vi.mock('../../../src/config.ts', async importOriginal => ({
@@ -127,7 +128,7 @@ function fixture() {
 			token: '@⟦Transcript.md⟧(.context%2Fattachments%2FABC123%2FTranscript.md)'
 		}
 	}
-	return { db, reads, store, send, delivery, createQueue, job, accept, promote, child }
+	return { db, reads, store, send, delivery, createQueue, job, accept, promote, child, worktree }
 }
 
 function returningJob(f: ReturnType<typeof fixture>, returnMode: 'queue' | 'steer'): PersistedDelegation {
@@ -257,6 +258,17 @@ describe('delegation delivery receipts', () => {
 		'queue'
 	] as const)('returns a %s result once and follows its accepted id across restart', async mode => {
 		const f = fixture()
+		const finalReply = 'Context before the Baton.\n\n## Baton\nThe task is complete.\n'
+		const job = returningJob(f, mode)
+		job.outcome = { kind: 'success', assistantRowid: 2, text: finalReply }
+		for (const [id, text] of [
+			['completion', finalReply],
+			['followup', 'A later reply.']
+		]) {
+			f.db
+				.prepare('INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)')
+				.run(id, f.child.id, 'assistant', text, new Date().toISOString())
+		}
 		f.send.mockImplementationOnce(async (target, text) => {
 			const prepared = f.store.get(f.job.id)
 			expect(prepared?.returnDelivery).toEqual({ rowid: 0, outboxIds: [] })
@@ -265,12 +277,19 @@ describe('delegation delivery receipts', () => {
 			return { ok: true, strategy: 'test' }
 		})
 		const queue = f.createQueue()
-		queue.enqueue(f.store, returningJob(f, mode))
+		queue.enqueue(f.store, job)
 		await queue.wake()
 		const pending = f.store.get(f.job.id)
 		expect(pending).toMatchObject({ status: 'returning', attempts: 0, returnDelivery: { messageId: 'sent-1' } })
 		expect(f.send.mock.calls[0]?.[2]?.queue).toBe(mode === 'queue')
 		expect(f.send.mock.calls[0]?.[1]).toBe(pending?.returnText)
+		const report = fs.readFileSync(path.join(f.worktree, pending!.returnAttachment!.path), 'utf8')
+		expect(report.endsWith(finalReply)).toBe(true)
+		expect(report).not.toContain('A later reply.')
+		expect(pending!.returnText).not.toContain(finalReply)
+		expect(attachmentTokens(pending!.returnText!)).toMatchObject([{ path: pending!.returnAttachment!.path }])
+		// Following an accepted receipt only needs the saved report, even if the worktree stops resolving.
+		f.reads.getWorkspace(job.workspaceId)!.worktree = null
 		const resumed = f.createQueue()
 		resumed.resume([f.store])
 		for (let tick = 0; tick < 4; tick++) {
