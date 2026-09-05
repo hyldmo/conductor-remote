@@ -1,9 +1,39 @@
 import { describe, expect, test } from 'vitest'
 import { workflowEffectCorrelationMarker } from '../../../src/orchestration/workflow/coordinator.ts'
 import { scrubWorkflowSecrets } from '../../../src/shared.ts'
-import { capability, coordinator, modelGroups, startExisting } from './fixtures.ts'
+import { capability, coordinator, modelGroups, roles, startExisting } from './fixtures.ts'
 
 describe('WorkflowCoordinator durable barriers', () => {
+	test('starts independent roots in two untouched tabs of the same workspace', async () => {
+		const { db, fake, value } = coordinator()
+		const first = await startExisting(value)
+		const second = await value.start({
+			clientId: 'second-tab',
+			objective: 'A separate task in the same worktree.',
+			target: { kind: 'existing_session', workspaceId: 'workspace-1', sessionId: 'root-2' },
+			roles,
+			modelGroups
+		})
+
+		expect(second.workflow.id).not.toBe(first.workflow.id)
+		expect(value.projections().map(run => [run.workspaceId, run.rootSessionId])).toEqual(
+			expect.arrayContaining([
+				['workspace-1', 'root-1'],
+				['workspace-1', 'root-2']
+			])
+		)
+		for (const workflow of [first.workflow, second.workflow]) {
+			expect(db.listWorkflowJobs(workflow.id)).toHaveLength(1)
+			expect(db.getWorkflowEffect(workflow.id, 'send-root')?.target).toEqual({
+				workspaceId: 'workspace-1',
+				sessionId: workflow.rootSessionId
+			})
+		}
+		expect(fake.sent).toEqual([])
+		expect(fake.configured).toEqual([])
+		db.close()
+	})
+
 	test('preserves immutable role-preflight error codes', async () => {
 		const { db, value } = coordinator()
 		await expect(

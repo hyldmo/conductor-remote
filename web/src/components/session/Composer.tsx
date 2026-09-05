@@ -49,6 +49,7 @@ export function Composer({
 	callActive = false,
 	onContext,
 	workflowStarted = false,
+	hasPendingPrompt = false,
 	workflow,
 	workflowRole,
 	focusDraft = false,
@@ -69,9 +70,11 @@ export function Composer({
 	callActive?: boolean
 	/** Open the active chat's context composition and fork-size breakdown. */
 	onContext?: () => void
-	/** Another durable delivery already owns this otherwise-pristine composer. */
+	/** A Workflow or delegation already owns this otherwise-pristine composer. */
 	workflowStarted?: boolean
-	/** Explicit workspace-owned run projection; never inferred from arbitrary jobs. */
+	/** A relay-owned first or parked prompt already has a claim on the first send. */
+	hasPendingPrompt?: boolean
+	/** The run that owns this exact chat, never a workspace-level display fallback. */
 	workflow?: WorkflowRunWire
 	/** This session's frozen role inside `workflow`, when it is the root or a tracked child. */
 	workflowRole?: WorkflowRoleName
@@ -96,12 +99,11 @@ export function Composer({
 	const [stopError, setStopError] = useState<string | null>(null)
 	const [compacting, setCompacting] = useState(false)
 	const [compactError, setCompactError] = useState<string | null>(null)
-	const [workflowChoice, setWorkflowChoice] = useState<{ sessionId: string | null; active: boolean }>({
-		sessionId: null,
-		active: false
-	})
-	const workflowMode = workflowChoice.sessionId === sessionId && workflowChoice.active
-	const setWorkflowMode = (active: boolean) => setWorkflowChoice({ sessionId, active })
+	const workflowMode = useApp(s => !!sessionId && s.workflowDrafts[sessionId] === true)
+	const setWorkflowDraft = useApp(s => s.setWorkflowDraft)
+	const setWorkflowMode = (active: boolean) => {
+		if (sessionId) setWorkflowDraft(sessionId, active)
+	}
 	const ref = useRef<HTMLTextAreaElement>(null)
 	const attachmentUploads = useAttachmentUploads({
 		draftKey,
@@ -115,8 +117,19 @@ export function Composer({
 	const attachmentError = attachmentUploads.hasError
 	const prompt = [...readyAttachments.map(attachment => attachment.token), text.trim()].filter(Boolean).join('\n')
 	const workflowSendPending = useApp(s => s.pending.some(p => p.sessionId === sessionId && !!p.workflow))
-	const workflowPristine =
-		!!session && !session.last_user_message_at && !working && !workflowStarted && !workflow && !workflowSendPending
+	const localPromptPending = useApp(s => s.pending.some(p => p.sessionId === sessionId))
+	const workflowEligibilityProblem = !session
+		? 'No active tab.'
+		: workflowStarted || workflow
+			? 'This tab already belongs to a Workflow or delegation.'
+			: session.last_user_message_at
+				? 'Workflow is available before this tab’s first message.'
+				: hasPendingPrompt || localPromptPending
+					? 'Resolve or dismiss the pending prompt before starting a Workflow.'
+					: working || session.status !== 'idle' || session.background_tasks.length
+						? 'Wait until this tab is idle before starting a Workflow.'
+						: undefined
+	const workflowPristine = !workflowEligibilityProblem
 	const workflowVisible = workflowMode || workflowPristine
 	const {
 		roles,
@@ -125,9 +138,10 @@ export function Composer({
 		ready: workflowRolesReady
 	} = useWorkflowRoleReadiness(workflowVisible)
 	const workflowProblem =
-		session?.permission_mode === 'plan'
+		workflowEligibilityProblem ??
+		(session?.permission_mode === 'plan'
 			? 'Workflow needs ordinary chat mode. Turn Plan off first.'
-			: workflowRoleProblem
+			: workflowRoleProblem)
 	const workflowReady = workflowRolesReady && !workflowProblem
 
 	// Before chats had tabs, drafts used their workspace id. Move one across when
@@ -191,7 +205,6 @@ export function Composer({
 			workflow: startingWorkflow
 		}).then(accepted => {
 			if (accepted && startingWorkflow) {
-				setWorkflowChoice(current => (current.sessionId === sessionId ? { ...current, active: false } : current))
 				// The hook clears the synced draft after the 202, including when this
 				// acceptance came from the transcript's persisted Retry control.
 				attachmentUploads.clearPending()

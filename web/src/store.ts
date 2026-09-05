@@ -19,6 +19,7 @@ import {
 	writePending,
 	writeWorkflowClientAttempts
 } from './lib/prompts/pending.ts'
+import { loadWorkflowDrafts, writeWorkflowDrafts } from './lib/prompts/workflow-draft.ts'
 import type { ReadMarks } from './lib/read.ts'
 import type { AgentPatch, DraftAttachment, UpdateStatus } from './lib/types.ts'
 import { ALL_REPOS, parseRepoSelection, type RepoSelection } from './lib/workspace-filter.ts'
@@ -135,6 +136,8 @@ interface AppState {
 	pending: PendingMessage[]
 	/** Stable PWA idempotency identities for Workflow mutations whose outcome is still uncertain. */
 	workflowClientAttempts: Record<string, WorkflowClientAttempt>
+	/** Device-local Workflow choices, preserved across tab switches and page reloads. */
+	workflowDrafts: Record<string, true>
 	/** Unsent composer text per chat, mirrored to localStorage (see lib/prompts/draft.ts). */
 	drafts: Record<string, string>
 	/** Ready host-side files carried atomically with each composer draft. */
@@ -195,6 +198,7 @@ interface AppState {
 	workflowClientId: (key: string, fingerprint: string) => string
 	/** Forget an attempt only after the relay returned its authoritative mutation response. */
 	finishWorkflowAttempt: (key: string, clientId: string) => void
+	setWorkflowDraft: (sessionId: string, active: boolean) => void
 	setDraft: (chatId: string, text: string) => void
 	addDraftAttachment: (chatId: string, attachment: DraftAttachment) => void
 	removeDraftAttachment: (chatId: string, path: string) => void
@@ -237,6 +241,7 @@ export const useApp = create<AppState>((set, get) => {
 		workingHints: {},
 		pending: loadPending(),
 		workflowClientAttempts: loadWorkflowClientAttempts(),
+		workflowDrafts: loadWorkflowDrafts(),
 		drafts: initialPrefs.drafts,
 		draftAttachments: initialPrefs.draftAttachments,
 		agentDrafts: initialPrefs.agentDrafts,
@@ -303,6 +308,13 @@ export const useApp = create<AppState>((set, get) => {
 			const { [key]: _finished, ...next } = get().workflowClientAttempts
 			writeWorkflowClientAttempts(next)
 			set({ workflowClientAttempts: next })
+		},
+		setWorkflowDraft: (sessionId, active) => {
+			const next = { ...get().workflowDrafts }
+			if (active) next[sessionId] = true
+			else delete next[sessionId]
+			writeWorkflowDrafts(next)
+			set({ workflowDrafts: next })
 		},
 		setDraft: (chatId, text) => {
 			const saved = setLocalDraft(chatId, text, get().agentDrafts[chatId] ?? {})

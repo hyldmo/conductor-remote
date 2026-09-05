@@ -604,6 +604,13 @@ Two asymmetric halves — keep them separate:
     `delegate_task` sibling chats and forbids provider-native Agent/Task/subagents,
     because those would bypass the cross-provider queue and all three custom UI
     surfaces. Toggling Workflow off restores the user's unsent ordinary agent choices.
+    The unsent choice is device-local and keyed by chat (`web/src/lib/prompts/workflow-draft.ts`),
+    so switching tabs or reloading cannot silently turn a Workflow draft into an ordinary
+    send. Sending clears that tab's choice only after the dedicated Workflow start is accepted.
+    A pending first prompt, parked prompt, local send, or existing role claim prevents
+    offering a new Workflow; an already-selected mode stays visible with Send disabled
+    when eligibility changes. Separate untouched tabs can start separate roots in the
+    same workspace; ownership and uniqueness remain per root session.
 
     **Completion owns no timer of its own.** `SessionPoller` performs one base
     `listSessionStates()` read every two seconds and fans it out to notifications
@@ -747,9 +754,14 @@ Two asymmetric halves — keep them separate:
     itself, and changing only git would leave Conductor's cached and durable state
     describing the old branch. So the phone passes the chat it is showing, the AX
     path focuses and asserts that tab, and then finds an exact-name Continue button
-    at the shallowest bounded level of the web area. Shallowest is load-bearing: the
-    transcript hangs off the same root and can contain controls of its own; zero or
-    several hits refuses rather than guesses. AXPress is only acceptance — the
+    among the workspace pane's direct buttons and one level of groups. Never fall
+    back to searching the web area: a missing action sent the old ten-level scan
+    through 584 unrelated nodes at depth four and exhausted its 28s ceiling before
+    any click (2026-09-05). `workspaceActionButtons` filters names in one Apple event
+    per container, skips the composer, and never descends into transcript messages.
+    A short bounded poll lets Conductor refresh the PR after focus. Zero or several
+    hits refuses rather than guesses, and the selected button must have its native
+    Archive sibling. AXPress is only acceptance — the
     native checkout/fetch continues asynchronously — so `src/http/routes/workspaces.ts` waits for the
     read-only `workspaces.branch` value to differ before answering. The action is
     rendered only by the live diff view when GitHub says the current PR is merged;
