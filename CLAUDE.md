@@ -115,8 +115,7 @@ Two asymmetric halves — keep them separate:
     immediately, keeps a working row within five seconds, and lets an idle one rest for
     a minute. Clean and binary-only diffs stay absent from the row rather than printing
     the meaningless `+0 -0`.
-- **Deep links carry the two writes that aren't fragile — creating a workspace
-  and focusing one.** The *documented* links
+- **Deep links create workspaces, focus them, and restore closed chats.** The *documented* links
   (conductor.build/docs/reference/deep-links) are
   `conductor://prompt=<enc>[&path=<repo root>]`, `…linear_id=…` and
   `…async?repo=&plan=<base64>`, and **all four create a *new* workspace**. The
@@ -259,6 +258,18 @@ Two asymmetric halves — keep them separate:
   ⌘W. The phone mirrors that confirmation; MCP exposes it as `close_running`.
   Closing the last tab is legal, so the phone keeps its trailing New chat button
   visible for a ready workspace even when the tab list is empty.
+  **Closed tabs** beside that button opens `ClosedTabsSheet`: a searchable,
+  workspace-scoped list from `reads.listClosedSessions`, fetched only while open.
+  `updated_at` orders the list and is labeled Updated, because Conductor has no
+  local closed-at timestamp. Restore addresses the original session with
+  `workspaceLink` — Conductor 0.84.2's bundled route handler explicitly looks in
+  hidden sessions, calls its own `unhideSession`, and sets that session active.
+  `POST /api/sessions/:id/restore` validates ownership and refuses archived
+  workspaces; `writes.restoreChat` checks the lock screen and holds `uiTurn`
+  through the exact session's visible-row receipt. Opening the URL alone is not
+  success. A retry for an already visible chat presses nothing. The relay still
+  never writes Conductor's DB, and no sequence of ⌘⇧T presses may substitute for
+  restoring the requested id.
 - **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
   here drives Conductor's single shared window, so two overlapping runs interleave
   and land a prompt in whatever the other one focused — the exact failure every
@@ -378,7 +389,7 @@ Two asymmetric halves — keep them separate:
        Mismatch → abort. This is what catches a palette hit on the wrong thing.
     3. **Chat tab** — the link in step 1 already selected it, so this is mostly a
        confirmation now; it still presses when it has to, and it is the only check
-       that a `session=` Conductor declined (a hidden chat has no tab) doesn't pass
+       that a `session=` Conductor declined (for example, a missing chat) doesn't pass
        silently. The strip is an `AXTabGroup` whose `AXRadioButton`s are the tabs
        (`AXValue` = selected, `AXPress` = switch, it does *not* close the chat),
        ordered like `reads.listSessions` (created_at ASC). Addressed by index,

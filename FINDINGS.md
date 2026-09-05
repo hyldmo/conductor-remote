@@ -273,6 +273,23 @@ a semantic AX menu operation with coordinates plus private bundle internals. It
 is useful for diagnosis and as a manually enabled experiment; the AX path remains
 the safer shipping mechanism.
 
+### ✓ Closed chat restoration through the workspace deep link
+Source-verified in Conductor 0.84.2 (2026-09-05): the parser accepts
+`conductor://workspace?id=<workspace>&session=<chat>` and navigates with
+`activeTabType: "session", sessionId`. The resolved-route handler first reads
+visible sessions; when the named id is absent it reads hidden sessions, calls
+the session service's `unhideSession({sessionId, workspaceId})`, and marks that
+same session active. This corrects the earlier assumption that hidden targets
+are always ignored. The installed chunks were `index-rOlkAfxh.js` (parser) and
+`renderApp-DAP_nquj.js` (navigation and resolved-route handler); their names are
+diagnostic evidence, never runtime dependencies.
+
+The relay uses this path for selected-tab restore, with a read-only visible-row
+receipt before returning success. ⌘⇧T pops Conductor's closed-tab stack and can
+also reopen a file or browser, so it cannot identify a requested chat. The
+restore path was checked against source and automated tests; no live UI restore
+was performed during this investigation.
+
 ### ✓ Native Continue action — same workspace, fresh branch
 The merged-workspace **Continue** button is not shorthand for creating another
 workspace. Decompiling the production `renderApp` chunk and checking a workspace

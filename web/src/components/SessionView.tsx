@@ -4,6 +4,7 @@ import {
 	ChartPie,
 	FileDiff,
 	FolderTree,
+	History,
 	Hourglass,
 	LoaderCircle,
 	MessageSquarePlus,
@@ -49,6 +50,7 @@ import type {
 } from '../lib/types.ts'
 import { useApp, WORKING_HINT_MS } from '../store.ts'
 import { ArchivedChat } from './ArchivedChat.tsx'
+import { ClosedTabsSheet } from './ClosedTabsSheet.tsx'
 import { Composer } from './Composer.tsx'
 import { ContextBreakdownSheet } from './ContextBreakdownSheet.tsx'
 import { DelegationPipeline } from './DelegationPipeline.tsx'
@@ -147,6 +149,7 @@ export function SessionView() {
 	const [closingChat, setClosingChat] = useState<string | null>(null)
 	const [confirmingClose, setConfirmingClose] = useState<string | null>(null)
 	const [closeError, setCloseError] = useState<string | null>(null)
+	const [closedTabsFor, setClosedTabsFor] = useState<string | null>(null)
 	const [focusComposerFor, setFocusComposerFor] = useState<string | null>(null)
 	const [contextSession, setContextSession] = useState<{
 		workspaceId: string
@@ -430,6 +433,7 @@ export function SessionView() {
 			}
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] }),
+				queryClient.invalidateQueries({ queryKey: ['closed-sessions', ws.id] }),
 				queryClient.invalidateQueries({ queryKey: ['state'] })
 			])
 		} catch (error) {
@@ -541,6 +545,17 @@ export function SessionView() {
 
 	return (
 		<MentionResolverProvider value={fileReferences}>
+			{closedTabsFor === ws.id ? (
+				<ClosedTabsSheet
+					key={ws.id}
+					workspaceId={ws.id}
+					onClose={() => setClosedTabsFor(null)}
+					onRestored={id => {
+						pickSession(id)
+						setClosedTabsFor(null)
+					}}
+				/>
+			) : null}
 			<div className="flex h-full min-w-0 overflow-hidden">
 				<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
 					<Header
@@ -579,6 +594,7 @@ export function SessionView() {
 							onContext={session => setContextSession({ workspaceId: ws.id, id: session.id, title: session.title })}
 							onNewChat={createChat}
 							onClose={id => void closeChat(id)}
+							onClosedTabs={() => setClosedTabsFor(ws.id)}
 							creating={creatingChat}
 							closingId={closingChat}
 							online={online}
@@ -792,6 +808,7 @@ export function SessionTabs({
 	onContext,
 	onNewChat,
 	onClose,
+	onClosedTabs,
 	creating,
 	closingId,
 	online
@@ -807,6 +824,7 @@ export function SessionTabs({
 	onContext: (session: Session) => void
 	onNewChat: () => void
 	onClose: (id: string) => void
+	onClosedTabs: () => void
 	creating: boolean
 	closingId: string | null
 	online: boolean
@@ -876,6 +894,16 @@ export function SessionTabs({
 					)
 				})}
 			</div>
+			<button
+				type="button"
+				onClick={onClosedTabs}
+				aria-label="Closed tabs"
+				title="Closed tabs"
+				aria-haspopup="dialog"
+				className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2"
+			>
+				<History size={17} />
+			</button>
 			<button
 				type="button"
 				onClick={onNewChat}

@@ -146,6 +146,7 @@ export const routes = {
 	/** One workspace by id, archived included — what `/api/state` deliberately leaves out. */
 	workspace: param('GET', '/api/workspaces/:workspaceId'),
 	sessions: param('GET', '/api/workspaces/:workspaceId/sessions'),
+	closedSessions: param('GET', '/api/workspaces/:workspaceId/sessions/closed'),
 	newChat: param('POST', '/api/workspaces/:workspaceId/sessions'),
 	diff: param('GET', '/api/workspaces/:workspaceId/diff'),
 	/** One complete changed-file patch, addressed by the `path` query parameter. */
@@ -176,6 +177,8 @@ export const routes = {
 	stop: param('POST', '/api/sessions/:sessionId/stop'),
 	/** Hide one chat tab through Conductor's own Close tab action (Command-W). */
 	closeChat: param('DELETE', '/api/sessions/:sessionId'),
+	/** Restore the original chat by its workspace/session deep link. */
+	restoreChat: param('POST', '/api/sessions/:sessionId/restore'),
 	sendPrompt: param('POST', '/api/sessions/:sessionId/prompt'),
 	/** Write a phone-selected file into Conductor's attachment layout for this chat's workspace. */
 	uploadAttachment: param('POST', '/api/sessions/:sessionId/attachments'),

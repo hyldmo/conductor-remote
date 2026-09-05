@@ -138,6 +138,9 @@ interface SessionDbRow extends Omit<SessionRow, 'background_tasks'> {
 	codex_thinking_level: string | null
 }
 
+/** Closed-tab picker rows need no transcript scan or live agent process lookup. */
+export type ClosedSession = Pick<SessionRow, 'id' | 'title' | 'model' | 'agent_type' | 'created_at' | 'updated_at'>
+
 /** Keep the stable wire field in sync with whichever provider owns the chat. */
 function toSessionRow(row: SessionDbRow, background_tasks: BackgroundTask[]): SessionRow {
 	const { codex_thinking_level, ...session } = row
@@ -643,6 +646,16 @@ export class Reads {
 			const started = live.get(row.id)
 			return toSessionRow(row, started === undefined ? [] : this.openBackgroundTasks(row.id, started))
 		})
+	}
+
+	listClosedSessions(workspaceId: string): ClosedSession[] {
+		return this.db.query<ClosedSession>(
+			`SELECT id, title, model, agent_type, created_at, updated_at
+			 FROM sessions
+			 WHERE workspace_id = ? AND is_hidden = 1
+			 ORDER BY REPLACE(REPLACE(updated_at, 'T', ' '), 'Z', '') DESC, created_at DESC, id ASC`,
+			[workspaceId]
+		)
 	}
 
 	/** One delegated child, including its provider-specific open-task guard. */

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Workspace } from './reads.ts'
-import { isLockedError, modelPickerLabel } from './shared.ts'
+import { isLockedError, MAC_LOCKED, modelPickerLabel } from './shared.ts'
 import { sidecarAvailable, sidecarSendUserMessage } from './sidecar.ts'
 import {
 	runGatedWorkflowCommand,
@@ -615,9 +615,9 @@ const CONDUCTOR_SCHEME = process.env.RELAY_CONDUCTOR_SCHEME || 'conductor'
  *
  * `session` is optional and names a chat by `sessions.id`, the same id the relay
  * already serves; omitted, Conductor opens whichever tab that workspace had.
- * A hidden chat (`sessions.is_hidden`) has no tab, and Conductor keeps the
- * workspace's current one rather than reporting anything, so the caller's own
- * tab assertion is still what catches it.
+ * Current Conductor builds also unhide a session named by this route, through
+ * their own session service. `restoreChat` uses that behavior and confirms the
+ * exact id became visible; older builds may ignore it, so opening is no receipt.
  *
  * The https form Conductor copies for sharing —
  * `https://app.conductor.build/workspace/<id>?session=<chat>` — reaches the same
@@ -907,6 +907,39 @@ return "ok"`.trim()
 	} catch (err) {
 		return { ok: false, strategy: 'applescript', error: osaError(err) }
 	}
+}
+
+/**
+ * Conductor's workspace route restores a hidden session before selecting it.
+ * Keep the UI lease through the DB receipt: another focus operation must not
+ * navigate away while Conductor's asynchronous route handler is unhiding it.
+ * The callback is deliberately exact-id and read-only, supplied by the server.
+ */
+export async function restoreChat(
+	workspaceId: string,
+	sessionId: string,
+	isVisible: () => boolean
+): Promise<SendResult & { alreadyOpen?: boolean }> {
+	return uiTurn(async () => {
+		if (isVisible()) return { ok: true, strategy: 'deep-link', alreadyOpen: true }
+		if ((await screenLocked()) === true) {
+			return { ok: false, strategy: 'deep-link', error: `${MAC_LOCKED}. Unlock it, then try again.` }
+		}
+		try {
+			await exec('open', [workspaceLink(workspaceId, sessionId)], { timeout: 5_000 })
+			for (let attempt = 0; attempt < 40; attempt++) {
+				await new Promise(resolve => setTimeout(resolve, 250))
+				if (isVisible()) return { ok: true, strategy: 'deep-link' }
+			}
+			return {
+				ok: false,
+				strategy: 'deep-link',
+				error: 'Conductor has not restored this tab yet. Try again, or update Conductor on your Mac.'
+			}
+		} catch (error) {
+			return { ok: false, strategy: 'deep-link', error: osaError(error) }
+		}
+	})
 }
 
 /**

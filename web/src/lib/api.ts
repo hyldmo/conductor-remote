@@ -8,6 +8,7 @@ import type {
 	AgentResult,
 	ArchiveResult,
 	CloseChatResult,
+	ClosedSessionsResponse,
 	ConfirmUiStableRequest,
 	ConfirmUiStableResponse,
 	ContextBreakdownResponse,
@@ -40,6 +41,7 @@ import type {
 	RelaySettings,
 	ReposResponse,
 	RestartConductorResult,
+	RestoreChatResult,
 	RolesConfig,
 	RolesResponse,
 	SearchResponse,
@@ -286,6 +288,7 @@ export const client = {
 	/** One workspace by id, archived included — how an archived chat is opened for reading. */
 	workspace: (workspaceId: string) => api<WorkspaceResponse>(routes.workspace.path(workspaceId)),
 	sessions: (workspaceId: string) => api<SessionsResponse>(routes.sessions.path(workspaceId)),
+	closedSessions: (workspaceId: string) => api<ClosedSessionsResponse>(routes.closedSessions.path(workspaceId)),
 	/**
 	 * `readingAs` is this device's push id, sent only while the chat is actually on
 	 * screen. It makes the poll double as a heartbeat, so the relay can leave this
@@ -413,6 +416,12 @@ export const client = {
 				method: routes.closeChat.method,
 				body: JSON.stringify({ workspaceId, closeRunning })
 			},
+			ACTION_TIMEOUT_MS
+		),
+	restoreChat: (sessionId: string, workspaceId: string) =>
+		api<RestoreChatResult>(
+			routes.restoreChat.path(sessionId),
+			{ method: routes.restoreChat.method, body: JSON.stringify({ workspaceId }) },
 			ACTION_TIMEOUT_MS
 		),
 	/** Open a new chat ("New chat, same files" / Cmd+T) in a workspace. */

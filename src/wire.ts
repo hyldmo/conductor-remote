@@ -39,7 +39,7 @@ import type {
 	ProviderPlanUsage
 } from './plan-usage.ts'
 import type { DraftAttachment, Prefs, SyncedDraft } from './prefs.ts'
-import type { Workspace as ReadWorkspace, RepoRow, SearchWorkspace, SessionRow } from './reads.ts'
+import type { ClosedSession, Workspace as ReadWorkspace, RepoRow, SearchWorkspace, SessionRow } from './reads.ts'
 import type { DevRunConfig } from './run-configs.ts'
 import type { IndexStatus, SearchResult as SearchEvidence } from './search.ts'
 import type { Settings } from './settings.ts'
@@ -566,6 +566,13 @@ export interface SessionsResponse {
 	session_roles?: Record<string, SessionRoleAssignment>
 }
 
+/** GET /api/workspaces/:id/sessions/closed — fetched only while the picker is open. */
+export interface ClosedSessionsResponse {
+	sessions: ClosedSession[]
+}
+
+export type { ClosedSession }
+
 /** GET /api/sessions/:id/messages?after= — `cursor` feeds the next poll. */
 export interface MessagesResponse {
 	/** Newly persisted transcript rows after the requested rowid cursor. */
@@ -745,6 +752,14 @@ export interface CloseChatResult {
 	activeSessionId?: string | null
 	/** The close was refused because this chat still has an agent running. */
 	agentRunning?: boolean
+	error?: string
+}
+
+/** POST /api/sessions/:id/restore — confirmed from Conductor's visible session rows. */
+export interface RestoreChatResult {
+	ok: boolean
+	alreadyOpen?: boolean
+	session?: SessionRow
 	error?: string
 }
 
