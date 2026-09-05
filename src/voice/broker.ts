@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Tool } from '../mcp/types.ts'
 import type { VoiceLanguage } from '../shared.ts'
+import { type VoiceReasoningEffort, voiceReasoning } from './config.ts'
 import type { VoiceHistory } from './history.ts'
 import { VOICE_INSTRUCTIONS } from './prompt.ts'
 import { VOICE_TOOL_NAMES } from './tools.ts'
@@ -21,6 +22,7 @@ export type BrokerSocketFactory = (url: string, headers: Record<string, string>)
 interface AcceptBodyInput {
 	callId: string
 	model: string
+	reasoningEffort?: VoiceReasoningEffort
 	voice: string
 	mcpUrl: string
 	mcpToken: string
@@ -33,6 +35,7 @@ export function buildAcceptBody(input: AcceptBodyInput): Record<string, unknown>
 	return {
 		type: 'realtime',
 		model: input.model,
+		...voiceReasoning(input.model, input.reasoningEffort),
 		instructions: input.instructions,
 		max_output_tokens: 800,
 		audio: { input: { transcription: voiceTranscription(input.language) }, output: { voice: input.voice } },
@@ -137,6 +140,7 @@ interface BrokerDeps {
 	apiKey: string
 	apiOrigin: string
 	model: string
+	reasoningEffort?: VoiceReasoningEffort
 	voice: string
 	mcpUrl?: string | null
 	mcpToken?: string | null
@@ -239,6 +243,7 @@ export class VoiceBroker {
 				buildAcceptBody({
 					callId,
 					model: this.deps.model,
+					reasoningEffort: this.deps.reasoningEffort,
 					voice: options.voice ?? this.deps.voice,
 					language: options.language,
 					mcpUrl: this.deps.mcpUrl,

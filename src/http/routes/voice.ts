@@ -107,6 +107,7 @@ export function createVoiceRoutes(
 					body.sdp,
 					{
 						model: voiceConfig.model,
+						reasoningEffort: voiceConfig.reasoningEffort,
 						voice: body.voice as OpenAIRealtimeVoice,
 						language: body.language as VoiceLanguage,
 						context

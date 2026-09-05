@@ -13,6 +13,13 @@ current architecture revision below takes precedence over the original plan.
 
 ## 2026-09-04 architecture revision: one orchestrator, two transports
 
+**2026-09-05 harness update:** GPT-Realtime-2.1 now defaults to explicit medium
+reasoning, configurable with `voice.reasoning-effort`. Both call modes greet
+briefly and wait; fleet briefings and chat recaps are requested by the caller.
+The model may discuss evidence and phrase read results naturally. Preview and
+confirmation gates still govern actions. This replaces the automatic roll-call
+and opening-recap behavior described in the earlier design below.
+
 The PWA carries the fleet orchestrator over WebRTC. Its fleet phone control sits in the
 workspace-list header immediately left of **+**. The provider lives at the app
 shell, so hiding the controls or navigating between workspaces does not end or

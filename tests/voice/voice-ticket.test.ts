@@ -15,6 +15,7 @@ const config: VoiceConfig = {
 	projectId: 'proj_CaseSensitive',
 	publicBaseUrl: 'https://mac.example/voice',
 	model: 'gpt-realtime',
+	reasoningEffort: 'medium',
 	voice: 'marin',
 	sipHost: 'sip.api.openai.com'
 }

@@ -183,6 +183,7 @@ export function config(): void {
 		{ name: 'voice.project-id', value: voice.projectId ? '(set)' : '(unset)', source: 'voice file' },
 		{ name: 'voice.public-url', value: voice.publicBaseUrl ?? '(unset)', source: 'voice file' },
 		{ name: 'voice.model', value: voice.model, source: 'voice file' },
+		{ name: 'voice.reasoning-effort', value: voice.reasoningEffort, source: 'voice file' },
 		{ name: 'voice.voice', value: voice.voice, source: 'voice file' },
 		{ name: 'voice.sip-host', value: voice.sipHost, source: 'voice file' }
 	)

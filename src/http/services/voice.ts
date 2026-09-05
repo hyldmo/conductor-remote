@@ -59,6 +59,7 @@ export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads'
 				apiKey: voiceConfig.openaiKey,
 				apiOrigin: openAIOriginForSipHost(voiceConfig.sipHost),
 				model: voiceConfig.model,
+				reasoningEffort: voiceConfig.reasoningEffort,
 				voice: voiceConfig.voice,
 				mcpUrl: voiceConfig.publicBaseUrl ? `${voiceConfig.publicBaseUrl}/mcp` : null,
 				mcpToken: voiceConfig.mcpToken,

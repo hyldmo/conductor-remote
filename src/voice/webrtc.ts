@@ -1,5 +1,6 @@
 /** Server-mediated WebRTC session creation for the PWA control-room call. */
 import type { OpenAIRealtimeVoice, VoiceLanguage } from '../shared.ts'
+import { type VoiceReasoningEffort, voiceReasoning } from './config.ts'
 import type { VoiceChatContext } from './context.ts'
 import { VOICE_INSTRUCTIONS, workspaceVoiceInstructions } from './prompt.ts'
 import { oneLine } from './speech.ts'
@@ -22,6 +23,7 @@ function languageInstruction(language: VoiceLanguage): string {
 
 export interface WebRtcSessionInput {
 	model: string
+	reasoningEffort?: VoiceReasoningEffort
 	voice: OpenAIRealtimeVoice
 	language: VoiceLanguage
 	instructions?: string
@@ -38,6 +40,7 @@ export function buildWebRtcSession(input: WebRtcSessionInput): Record<string, un
 	return {
 		type: 'realtime',
 		model: input.model,
+		...voiceReasoning(input.model, input.reasoningEffort),
 		instructions: `${input.instructions ?? (input.context ? workspaceVoiceInstructions(input.context) : VOICE_INSTRUCTIONS)}\n\n${languageInstruction(input.language)}`,
 		max_output_tokens: 800,
 		output_modalities: ['audio'],

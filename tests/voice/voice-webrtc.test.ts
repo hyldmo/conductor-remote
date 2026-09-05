@@ -4,11 +4,12 @@ import { buildWebRtcSession, createWebRtcCall, TRANSCRIPTION_MODEL } from '../..
 describe('PWA WebRTC orchestrator calls', () => {
 	it('builds an audio session with captions, VAD, and only the scoped voice functions', () => {
 		const session = buildWebRtcSession({
-			model: 'gpt-realtime-2.1-mini',
+			model: 'gpt-realtime-2.1',
 			voice: 'marin',
 			language: 'no'
 		}) as {
 			instructions: string
+			reasoning: { effort: string }
 			parallel_tool_calls: boolean
 			audio: {
 				input: {
@@ -20,6 +21,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 			tools: Array<{ type: string; name: string; parameters: Record<string, unknown> }>
 		}
 		expect(session.instructions).toContain('voice_roll_call')
+		expect(session.reasoning).toEqual({ effort: 'medium' })
 		expect(session.instructions).toContain('Norwegian Bokmål')
 		expect(session.parallel_tool_calls).toBe(false)
 		expect(session.audio.input.transcription).toMatchObject({
@@ -50,6 +52,12 @@ describe('PWA WebRTC orchestrator calls', () => {
 		expect(session.tools.every(tool => tool.parameters.type === 'object')).toBe(true)
 	})
 
+	it('leaves the reasoning option out when an older non-reasoning model is selected', () => {
+		expect(buildWebRtcSession({ model: 'gpt-realtime-1.5', voice: 'marin', language: 'en' })).not.toHaveProperty(
+			'reasoning'
+		)
+	})
+
 	it('leaves the transcription language open when automatic detection is selected', () => {
 		const session = buildWebRtcSession({
 			model: 'gpt-realtime-2.1-mini',
@@ -71,7 +79,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 				'sk-secret',
 				'https://eu.api.openai.com/',
 				'v=0\r\na=offer',
-				{ model: 'gpt-realtime-2.1-mini', voice: 'marin', language: 'en' },
+				{ model: 'gpt-realtime-2.1', reasoningEffort: 'low', voice: 'marin', language: 'en' },
 				'safe-id',
 				fetcher
 			)
@@ -85,8 +93,13 @@ describe('PWA WebRTC orchestrator calls', () => {
 		})
 		const form = init?.body as FormData
 		expect(form.get('sdp')).toBe('v=0\r\na=offer')
-		const configured = JSON.parse(String(form.get('session'))) as { model: string; tools: unknown[] }
-		expect(configured.model).toBe('gpt-realtime-2.1-mini')
+		const configured = JSON.parse(String(form.get('session'))) as {
+			model: string
+			reasoning: { effort: string }
+			tools: unknown[]
+		}
+		expect(configured.model).toBe('gpt-realtime-2.1')
+		expect(configured.reasoning).toEqual({ effort: 'low' })
 		expect(configured.tools).toHaveLength(12)
 	})
 

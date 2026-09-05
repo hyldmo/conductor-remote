@@ -19,6 +19,11 @@ conversation already loaded, so you can discuss the task or ask for an update.
 The sheet names both the workspace and chat. Browsing another tab keeps the call
 on its original conversation; end it before starting a call for another chat.
 
+Both call modes open with a brief acknowledgement and wait for you. Ask for a
+recap, fleet overview, or the next decision when you need one. Interrupting the
+greeting moves to what you said. Read results are explained in natural language;
+action previews still read back the exact target and text before confirmation.
+
 The relay reads up to 24 recent user and assistant messages, capped at 16,000
 characters, keeping the latest user request even after a long run. Queued prompts,
 reasoning, tool output, and native child-agent messages are excluded. These messages
@@ -271,6 +276,26 @@ This restarts the relay; start a new call to use the new model. OpenAI currently
 | Audio | $32.00 | $0.40 | $64.00 |
 
 The broker logs actual token usage and an estimate for every completed response. Use those lines for this workflow's real per-call cost; Twilio phone-number and PSTN charges are separate and depend on the account/country. The rate source is the [GPT-Realtime-2.1 model page](https://developers.openai.com/api/docs/models/gpt-realtime-2.1). `gpt-realtime-2.1-mini` remains available through `voice.model`, with its own cost estimates using the [Mini model rates](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini).
+
+### Reasoning effort
+
+GPT-Realtime-2.1 defaults to **medium reasoning in this relay**, for both WebRTC
+and SIP calls. Earlier relay versions omitted the setting and used the API's
+unspecified default. A saved effort choice survives relay updates.
+
+```bash
+conductor-remote config set voice.reasoning-effort medium
+```
+
+The supported choices are `minimal`, `low`, `medium`, `high`, and `xhigh`.
+`conductor-remote config` shows the configured choice. Changing it restarts the
+relay; begin a new call to compare settings. The model stays the same. Older
+non-reasoning voice models omit this option from their API requests.
+
+Higher effort can increase response latency and cost. Compare how well the
+assistant answers your questions and the delay before useful speech; a quick
+acknowledgement alone does not measure answer latency. See OpenAI's
+[reasoning guidance](https://developers.openai.com/api/docs/guides/realtime-models-prompting#set-reasoning-effort).
 
 ### Disable or rotate
 

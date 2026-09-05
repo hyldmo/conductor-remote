@@ -24,8 +24,25 @@ describe('voice config', () => {
 		expect(config.trunkSecret).toHaveLength(64)
 		expect(config.trunkSecret).not.toBe(config.mcpToken)
 		expect(config.model).toBe('gpt-realtime-2.1')
+		expect(config.reasoningEffort).toBe('medium')
 		expect(config.sipHost).toBe('sip.api.openai.com')
 		expect(fs.statSync(target).mode & 0o777).toBe(0o600)
+	})
+
+	it('persists effort independently of the model and refuses invalid effort without changing the file', () => {
+		const target = file()
+		const original = readVoiceConfig(target)
+		setVoiceSetting('voice.reasoning-effort', 'low', target)
+		expect(readVoiceConfig(target)).toMatchObject({
+			model: 'gpt-realtime-2.1',
+			reasoningEffort: 'low',
+			mcpToken: original.mcpToken
+		})
+		const saved = fs.readFileSync(target, 'utf8')
+		expect(() => setVoiceSetting('voice.reasoning-effort', 'none', target)).toThrow(/voice.reasoning-effort/)
+		expect(fs.readFileSync(target, 'utf8')).toBe(saved)
+		setVoiceSetting('voice.reasoning-effort', 'medium', target)
+		expect(readVoiceConfig(target).reasoningEffort).toBe('medium')
 	})
 
 	it('keeps SIP ingress and call control on the same project residency', () => {
