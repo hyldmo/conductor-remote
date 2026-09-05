@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { matchQuery } from '../search/coordinator.ts'
 import { HIT_CLOSE, HIT_OPEN } from '../shared.ts'
 import type { VoiceHistoryCall, VoiceHistoryEntry, VoiceHistorySearchResponse, VoiceHistorySummary } from '../wire.ts'
+import { voiceResponseOutcome } from './response.ts'
 
 export const MAX_VOICE_SEARCH_CHARS = 500
 
@@ -333,6 +334,12 @@ export class VoiceHistory {
 				this.item(callId, event.item, undefined, type.endsWith('.done'))
 			} else if (type === 'response.done') {
 				const response = object(event.response)
+				const call = this.summary(callId)
+				if (call)
+					this.saveSummary({
+						...call,
+						responseOutcomes: [...(call.responseOutcomes ?? []), voiceResponseOutcome(response)].slice(-100)
+					})
 				if (Array.isArray(response?.output))
 					for (const item of response.output) {
 						this.item(callId, item, undefined, true)

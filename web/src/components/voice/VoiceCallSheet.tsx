@@ -7,6 +7,7 @@ import { client } from '../../lib/api.ts'
 import { cn } from '../../lib/cn.ts'
 import { useApp } from '../../store.ts'
 import { BetaBadge } from '../BetaBadge.tsx'
+import { VoiceDraftCards } from './VoiceDraftCards.tsx'
 import { VoiceHistoryPanel } from './VoiceHistoryPanel.tsx'
 import { useVoiceCall, type VoiceCallStatus } from './VoiceProvider.tsx'
 import { VoiceSpeedSlider } from './VoiceSpeedSlider.tsx'
@@ -35,13 +36,14 @@ export function VoiceCallSheet() {
 	const voice = useVoiceCall()
 	const online = useApp(state => state.online)
 	const [draft, setDraft] = useState('')
+	const [handsFree, setHandsFree] = useState(false)
 	const [historyOpen, setHistoryOpen] = useState(false)
 	const [selectedCallId, setSelectedCallId] = useState<string | null>(null)
 	const wasActive = useRef(false)
 	const transcript = useRef<HTMLDivElement>(null)
 	const active = voice.status !== 'idle'
 	const target = voice.target
-	const canType = voice.status === 'connected'
+	const canType = active && voice.status !== 'connecting'
 	const transcriptRevision = `${voice.entries.length}:${voice.inputPartial}:${voice.outputPartial}`
 	const recording = useQuery({
 		queryKey: ['voice-recording', voice.lastCallId],
@@ -177,6 +179,14 @@ export function VoiceCallSheet() {
 										</div>
 									)
 								)}
+								{voice.lastCallId ? (
+									<VoiceDraftCards
+										callId={voice.lastCallId}
+										active={active}
+										handsFree={handsFree || historyOpen}
+										onOpen={voice.closePanel}
+									/>
+								) : null}
 								{voice.inputPartial ? (
 									<div className="ml-auto max-w-[88%] rounded-2xl rounded-br-md border border-voice/25 bg-voice-soft/60 px-3.5 py-2.5 text-sm leading-relaxed text-muted">
 										{voice.inputPartial}
@@ -192,6 +202,16 @@ export function VoiceCallSheet() {
 						</div>
 
 						<div className="shrink-0 border-t border-border-soft bg-surface/80 px-4 pb-3 pt-3 backdrop-blur-xl">
+							{recording.data && recording.data.status !== 'active' ? (
+								<p role="alert" className="mb-2 text-xs text-del">
+									The relay’s voice connection was lost. Action receipts below remain available. End this call and
+									reconnect.
+								</p>
+							) : null}
+							<label className="mb-2 flex items-center gap-2 text-xs text-muted">
+								<input type="checkbox" checked={handsFree} onChange={event => setHandsFree(event.target.checked)} />
+								Hands-free: read drafts aloud
+							</label>
 							{recording.error || recording.data?.captureError ? (
 								<p role="alert" className="mb-2 text-xs text-del">
 									{recording.data?.captureError ??
@@ -251,11 +271,18 @@ export function VoiceCallSheet() {
 						</div>
 					</>
 				) : historyOpen ? (
-					<VoiceHistoryPanel
-						selectedId={selectedCallId}
-						onSelect={setSelectedCallId}
-						onBack={() => setHistoryOpen(false)}
-					/>
+					<>
+						{voice.error ? (
+							<p role="alert" className="px-4 py-2 text-xs text-del">
+								{voice.error}
+							</p>
+						) : null}
+						<VoiceHistoryPanel
+							selectedId={selectedCallId}
+							onSelect={setSelectedCallId}
+							onBack={() => setHistoryOpen(false)}
+						/>
+					</>
 				) : (
 					<div className="min-h-0 flex-1 overflow-y-auto px-5 py-7">
 						<div className="mx-auto flex max-w-sm flex-col items-center text-center">

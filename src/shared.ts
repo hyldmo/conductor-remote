@@ -783,3 +783,4 @@ export function renderTranscript(
 		.trim()
 	return { text: `${text}\n`, kept, elided }
 }
+export { voiceResponseError } from './voice/response.ts'

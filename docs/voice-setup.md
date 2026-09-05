@@ -400,3 +400,13 @@ command; see the [Realtime API reference](https://platform.openai.com/docs/api-r
 - **OpenAI accepts but the voice does not start:** inspect `service logs` for MCP import or observer socket errors. The broker waits for `mcp_list_tools.completed` before the greeting.
 - **A send parks:** unlock the Mac. The same parked queue used by the PWA delivers it after unlock.
 - **The installer refuses Funnel changes:** `tailscale serve status --json` contains a mount that has no matching conductor-remote ownership receipt. Move that mount yourself; the installer will not overwrite it.
+
+### Draft cards and interruptions
+
+Browser calls show full draft cards with their destination, Edit, and Send or Create workspace controls. Jarvis gives a brief spoken cue after the visible card acknowledges its exact revision. Enable **Hands-free: read drafts aloud** to use spoken review. A hidden sheet or unavailable visual receipt also falls back to reading the full preview. This follows OpenAI's tool-driven [conversation flow](https://developers.openai.com/api/docs/guides/realtime-conversations).
+
+Editing or renewing a draft creates a new one-use token and invalidates the previous revision. Expiring the two-minute approval does not delete the text. Drafts and action receipts are retained for 30 days in `voice-previews.json`, independently of speech and transcripts; old records are pruned when another draft is created. Call history shows the saved result and an Open workspace/chat link. A parked receipt records the handoff to the unlock queue; open the chat for its current delivery status. A lost receipt is marked unknown, and a restart never retries a claimed action automatically.
+
+Typed corrections work while listening, thinking, or speaking. The browser call uses VAD for segmentation and interruption, while the relay starts responses after committed input and schedules typed corrections and tool continuations. Playback completion is tracked separately from response generation. A disconnected observer ends the local call visibly even if the media connection is still alive. The last 100 terminal response statuses and sanitized error codes are saved with call history; relay logs also include time to first output.
+
+For a real-call acceptance pass: request a long draft, interrupt its brief cue, edit and approve it, and confirm that the created workspace stays linked after hang-up. Repeat with the sheet hidden and hands-free enabled, then type a correction during speech. Compare natural pauses and background noise only after these paths work; this change leaves the existing 650 ms VAD silence threshold in place.

@@ -496,6 +496,7 @@ export interface VoiceHistoryEntry {
 }
 
 export interface VoiceHistorySummary {
+	responseOutcomes?: import('./voice/response.ts').VoiceResponseOutcome[]
 	callId: string
 	startedAt: number
 	updatedAt: number

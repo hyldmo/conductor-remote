@@ -31,7 +31,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 		})
 		expect(session.audio.input.turn_detection).toMatchObject({
 			type: 'server_vad',
-			create_response: true,
+			create_response: false,
 			interrupt_response: true
 		})
 		expect(session.audio.output.voice).toBe('marin')
@@ -45,6 +45,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 			['function', 'voice_search_calls'],
 			['function', 'voice_read_call'],
 			['function', 'voice_list_repos'],
+			['function', 'voice_select_repo'],
 			['function', 'voice_create_workspace_preview'],
 			['function', 'voice_create_workspace'],
 			['function', 'voice_send_preview'],
@@ -102,7 +103,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 		expect(configured.model).toBe('gpt-realtime-2.1')
 		expect(configured.reasoning).toEqual({ effort: 'low' })
 		expect(configured).toMatchObject({ audio: { output: { speed: 1.4 } } })
-		expect(configured.tools).toHaveLength(12)
+		expect(configured.tools).toHaveLength(13)
 	})
 
 	it('surfaces a bounded upstream error and refuses a missing call receipt', async () => {

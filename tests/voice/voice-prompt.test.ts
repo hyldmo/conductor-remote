@@ -17,7 +17,7 @@ describe('the voice session prompt', () => {
 		expect(VOICE_INSTRUCTIONS).toMatch(/exact preview/i)
 		expect(VOICE_INSTRUCTIONS).toMatch(/yes/i)
 		expect(VOICE_INSTRUCTIONS).toMatch(/one decision/i)
-		expect(VOICE_INSTRUCTIONS.length).toBeLessThanOrEqual(4_000)
+		expect(VOICE_INSTRUCTIONS.length).toBeLessThanOrEqual(5_000)
 	})
 
 	it('starts fresh and uses the separate call archive only when asked', () => {

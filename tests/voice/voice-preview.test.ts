@@ -82,13 +82,16 @@ describe('PreviewStore', () => {
 		})
 	})
 
-	it('prunes expired records when a later preview is created', () => {
+	it('retains expired drafts for review until the 30-day retention boundary', () => {
 		let now = 10_000
 		const store = new PreviewStore(file(), { now: () => now })
-		store.create({ callId: 'old-call', workspaceId: 'w1', sessionId: 's1', text: 'Old text' })
+		const old = store.create({ callId: 'old-call', workspaceId: 'w1', sessionId: 's1', text: 'Old text' })
 		now += 120_001
 		const current = store.create({ callId: 'new-call', workspaceId: 'w2', sessionId: 's2', text: 'New text' })
-		expect(JSON.parse(fs.readFileSync(store.file, 'utf8'))).toEqual([current])
+		expect(JSON.parse(fs.readFileSync(store.file, 'utf8'))).toEqual([old, current])
+		now += 31 * 86_400_000
+		const latest = store.createWorkspace({ callId: 'latest', repo: 'repo', prompt: '' })
+		expect(JSON.parse(fs.readFileSync(store.file, 'utf8'))).toEqual([latest])
 	})
 
 	it('persists and claims an exact create-workspace preview once', () => {
@@ -144,4 +147,57 @@ describe('PreviewStore', () => {
 			reason: 'wrong-action'
 		})
 	})
+})
+
+it('retires approval when a draft is edited and retains both revisions across restart', () => {
+	const store = new PreviewStore(file())
+	const old = store.createWorkspace({ callId: 'call', repo: 'repo', prompt: 'Original exact prompt' })
+	const edited = store.edit('call', old.token, 'Changed exact prompt')!
+	expect(edited.token).not.toBe(old.token)
+	expect(store.claimWorkspace(old.token, { callId: 'call', repo: 'repo', prompt: 'Original exact prompt' })).toEqual({
+		ok: false,
+		reason: 'already-used'
+	})
+	expect(new PreviewStore(store.file).list('call')).toHaveLength(2)
+	expect(store.claimWorkspace(edited.token, { callId: 'call', repo: 'repo', prompt: 'Changed exact prompt' }).ok).toBe(
+		true
+	)
+	store.settle(edited.token, { state: 'completed', workspaceId: 'created-workspace' })
+	expect(new PreviewStore(store.file).get('call', edited.token)?.outcome).toEqual({
+		state: 'completed',
+		workspaceId: 'created-workspace'
+	})
+})
+
+it('requires a receipt for the exact displayed revision and falls back when no screen acknowledges it', async () => {
+	const store = new PreviewStore(file())
+	const preview = store.createWorkspace({ callId: 'call', repo: 'repo', prompt: 'Full text' })
+	const shown = store.waitForPresentation(preview.token, 50)
+	expect(store.present('foreign-call', preview.token)).toBe(false)
+	expect(store.present('call', preview.token)).toBe(true)
+	await expect(shown).resolves.toBe(true)
+	const edited = store.edit('call', preview.token, 'Revised')!
+	await expect(store.waitForPresentation(edited.token, 1)).resolves.toBe(false)
+})
+
+it('marks an in-flight action unknown after a restart instead of offering to replay it', () => {
+	const store = new PreviewStore(file())
+	const preview = store.createWorkspace({ callId: 'call', repo: 'repo', prompt: '' })
+	store.claimWorkspace(preview.token, { callId: 'call', repo: 'repo', prompt: '' })
+	const restored = new PreviewStore(store.file)
+	expect(restored.get('call', preview.token)?.outcome?.state).toBe('unknown')
+	expect(restored.claimWorkspace(preview.token, { callId: 'call', repo: 'repo', prompt: '' }).ok).toBe(false)
+})
+
+it('pauses voice approval before unsaved editing begins, then requires the saved revision', () => {
+	const store = new PreviewStore(file())
+	const preview = store.createWorkspace({ callId: 'call', repo: 'repo', prompt: 'Original' })
+	expect(store.pauseReview('call', preview.token, true)).toBe(true)
+	expect(store.claimWorkspace(preview.token, { callId: 'call', repo: 'repo', prompt: 'Original' })).toEqual({
+		ok: false,
+		reason: 'editing'
+	})
+	const saved = store.edit('call', preview.token, 'Saved edit')!
+	expect(store.claimWorkspace(preview.token, { callId: 'call', repo: 'repo', prompt: 'Original' }).ok).toBe(false)
+	expect(store.claimWorkspace(saved.token, { callId: 'call', repo: 'repo', prompt: 'Saved edit' }).ok).toBe(true)
 })

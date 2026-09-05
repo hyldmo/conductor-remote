@@ -3,7 +3,8 @@ import {
 	isVoiceLanguage,
 	isVoiceSpeed,
 	type OpenAIRealtimeVoice,
-	type VoiceLanguage
+	type VoiceLanguage,
+	voiceResponseError
 } from '../../../../src/shared.ts'
 import type { VoiceCallTarget } from '../types.ts'
 
@@ -58,6 +59,9 @@ export type ParsedVoiceEvent =
 	| { kind: 'output-done'; itemId: string; text: string }
 	| { kind: 'tool'; itemId: string; name: string }
 	| { kind: 'speech-started' }
+	| { kind: 'speech-stopped' }
+	| { kind: 'playback-started' | 'playback-stopped' | 'playback-cleared' }
+	| { kind: 'truncated'; itemId: string }
 	| { kind: 'response-started' }
 	| { kind: 'response-done'; error?: string }
 	| { kind: 'error'; text: string }
@@ -110,13 +114,16 @@ export function parseVoiceEvent(raw: unknown): ParsedVoiceEvent | null {
 		return name === null ? null : { kind: 'tool', itemId, name }
 	}
 	if (type === 'input_audio_buffer.speech_started') return { kind: 'speech-started' }
+	if (type === 'input_audio_buffer.speech_stopped') return { kind: 'speech-stopped' }
+	if (type === 'conversation.item.truncated') return { kind: 'truncated', itemId }
+	if (type === 'output_audio_buffer.started') return { kind: 'playback-started' }
+	if (type === 'output_audio_buffer.stopped') return { kind: 'playback-stopped' }
+	if (type === 'output_audio_buffer.cleared') return { kind: 'playback-cleared' }
 	if (type === 'response.created') return { kind: 'response-started' }
 	if (type === 'response.done') {
 		const response =
 			value.response && typeof value.response === 'object' ? (value.response as Record<string, unknown>) : null
-		const error =
-			response?.error && typeof response.error === 'object' ? (response.error as Record<string, unknown>) : null
-		const message = error ? stringField(error, 'message') : null
+		const message = voiceResponseError(response)
 		return message ? { kind: 'response-done', error: message } : { kind: 'response-done' }
 	}
 	if (type === 'error') {
@@ -142,6 +149,8 @@ export function voiceToolLabel(name: string): string {
 			return 'Searching call history'
 		case 'voice_read_call':
 			return 'Reading a previous call'
+		case 'voice_select_repo':
+			return 'Remembering the repository'
 		case 'voice_list_repos':
 			return 'Checking repositories'
 		case 'voice_create_workspace_preview':

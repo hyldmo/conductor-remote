@@ -47,6 +47,7 @@ export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads'
 	const voiceSafetyIdentifier = crypto.createHash('sha256').update(`conductor-remote:${cfg.token}`).digest('hex')
 
 	const voiceBoards = new Map<string, VoiceBriefBoard>()
+	const voiceSelections = new Map<string, { repo: string | null; confirmed: boolean }>()
 
 	const voicePreviews = new PreviewStore(path.join(stateDir(), 'voice-previews.json'))
 
@@ -54,7 +55,7 @@ export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads'
 
 	process.on('exit', () => voiceHistory.close())
 
-	const voiceBroker = voiceConfig.openaiKey
+	const voiceBroker: VoiceBroker | null = voiceConfig.openaiKey
 		? new VoiceBroker({
 				apiKey: voiceConfig.openaiKey,
 				apiOrigin: openAIOriginForSipHost(voiceConfig.sipHost),
@@ -67,7 +68,10 @@ export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads'
 				stateFile: path.join(stateDir(), 'voice-calls.json'),
 				history: voiceHistory,
 				tools: callId => voiceToolsForCall(callId),
-				onClose: callId => voiceBoards.delete(callId)
+				onClose: callId => {
+					voiceBoards.delete(callId)
+					voiceSelections.delete(callId)
+				}
 			})
 		: null
 
@@ -160,11 +164,19 @@ export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads'
 	}
 
 	function voiceToolsForCall(callId: string) {
+		let selection = voiceSelections.get(callId)
+		if (!selection) {
+			selection = { repo: null, confirmed: false }
+			voiceSelections.set(callId, selection)
+		}
 		return createVoiceTools({
 			callId,
+			selection,
 			board: voiceBoard(callId),
 			recall: new VoiceRecall({ history: voiceHistory, callId }),
 			previews: voicePreviews,
+			presentPreview: token =>
+				voiceBroker?.isBrowserCall(callId) ? voicePreviews.waitForPresentation(token) : Promise.resolve(false),
 			findSession: sessionId => reads.listSessionStates().find(state => state.sessionId === sessionId) ?? null,
 			listRepos: () => reads.listRepos().map(repo => ({ name: repo.name, defaultBranch: repo.default_branch })),
 			createWorkspace: createVoiceWorkspace,
@@ -187,6 +199,14 @@ export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads'
 		mcpToken: () => voiceConfig.mcpToken,
 		log: line => console.warn(line)
 	})
-	return { voiceHistory, voiceConfig, voiceBroker, voiceSafetyIdentifier, voiceServer }
+	return {
+		voiceHistory,
+		voiceConfig,
+		voiceBroker,
+		voiceSafetyIdentifier,
+		voiceServer,
+		voicePreviews,
+		voiceToolsForCall
+	}
 }
 export type VoiceServices = ReturnType<typeof createVoiceServices>

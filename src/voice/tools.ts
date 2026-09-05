@@ -37,6 +37,9 @@ export interface VoiceToolContext {
 	dispatch: (preview: SendPreview) => Promise<VoiceDispatchResult>
 	/** A mid-call broker injection. Successful prompt sends stay silent; workspace creation reports its receipt. */
 	announce: (spoken: string) => void | Promise<void>
+	/** Browser calls wait for an exact displayed-revision receipt; SIP uses speech. */
+	presentPreview?: (token: string) => Promise<boolean>
+	selection?: { repo: string | null; confirmed: boolean }
 }
 
 export interface VoiceToolDefinition {
@@ -60,6 +63,7 @@ export const VOICE_TOOL_NAMES = [
 	'voice_search_calls',
 	'voice_read_call',
 	'voice_list_repos',
+	'voice_select_repo',
 	'voice_create_workspace_preview',
 	'voice_create_workspace',
 	'voice_send_preview',
@@ -214,9 +218,19 @@ export const VOICE_TOOL_DEFINITIONS: readonly VoiceToolDefinition[] = [
 		inputSchema: { type: 'object', properties: {} }
 	},
 	{
+		name: 'voice_select_repo',
+		description:
+			'Remember the exact proposed repository and whether the user confirmed it in this call. Use confirmed false before asking which repository; use true after an explicit choice or contextual yes. This records a selection, never approval of a draft.',
+		inputSchema: {
+			type: 'object',
+			properties: { repo: { type: 'string' }, confirmed: { type: 'boolean' } },
+			required: ['repo', 'confirmed']
+		}
+	},
+	{
 		name: 'voice_create_workspace_preview',
 		description:
-			'Create a two-minute preview for a new workspace in an exact repository, with an optional first prompt. Speak its exact target and prompt and ask for yes before using voice_create_workspace.',
+			'Create a two-minute preview for a new workspace in an exact repository, with an optional first prompt. Follow its presentation field: visual means a full draft is displayed, so give only the brief spoken cue. Otherwise read its exact target and full prompt. Ask for approval before voice_create_workspace.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -243,7 +257,7 @@ export const VOICE_TOOL_DEFINITIONS: readonly VoiceToolDefinition[] = [
 	{
 		name: 'voice_send_preview',
 		description:
-			'Create a two-minute exact-text send preview. Speak its exact target and text and ask for yes before using voice_send.',
+			'Create a two-minute exact-text send preview. Follow its presentation field: visual means a full draft is displayed, so give only the brief spoken cue. Otherwise read its exact target and full text. Ask for approval before voice_send.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -310,8 +324,10 @@ function answer(value: unknown): string {
 
 function refusal(reason: PreviewRefusal): string {
 	switch (reason) {
+		case 'editing':
+			return 'The draft is being edited on screen. Save or cancel the edit before approving it.'
 		case 'expired':
-			return 'That preview expired. Read the exact action back again before approving it.'
+			return 'That approval expired. Renew the draft, present it again, and ask for fresh approval.'
 		case 'foreign-call':
 			return 'That preview belongs to another call and cannot be used here.'
 		case 'foreign-session':
@@ -332,11 +348,19 @@ function refusal(reason: PreviewRefusal): string {
 }
 
 function later(task: () => Promise<void>): void {
-	setImmediate(() => void task())
+	setImmediate(() => void task().catch(() => console.warn('[voice] could not persist an action receipt')))
 }
 
 /** Build a fresh scoped tool set for one authenticated call. */
 export function createVoiceTools(context: VoiceToolContext): Tool[] {
+	const selection = context.selection ?? { repo: null, confirmed: false }
+	const announce = async (spoken: string) => {
+		try {
+			await context.announce(spoken)
+		} catch {
+			console.warn('[voice] speech announcement unavailable; action receipt retained')
+		}
+	}
 	const definition = (name: VoiceToolDefinition['name']): VoiceToolDefinition => {
 		const found = VOICE_TOOL_DEFINITIONS.find(tool => tool.name === name)
 		if (!found) throw new Error(`missing voice tool definition ${name}`)
@@ -423,7 +447,25 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 					spoken: repos.length
 						? clipExact(`Available repositories: ${repos.map(repo => repo.name).join(', ')}.`, 600)
 						: 'Conductor has no repository available for a new workspace.',
-					repos
+					repos,
+					selection
+				})
+			}
+		},
+		{
+			...definition('voice_select_repo'),
+			run: async args => {
+				const requested = need(args, 'repo')
+				const repo = context.listRepos().find(repo => repo.name.toLowerCase() === requested.toLowerCase())
+				if (!repo || typeof args.confirmed !== 'boolean')
+					return answer({ status: 'refused', spoken: 'Choose an available repository first.' })
+				selection.repo = repo.name
+				selection.confirmed = args.confirmed
+				return answer({
+					selection,
+					next: selection.confirmed
+						? 'Prepare the draft. Do not ask for the repository again.'
+						: 'Ask only for the repository choice. A yes confirms this repository, not an unseen draft.'
 				})
 			}
 		},
@@ -439,13 +481,17 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 					})
 				const prompt = optional(args, 'prompt') ?? ''
 				const preview = context.previews.createWorkspace({ callId: context.callId, repo: repo.name, prompt })
-				const detail = prompt ? ` with this first prompt: “${oneLine(prompt, 220)}”` : ' with no first prompt.'
+				const visual = (await context.presentPreview?.(preview.token)) ?? false
+				const detail = prompt ? ` with this first prompt: “${prompt}”` : ' with no first prompt.'
 				return answer({
 					status: 'preview',
 					token: preview.token,
 					repo: repo.name,
 					prompt,
-					spoken: `Create a new workspace in ${oneLine(repo.name, 80)}${detail} Say yes to create it.`
+					presentation: visual ? 'visual' : 'spoken',
+					spoken: visual
+						? `Here’s the draft for ${oneLine(repo.name, 80)}. What do you think?`
+						: `Create a new workspace in ${oneLine(repo.name, 80)}${detail} Say yes to create it.`
 				})
 			}
 		},
@@ -460,8 +506,13 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 				later(async () => {
 					try {
 						const result = await context.createWorkspace(claimed.preview)
+						context.previews.settle(token, {
+							state: result.ok ? 'completed' : 'failed',
+							workspaceId: result.workspaceId,
+							message: result.warning ?? result.error ?? (prompt ? 'First prompt queued.' : undefined)
+						})
 						if (!result.ok) {
-							await context.announce(
+							await announce(
 								`The new ${oneLine(repo, 80)} workspace was not created. ${oneLine(result.error ?? 'Try again later.', 220)}`
 							)
 							return
@@ -469,10 +520,14 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 						const created = prompt
 							? `Created a new ${oneLine(repo, 80)} workspace and queued its first prompt.`
 							: `Created a new empty ${oneLine(repo, 80)} workspace.`
-						await context.announce(result.warning ? `${created} ${oneLine(result.warning, 220)}` : created)
+						await announce(result.warning ? `${created} ${oneLine(result.warning, 220)}` : created)
 					} catch (error) {
-						await context.announce(
-							`The new ${oneLine(repo, 80)} workspace was not created. ${oneLine(error instanceof Error ? error.message : String(error), 220)}`
+						context.previews.settle(token, {
+							state: 'unknown',
+							message: 'The creation receipt was lost. Check the workspace list before trying again.'
+						})
+						await announce(
+							`The new ${oneLine(repo, 80)} workspace result is unknown. Check the workspace list before retrying. ${oneLine(error instanceof Error ? error.message : String(error), 220)}`
 						)
 					}
 				})
@@ -491,14 +546,24 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 				const session = context.findSession(sessionId)
 				if (!session || session.workspaceId !== workspaceId)
 					return answer({ status: 'refused', spoken: 'That chat is no longer in the named workspace.' })
-				const preview = context.previews.create({ callId: context.callId, workspaceId, sessionId, text })
+				const preview = context.previews.create({
+					callId: context.callId,
+					workspaceId,
+					sessionId,
+					text,
+					targetLabel: `${session.workspaceTitle} · ${session.sessionTitle ?? 'Chat'}`
+				})
+				const visual = (await context.presentPreview?.(preview.token)) ?? false
 				return answer({
 					status: 'preview',
 					token: preview.token,
 					workspaceId,
 					sessionId,
 					text,
-					spoken: `Preview for ${oneLine(session.workspaceTitle, 80)}: “${oneLine(text, 220)}” Say yes to send this exact text.`
+					presentation: visual ? 'visual' : 'spoken',
+					spoken: visual
+						? `Here’s the draft for ${oneLine(session.workspaceTitle, 80)}. What do you think?`
+						: `Preview for ${oneLine(session.workspaceTitle, 80)}: “${text}” Say yes to send this exact text.`
 				})
 			}
 		},
@@ -520,18 +585,31 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 				const claimed = context.previews.claim(token, { callId: context.callId, sessionId, text })
 				if (!claimed.ok) return answer({ status: 'refused', spoken: refusal(claimed.reason) })
 				if (claimed.preview.workspaceId !== session.workspaceId) {
+					context.previews.settle(token, {
+						state: 'failed',
+						message: 'The chat moved to another workspace. Nothing was sent.'
+					})
 					return answer({ status: 'refused', spoken: 'That chat moved to another workspace. Nothing was sent.' })
 				}
 				context.board.markHandled(sessionId)
 				later(async () => {
 					try {
 						const result = await context.dispatch(claimed.preview)
+						context.previews.settle(token, {
+							state: result.parked ? 'parked' : result.ok ? 'completed' : 'failed',
+							workspaceId: claimed.preview.workspaceId,
+							message: result.error
+						})
 						if (result.ok) return
-						if (result.parked) return void (await context.announce('The prompt is parked until the Mac unlocks.'))
-						await context.announce(`The prompt did not land. ${oneLine(result.error ?? 'Try again later.', 220)}`)
+						if (result.parked) return void (await announce('The prompt is parked until the Mac unlocks.'))
+						await announce(`The prompt did not land. ${oneLine(result.error ?? 'Try again later.', 220)}`)
 					} catch (error) {
-						await context.announce(
-							`The prompt did not land. ${oneLine(error instanceof Error ? error.message : String(error), 220)}`
+						context.previews.settle(token, {
+							state: 'unknown',
+							message: 'The delivery receipt was lost. Check the chat before trying again.'
+						})
+						await announce(
+							`The prompt result is unknown. Check the chat before retrying. ${oneLine(error instanceof Error ? error.message : String(error), 220)}`
 						)
 					}
 				})

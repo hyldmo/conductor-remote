@@ -82,6 +82,9 @@ export const routes = {
 	voiceCall: flat('POST', '/api/voice/calls'),
 	/** Start the greeting only after the browser has installed OpenAI's SDP answer. */
 	voiceCallReady: param('POST', '/api/voice/calls/:callId/ready'),
+	voiceCallText: param('POST', '/api/voice/calls/:callId/text'),
+	voiceDrafts: param('GET', '/api/voice/calls/:callId/drafts'),
+	voiceDraftAction: param('POST', '/api/voice/calls/:callId/drafts'),
 	voiceCallDiagnostics: param('POST', '/api/voice/calls/:callId/diagnostics'),
 	/** End one PWA-owned call. SIP calls remain owned by their phone leg. */
 	voiceCallEnd: param('DELETE', '/api/voice/calls/:callId'),
