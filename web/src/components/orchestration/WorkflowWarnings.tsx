@@ -37,16 +37,20 @@ export function UiQuarantineBanner({ quarantine, className }: { quarantine?: UiQ
 			<div className="flex items-start gap-2">
 				<AlertTriangle size={16} className="mt-0.5 shrink-0 text-del" />
 				<div className="min-w-0 flex-1">
-					<div className="font-semibold text-del">Automated Conductor UI writes are paused</div>
+					<div className="font-semibold text-del">Remote controls are paused</div>
+					<p className="mt-1 text-text">Chats already running can continue. New remote actions are on hold.</p>
 					<p className="mt-0.5 text-text">{quarantine.reason}</p>
 					<p className="mt-1 text-muted">
 						Inspect Conductor on your Mac. Continue only when its window is stable and no UI action is still in flight.
 					</p>
-					<div className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-[10px] text-faint">
-						<span>{new Date(quarantine.createdAt).toLocaleString()}</span>
-						{quarantine.actionId ? <span className="max-w-full truncate">Action · {quarantine.actionId}</span> : null}
-						{quarantine.effectId ? <span className="max-w-full truncate">Effect · {quarantine.effectId}</span> : null}
-					</div>
+					<details className="mt-1 text-[11px] text-faint">
+						<summary className="w-fit cursor-pointer py-1">Technical details</summary>
+						<div className="flex min-w-0 flex-wrap gap-x-2 text-[10px]">
+							<span>{new Date(quarantine.createdAt).toLocaleString()}</span>
+							{quarantine.actionId ? <span className="max-w-full truncate">Action · {quarantine.actionId}</span> : null}
+							{quarantine.effectId ? <span className="max-w-full truncate">Effect · {quarantine.effectId}</span> : null}
+						</div>
+					</details>
 					<button
 						type="button"
 						disabled={busy}

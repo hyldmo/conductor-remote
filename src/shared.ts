@@ -172,11 +172,13 @@ export function modelPickerLabel(label: string): string {
 }
 
 /**
- * Shorten the provider namespace only for display. The full label remains the
- * picker value Conductor expects when a row is selected.
+ * Shorten the provider namespace only for display, including a saved model's
+ * OpenCode harness prefix. The full label remains the picker value.
  */
 export function displayedModelPickerLabel(label: string): string {
-	return modelPickerLabel(label).replace(/^opencode-/i, '')
+	return modelPickerLabel(label)
+		.replace(/^opencode:/i, '')
+		.replace(/^opencode-/i, '')
 }
 
 /** Compact model name: strip the `claude-`/date noise from Conductor's stored id. */

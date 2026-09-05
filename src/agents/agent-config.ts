@@ -54,9 +54,14 @@ function modelMatches(state: AgentConfigState, requested: string, allowPrefix = 
 	return (!expectedAgentType || state.agentType === expectedAgentType) && selected
 }
 
-function matches(state: AgentConfigState, patch: AgentConfigPatch): boolean {
+/** Share model-id normalization between settings writes and read-only Workflow receipts. */
+export function agentConfigMatches(
+	state: AgentConfigState,
+	patch: AgentConfigPatch,
+	allowModelPrefix = false
+): boolean {
 	return (
-		(!patch.model || modelMatches(state, patch.model, true)) &&
+		(!patch.model || modelMatches(state, patch.model, allowModelPrefix)) &&
 		(!patch.effort || state.effort === patch.effort) &&
 		(patch.plan === undefined || state.plan === patch.plan) &&
 		(patch.fast === undefined || state.fast === patch.fast)
@@ -124,7 +129,7 @@ export async function applyAgentConfig(
 		if (!applied.ok) return applied
 	}
 
-	const recorded = await confirm(deps, state => matches(state, patch))
+	const recorded = await confirm(deps, state => agentConfigMatches(state, patch, true))
 	if (!recorded) {
 		return { ok: false, error: 'Conductor did not record every requested agent setting.' }
 	}
