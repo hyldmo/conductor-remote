@@ -23,12 +23,21 @@ const webModule = (path: string) => fileURLToPath(new URL(path, import.meta.url)
 // Same package.json the relay reads for its own version (src/host/autoupdate.ts), so a fresh
 // client and the relay report identical strings; a mismatch means the client is behind.
 // `0.0.0-development` in a dev checkout (semantic-release stamps the real version at publish).
-const appVersion = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string })
-	.version
+const { version: appVersion, repository } = JSON.parse(
+	readFileSync(new URL('./package.json', import.meta.url), 'utf8')
+) as {
+	version: string
+	repository: { url: string }
+}
+const repositoryUrl = repository.url
+	.replace(/^git\+/, '')
+	.replace(/\.git\/?$/, '')
+	.replace(/\/$/, '')
 
 export default defineConfig({
 	define: {
-		__APP_VERSION__: JSON.stringify(appVersion)
+		__APP_VERSION__: JSON.stringify(appVersion),
+		__APP_RELEASES_URL__: JSON.stringify(`${repositoryUrl}/releases`)
 	},
 	root: 'web',
 	resolve: {

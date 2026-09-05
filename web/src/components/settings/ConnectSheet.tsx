@@ -144,9 +144,11 @@ export function ConnectSheet({
 					<MacRow />
 					<div className="flex w-full items-center justify-between text-xs text-faint">
 						<span className="font-mono">
-							{version ? `relay v${version}` : 'relay v?'}
+							relay {version ? <ReleaseLink version={version} /> : 'v?'}
 							{' · '}
-							<span className={stale ? 'text-working' : undefined}>app v{__APP_VERSION__}</span>
+							<span className={stale ? 'text-working' : undefined}>
+								app <ReleaseLink version={__APP_VERSION__} />
+							</span>
 							{stale ? ' · update pending' : ''}
 						</span>
 						<button type="button" onClick={onLogs} className="shrink-0 text-muted underline-offset-2 hover:underline">
@@ -157,5 +159,21 @@ export function ConnectSheet({
 			</div>
 		</>,
 		document.body
+	)
+}
+
+function ReleaseLink({ version }: { version: string }) {
+	if (version === '0.0.0-development') return <>v{version}</>
+
+	return (
+		<a
+			href={`${__APP_RELEASES_URL__}/tag/v${encodeURIComponent(version)}`}
+			target="_blank"
+			rel="noopener noreferrer"
+			title={`Release notes for v${version}`}
+			className="rounded-sm underline underline-offset-2 hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+		>
+			v{version}
+		</a>
 	)
 }
