@@ -882,8 +882,8 @@ Two asymmetric halves — keep them separate:
   and pins the other half — that a name built from a **chat title**, which is free text
   a model wrote and which then gets joined onto a path, cannot climb out of the worktree.
   On the phone that same token becomes a clickable pill. It resolves directly against
-  the chat's worktree — never through the git-owned file list, because `.context` is
-  ignored — and opens the existing raster-image or source viewer, whose authenticated
+  the chat's worktree — never through the source-only file list, which omits raster
+  images — and opens the existing raster-image or source viewer, whose authenticated
   routes still realpath and authorize the resulting absolute path.
   - **`split_chat` is what it exists for** (`POST /api/sessions/:id/split`): copy a chat
     into a fresh tab beside it, or into a separate workspace carrying the current code,
@@ -1671,8 +1671,9 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     holds far more than paths (`yarn build`, `sessions.status`, `Array.map`), so a
     worktree-relative mention is matched against the worktree's own file list
     (`GET /api/workspaces/:id/files`, `git.ts` ▸ `listSourceFiles`: tracked *plus*
-    untracked-not-ignored, since an agent names a file in the same message that created
-    it) and an ambiguous one links nowhere — `types.ts` naming two files is not a fact
+    untracked-not-ignored, plus previewable files under the root `.context/` even when
+    ignored, since an agent names a file in the same message that created it) and an
+    ambiguous one links nowhere — `types.ts` naming two files is not a fact
     about either. Measured over the real chats here, that leaves 45 links in 575 code
     spans on one workspace and 11 in 88 on another, every one of them a file that
     exists; the misses are `scripts/dev.ts` in a worktree where it was deleted and
