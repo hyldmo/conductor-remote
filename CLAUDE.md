@@ -604,6 +604,13 @@ Two asymmetric halves — keep them separate:
     `delegate_task` sibling chats and forbids provider-native Agent/Task/subagents,
     because those would bypass the cross-provider queue and all three custom UI
     surfaces. Toggling Workflow off restores the user's unsent ordinary agent choices.
+    The unsent choice is device-local and keyed by chat (`web/src/lib/prompts/workflow-draft.ts`),
+    so switching tabs or reloading cannot silently turn a Workflow draft into an ordinary
+    send. Sending clears that tab's choice only after the dedicated Workflow start is accepted.
+    A pending first prompt, parked prompt, local send, or existing role claim prevents
+    offering a new Workflow; an already-selected mode stays visible with Send disabled
+    when eligibility changes. Separate untouched tabs can start separate roots in the
+    same workspace; ownership and uniqueness remain per root session.
 
     **Completion owns no timer of its own.** `SessionPoller` performs one base
     `listSessionStates()` read every two seconds and fans it out to notifications
