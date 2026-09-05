@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Tool } from '../src/mcp-tools.ts'
 import type { SessionState } from '../src/reads.ts'
 import { VoiceBriefBoard } from '../src/voice/brief.ts'
-import type { SendPreview } from '../src/voice/preview.ts'
+import type { SendPreview, WorkspacePreview } from '../src/voice/preview.ts'
 import { PreviewStore } from '../src/voice/preview.ts'
-import { createVoiceTools, type VoiceDispatchResult } from '../src/voice/tools.ts'
+import { createVoiceTools, type VoiceDispatchResult, type VoiceWorkspaceCreateResult } from '../src/voice/tools.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -46,27 +46,147 @@ function harness(status = 'idle') {
 		writePrefs: patch => ({ readMarks: patch.readMarks ?? {}, drafts: {} })
 	})
 	const dispatch = vi.fn<(preview: SendPreview) => Promise<VoiceDispatchResult>>(async () => ({ ok: true }))
+	const createWorkspace = vi.fn<(preview: WorkspacePreview) => Promise<VoiceWorkspaceCreateResult>>(async () => ({
+		ok: true,
+		workspaceId: 'w-new'
+	}))
 	const announce = vi.fn()
 	const tools = createVoiceTools({
 		callId: 'call-a',
 		board,
 		previews: new PreviewStore(path.join(dir, 'previews.json')),
 		findSession: id => (id === 's1' ? state : null),
+		listRepos: () => [
+			{ name: 'conductor-remote', defaultBranch: 'main' },
+			{ name: 'website', defaultBranch: 'main' }
+		],
+		createWorkspace,
 		dispatch,
 		announce
 	})
-	return { tools, state, dispatch, announce }
+	return { tools, state, board, dispatch, createWorkspace, announce }
 }
 
 describe('createVoiceTools', () => {
-	it('exposes the overview plus the four guarded decision tools', () => {
+	it('exposes the scoped overview, creation, and guarded decision tools', () => {
 		expect(harness().tools.map(candidate => candidate.name)).toEqual([
 			'voice_roll_call',
 			'voice_workspace_overview',
 			'voice_next_decision',
+			'voice_list_repos',
+			'voice_create_workspace_preview',
+			'voice_create_workspace',
 			'voice_send_preview',
 			'voice_send'
 		])
+	})
+
+	it('passes date, repo, status, and completion filters into a fresh overview', async () => {
+		const { tools, board } = harness()
+		const overview = vi.spyOn(board, 'workspaceOverview').mockResolvedValue({
+			spoken: 'Filtered overview.',
+			asOf: '2026-09-02T12:00:00.000Z',
+			current: 0,
+			dormant: 0,
+			completed: 0,
+			filtered: 0,
+			cursor: null,
+			workspaces: []
+		})
+		await tool(tools, 'voice_workspace_overview').run({
+			cursor: 3,
+			repo: 'conductor-remote',
+			agent_status: 'working',
+			workspace_status: 'in-review',
+			updated_since: 'today',
+			updated_before: '2026-09-03',
+			include_done: true,
+			include_merged: true
+		})
+		expect(overview).toHaveBeenCalledWith(3, {
+			repo: 'conductor-remote',
+			agentStatus: 'working',
+			workspaceStatus: 'in-review',
+			updatedSince: 'today',
+			updatedBefore: '2026-09-03',
+			includeDone: true,
+			includeMerged: true
+		})
+	})
+
+	it('lists repos, previews an exact workspace creation, and consumes approval once', async () => {
+		const { tools, createWorkspace, announce } = harness()
+		const repos = JSON.parse(await tool(tools, 'voice_list_repos').run({})) as {
+			spoken: string
+			repos: Array<{ name: string }>
+		}
+		expect(repos.repos.map(repo => repo.name)).toEqual(['conductor-remote', 'website'])
+		expect(repos.spoken).toContain('conductor-remote')
+
+		const preview = JSON.parse(
+			await tool(tools, 'voice_create_workspace_preview').run({
+				repo: 'conductor-remote',
+				prompt: 'Implement the overview filters.'
+			})
+		) as { token: string; spoken: string }
+		expect(preview.spoken).toBe(
+			'Create a new workspace in conductor-remote with this first prompt: “Implement the overview filters.” Say yes to create it.'
+		)
+
+		const approved = JSON.parse(
+			await tool(tools, 'voice_create_workspace').run({
+				token: preview.token,
+				repo: 'conductor-remote',
+				prompt: 'Implement the overview filters.'
+			})
+		) as { status: string; spoken: string }
+		expect(approved).toEqual({
+			status: 'queued',
+			spoken: 'Creating a new workspace in conductor-remote. I will say when it is ready.'
+		})
+		await vi.waitFor(() => expect(createWorkspace).toHaveBeenCalledTimes(1))
+		expect(createWorkspace.mock.calls[0]?.[0]).toMatchObject({
+			kind: 'create_workspace',
+			repo: 'conductor-remote',
+			prompt: 'Implement the overview filters.'
+		})
+		await vi.waitFor(() =>
+			expect(announce).toHaveBeenCalledWith('Created a new conductor-remote workspace and queued its first prompt.')
+		)
+
+		await expect(
+			tool(tools, 'voice_create_workspace').run({
+				token: preview.token,
+				repo: 'conductor-remote',
+				prompt: 'Implement the overview filters.'
+			})
+		).resolves.toMatch(/already used/i)
+	})
+
+	it('refuses to preview creation in a repo the relay does not know', async () => {
+		const { tools, createWorkspace } = harness()
+		await expect(
+			tool(tools, 'voice_create_workspace_preview').run({ repo: 'unknown', prompt: 'Do the work.' })
+		).resolves.toMatch(/could not find.*unknown/i)
+		expect(createWorkspace).not.toHaveBeenCalled()
+	})
+
+	it('announces a failed workspace creation', async () => {
+		const { tools, createWorkspace, announce } = harness()
+		createWorkspace.mockResolvedValue({ ok: false, error: 'Conductor did not open the workspace.' })
+		const preview = JSON.parse(
+			await tool(tools, 'voice_create_workspace_preview').run({ repo: 'website', prompt: 'Fix the header.' })
+		) as { token: string }
+		await tool(tools, 'voice_create_workspace').run({
+			token: preview.token,
+			repo: 'website',
+			prompt: 'Fix the header.'
+		})
+		await vi.waitFor(() =>
+			expect(announce).toHaveBeenCalledWith(
+				'The new website workspace was not created. Conductor did not open the workspace.'
+			)
+		)
 	})
 
 	it('reads back the exact target and text, then queues only that preview', async () => {

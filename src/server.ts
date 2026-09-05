@@ -118,7 +118,7 @@ import { VoiceBriefBoard } from './voice/brief.ts'
 import { VoiceBroker } from './voice/broker.ts'
 import { openAIOriginForSipHost, readVoiceConfig, voicePort } from './voice/config.ts'
 import { createVoiceGateway } from './voice/gateway.ts'
-import { PreviewStore } from './voice/preview.ts'
+import { PreviewStore, type WorkspacePreview } from './voice/preview.ts'
 import { createVoiceServer } from './voice/server.ts'
 import { mintSipTicket, missingTicketConfig } from './voice/ticket.ts'
 import { createVoiceTools } from './voice/tools.ts'
@@ -127,6 +127,7 @@ import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks }
 import type {
 	Attachment,
 	CreateWorkspaceRequest,
+	CreateWorkspaceResult,
 	DelegateTaskResult,
 	DelegationError,
 	DelegationProjection,
@@ -364,9 +365,28 @@ const voiceBroker = voiceConfig.openaiKey
 function voiceBoard(callId: string): VoiceBriefBoard {
 	let board = voiceBoards.get(callId)
 	if (board) return board
-	board = new VoiceBriefBoard({ reads, locked: async () => (await screenLocked()) === true, readPrefs, writePrefs })
+	board = new VoiceBriefBoard({
+		reads: {
+			listWorkspaces: () => {
+				const workspaces = reads.listWorkspaces()
+				attachPrStatus(workspaces)
+				return workspaces
+			},
+			listSessionStates: () => reads.listSessionStates(),
+			lastAssistantText: sessionId => reads.lastAssistantText(sessionId),
+			lastQuestionInput: sessionId => reads.lastQuestionInput(sessionId)
+		},
+		locked: async () => (await screenLocked()) === true,
+		readPrefs,
+		writePrefs
+	})
 	voiceBoards.set(callId, board)
 	return board
+}
+
+function voiceRelayOrigin(): string {
+	const host = !cfg.host || cfg.host === '0.0.0.0' || cfg.host === '::' ? '127.0.0.1' : cfg.host
+	return `http://${host}:${cfg.port}`
 }
 
 async function dispatchVoicePreview(preview: {
@@ -375,9 +395,8 @@ async function dispatchVoicePreview(preview: {
 	text: string
 	token: string
 }): Promise<{ ok: boolean; parked?: boolean; error?: string }> {
-	const host = !cfg.host || cfg.host === '0.0.0.0' || cfg.host === '::' ? '127.0.0.1' : cfg.host
 	const timeoutMs = 75_000
-	const res = await fetch(`http://${host}:${cfg.port}${routes.sendPrompt.path(preview.sessionId)}`, {
+	const res = await fetch(`${voiceRelayOrigin()}${routes.sendPrompt.path(preview.sessionId)}`, {
 		method: routes.sendPrompt.method,
 		signal: AbortSignal.timeout(timeoutMs),
 		headers: {
@@ -400,12 +419,44 @@ async function dispatchVoicePreview(preview: {
 	}
 }
 
+async function createVoiceWorkspace(preview: WorkspacePreview): Promise<{
+	ok: boolean
+	workspaceId?: string
+	warning?: string
+	error?: string
+}> {
+	// Creation runs behind the shared Conductor UI lease. The call already returned
+	// "queued", so keep enough room for one in-flight interactive action to finish
+	// before the deep link and its workspace-row receipt run.
+	const timeoutMs = 75_000
+	const res = await fetch(`${voiceRelayOrigin()}${routes.createWorkspace.path()}`, {
+		method: routes.createWorkspace.method,
+		signal: AbortSignal.timeout(timeoutMs),
+		headers: {
+			authorization: `Bearer ${cfg.token}`,
+			'content-type': 'application/json',
+			'x-relay-client': 'voice',
+			'x-client-timeout-ms': String(timeoutMs)
+		},
+		body: JSON.stringify({ repo: preview.repo, prompt: preview.prompt, sendImmediately: true })
+	})
+	const payload = (await res.json().catch(() => ({}))) as CreateWorkspaceResult
+	return {
+		ok: res.ok && payload.ok === true,
+		workspaceId: payload.workspaceId,
+		warning: payload.warning,
+		error: payload.error ?? (!res.ok ? `HTTP ${res.status}` : undefined)
+	}
+}
+
 function voiceToolsForCall(callId: string) {
 	return createVoiceTools({
 		callId,
 		board: voiceBoard(callId),
 		previews: voicePreviews,
 		findSession: sessionId => reads.listSessionStates().find(state => state.sessionId === sessionId) ?? null,
+		listRepos: () => reads.listRepos().map(repo => ({ name: repo.name, defaultBranch: repo.default_branch })),
+		createWorkspace: createVoiceWorkspace,
 		dispatch: dispatchVoicePreview,
 		announce: spoken => {
 			if (!voiceBroker?.inject(callId, spoken)) console.warn(`[voice] ${callId} could not receive a delivery nudge`)

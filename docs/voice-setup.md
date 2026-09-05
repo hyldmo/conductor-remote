@@ -5,19 +5,28 @@
 The primary foreground voice mode is one fleet-wide control room. In the
 workspace-list header, tap the phone immediately left of **+**, then start the
 call. The orchestrator surveys every workspace, presents one bounded decision
-at a time, and can queue an exact prompt only after it reads the target and text
-back and you confirm. It is not owned by the chat currently on screen: hide the
-sheet or move between workspaces and the same call continues.
+at a time, creates new workspaces, and queues exact prompts. Both writes happen
+only after it reads the target and text back and you confirm. It is not owned by
+the chat currently on screen: hide the sheet or move between workspaces and the
+same call continues.
 
 Live captions keep both sides readable, and the text box in the call sheet is a
-fallback when speaking is inconvenient. The five available actions are roll
-call, fresh workspace overview, next decision, send preview, and confirmed send.
-They use the same preview/confirmation gate as the dial-in orchestrator.
+fallback when speaking is inconvenient. The eight available actions are roll
+call, fresh workspace overview, next decision, repository list, workspace-create
+preview and confirmed creation, plus send preview and confirmed send. The two
+writes use the same persisted, one-use preview/confirmation gate as the dial-in
+orchestrator.
+
+An ordinary overview excludes workspaces marked **Done** or whose pull request
+is merged. Ask to include either when completed work is relevant. Overview
+requests can also filter by repository, live agent status, workspace status, PR
+status, and an `updated_since`/`updated_before` time window; each spoken row says
+how recently its selected chat changed.
 
 This path needs the managed relay, its usual private phone URL, and an OpenAI API
 key. It does **not** need a phone number, SIP, a webhook, Funnel, or any other
 public endpoint. The permanent key stays on the Mac: the relay creates the
-WebRTC call, then executes those five tools over its private sideband connection.
+WebRTC call, then executes those eight tools over its private sideband connection.
 
 Store the key without leaving it in shell history:
 
@@ -46,9 +55,12 @@ screen locked, so use the optional dial-in transport for a pocketed commute.
 
 ## Optional dial-in orchestrator
 
-The optional voice listener turns a phone call into a small Conductor control room: hear a bounded fleet tally, walk one decision at a time, and dispatch an exact prompt after a spoken read-back and explicit confirmation. It does not expose the PWA or the relay API publicly.
+The optional voice listener turns a phone call into a small Conductor control room: hear a bounded fleet tally, walk one decision at a time, create a workspace, and dispatch an exact prompt after a spoken read-back and explicit confirmation. It does not expose the PWA or the relay API publicly.
 
-This first milestone has five tools: roll call, a fresh paged workspace overview, next decision, send preview, and send. Forward-to-owner answers, redial cursor resume, artifact pushes, and voice grooming remain later milestones.
+The scoped endpoint has eight tools: roll call, a fresh paged workspace overview,
+next decision, repository list, create preview, confirmed create, send preview,
+and confirmed send. Forward-to-owner answers, artifact pushes, and voice grooming
+remain later milestones.
 
 ## What you need
 
@@ -142,7 +154,7 @@ conductor-remote config set voice.webhook-secret "$OPENAI_WEBHOOK_SECRET"
 unset OPENAI_WEBHOOK_SECRET
 ```
 
-The relay accepts a valid incoming call through `POST /v1/realtime/calls/{call_id}/accept`, attaches an authenticated sideband WebSocket, and gives the session only the five scoped remote MCP tools. Remote MCP follow-up responses are driven by the broker only after both the response and every tool call in it have finished, as required by OpenAI's [Realtime MCP guide](https://developers.openai.com/api/docs/guides/realtime-mcp).
+The relay accepts a valid incoming call through `POST /v1/realtime/calls/{call_id}/accept`, attaches an authenticated sideband WebSocket, and gives the session only the eight scoped remote MCP tools. Remote MCP follow-up responses are driven by the broker only after both the response and every tool call in it have finished, as required by OpenAI's [Realtime MCP guide](https://developers.openai.com/api/docs/guides/realtime-mcp).
 
 ## 5. Configure the Twilio number
 

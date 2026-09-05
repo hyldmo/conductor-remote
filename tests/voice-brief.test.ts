@@ -121,8 +121,11 @@ describe('VoiceBriefBoard', () => {
 		})
 
 		const first = await board.workspaceOverview()
+		expect(first.asOf).toBe('2026-09-02T12:00:00.000Z')
 		expect(first.spoken).toContain('1 current workspace, 1 dormant')
-		expect(first.spoken).toContain('Workspace active is working. The first implementation pass is running.')
+		expect(first.spoken).toContain(
+			'Workspace active is working. Updated 15 minutes ago. The first implementation pass is running.'
+		)
 		expect(first.spoken).not.toContain('already parked')
 		expect(first.spoken.length).toBeLessThanOrEqual(700)
 
@@ -160,6 +163,90 @@ describe('VoiceBriefBoard', () => {
 		const second = await board.workspaceOverview(first.cursor ?? 0)
 		expect(second.workspaces.map(item => item.workspaceId)).toEqual(['w-four'])
 		expect(second.cursor).toBeNull()
+	})
+
+	it('hides done and merged workspaces by default and includes them only when requested', async () => {
+		const states = [
+			state('active', 'working', '2026-09-02 11:45:00'),
+			state('done', 'working', '2026-09-02 11:40:00'),
+			state('merged', 'working', '2026-09-02 11:35:00'),
+			state('both', 'working', '2026-09-02 11:30:00')
+		]
+		const workspaces = [
+			workspace('active'),
+			workspace('done', { manual_status: 'done' }),
+			workspace('merged', { pr_status: 'merged' }),
+			workspace('both', { manual_status: 'done', pr_status: 'merged' })
+		]
+		const board = new VoiceBriefBoard({
+			reads: {
+				listWorkspaces: () => workspaces,
+				listSessionStates: () => states,
+				lastAssistantText: id => `Latest update from ${id}.`,
+				lastQuestionInput: () => null
+			},
+			locked: async () => false,
+			readPrefs: () => ({ readMarks: {}, drafts: {} }),
+			writePrefs: () => ({ readMarks: {}, drafts: {} }),
+			now: () => NOW
+		})
+
+		const ordinary = await board.workspaceOverview()
+		expect(ordinary.workspaces.map(item => item.workspaceId)).toEqual(['w-active'])
+		expect(ordinary.completed).toBe(3)
+		expect(ordinary.spoken).toContain('3 completed hidden')
+
+		const all = await board.workspaceOverview(0, { includeDone: true, includeMerged: true })
+		expect(all.current).toBe(4)
+		expect(all.completed).toBe(0)
+		expect(all.workspaces.map(item => item.workspaceId)).toEqual(['w-active', 'w-done', 'w-merged'])
+	})
+
+	it('filters an overview by dates, repo, agent status, and workspace status', async () => {
+		const states = [
+			state('recent', 'working', '2026-09-02 11:45:00', { repoName: 'relay' }),
+			state('idle', 'idle', '2026-09-02 10:00:00', { repoName: 'relay' }),
+			state('yesterday', 'working', '2026-09-01 10:00:00', { repoName: 'relay' }),
+			state('other', 'working', '2026-09-02 11:50:00', { repoName: 'another-repo' })
+		]
+		const workspaces = [
+			workspace('recent', { manual_status: 'in-review' }),
+			workspace('idle', { manual_status: 'in-review' }),
+			workspace('yesterday', { manual_status: 'in-review' }),
+			workspace('other', { repo_name: 'another-repo', manual_status: 'in-review' })
+		]
+		const board = new VoiceBriefBoard({
+			reads: {
+				listWorkspaces: () => workspaces,
+				listSessionStates: () => states,
+				lastAssistantText: id => `Latest update from ${id}.`,
+				lastQuestionInput: () => null
+			},
+			locked: async () => false,
+			readPrefs: () => ({ readMarks: {}, drafts: {} }),
+			writePrefs: () => ({ readMarks: {}, drafts: {} }),
+			now: () => NOW
+		})
+
+		const overview = await board.workspaceOverview(0, {
+			updatedSince: 'today',
+			repo: 'relay',
+			agentStatus: 'working',
+			workspaceStatus: 'in-review'
+		})
+		expect(overview.current).toBe(1)
+		expect(overview.filtered).toBe(3)
+		expect(overview.workspaces.map(item => item.workspaceId)).toEqual(['w-recent'])
+		expect(overview.spoken).toContain('Updated 15 minutes ago.')
+
+		const yesterday = await board.workspaceOverview(0, {
+			updatedSince: 'yesterday',
+			updatedBefore: 'today',
+			repo: 'relay'
+		})
+		expect(yesterday.workspaces.map(item => item.workspaceId)).toEqual(['w-yesterday'])
+
+		await expect(board.workspaceOverview(0, { updatedSince: 'whenever' })).rejects.toThrow(/updated_since/i)
 	})
 
 	it('ranks live signals, excludes dormant work, and bounds spoken output', async () => {
