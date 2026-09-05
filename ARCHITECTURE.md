@@ -15,6 +15,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   pkg-root.ts     packageRoot(): walk up to package.json (works from src/ and dist-node/src/)
   db.ts           read-only node:sqlite handle to conductor.db; logs >100ms queries without params
   reads.ts        workspaces / sessions / messages + worktree resolution
+                  closed-tab metadata is a separate workspace-scoped, on-demand read
   context-breakdown.ts  provider-neutral estimates for a chat's current context categories;
                   respects compaction/turn boundaries, excludes mirrored child-agent frames,
                   and sizes each full-history fork format
@@ -66,6 +67,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
                   locally and cooperates with the relay-wide cross-process SQLite lease;
                   merged-workspace Continue delegates the branch/store/chat transition to Conductor
+                  closed-chat restore uses the exact workspace/session deep link + visible-row receipt
   agent-config.ts two-pass cross-provider config: model-only write + DB receipt, then
                   reacquired effort/fast controls + final receipt (generic Plan stays available
                   to ordinary callers and remains outside Workflow role snapshots)
@@ -151,7 +153,7 @@ web/              React PWA (Vite root)
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
                   RolesSettings, WorkflowModePill, DelegationPipeline, QueueBubble,
                   WorkspaceMenu (the status groups, plus Archive), MergeBanner (merge + continue), MessageNav,
-                  DevServerControls, ContextBreakdownSheet, SearchSheet + SearchPane + CommandResults (one
+                  DevServerControls, ClosedTabsSheet, ContextBreakdownSheet, SearchSheet + SearchPane + CommandResults (one
                   ⌘K box for chats and actions), ArchivedChat (a hit whose
                   worktree is gone), NewWorkspaceSheet, PlanUsageSheet (the Models panel:
                   provider defaults plus usage), LogsSheet, TokenGate, QRCode +

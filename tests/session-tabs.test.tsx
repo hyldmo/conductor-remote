@@ -18,6 +18,7 @@ const {
 	SubagentReplyNotice,
 	workflowForActiveSession
 } = await import('../web/src/components/SessionView.tsx')
+const { ClosedTabsList } = await import('../web/src/components/ClosedTabsSheet.tsx')
 
 const session: Session = {
 	id: 'chat-1',
@@ -160,6 +161,7 @@ describe('phone chat tabs', () => {
 				onContext={vi.fn()}
 				onNewChat={vi.fn()}
 				onClose={vi.fn()}
+				onClosedTabs={vi.fn()}
 				creating={false}
 				closingId={null}
 				online
@@ -169,7 +171,7 @@ describe('phone chat tabs', () => {
 		expect(html).toContain('Alpha')
 		expect(html).not.toContain('aria-label="Close Alpha chat"')
 		expect(html).toContain('aria-label="Context for Alpha: 42% used"')
-		expect(html.match(/<button/g)).toHaveLength(3)
+		expect(html.match(/<button/g)).toHaveLength(4)
 	})
 
 	test('keeps selection and close as separate controls with multiple tabs', () => {
@@ -184,6 +186,7 @@ describe('phone chat tabs', () => {
 				onContext={vi.fn()}
 				onNewChat={vi.fn()}
 				onClose={vi.fn()}
+				onClosedTabs={vi.fn()}
 				creating={false}
 				closingId={null}
 				online
@@ -192,7 +195,7 @@ describe('phone chat tabs', () => {
 
 		expect(html).toContain('aria-label="Close Alpha chat"')
 		expect(html).toContain('aria-label="Close Beta chat"')
-		expect(html.match(/<button/g)).toHaveLength(7)
+		expect(html.match(/<button/g)).toHaveLength(8)
 	})
 
 	test.each([true, false])('keeps one selected tab with the file active=%s', active => {
@@ -238,6 +241,7 @@ describe('phone chat tabs', () => {
 				onContext={vi.fn()}
 				onNewChat={vi.fn()}
 				onClose={vi.fn()}
+				onClosedTabs={vi.fn()}
 				creating={false}
 				closingId={null}
 				online
@@ -266,6 +270,7 @@ describe('phone chat tabs', () => {
 				onContext={vi.fn()}
 				onNewChat={vi.fn()}
 				onClose={vi.fn()}
+				onClosedTabs={vi.fn()}
 				creating={false}
 				closingId={null}
 				online
@@ -280,7 +285,7 @@ describe('phone chat tabs', () => {
 		expect(html).not.toContain('aria-label="Close Explorer chat"')
 	})
 
-	test('keeps New chat reachable after the last tab closes', () => {
+	test('keeps New chat and Closed tabs reachable after the last tab closes', () => {
 		const html = renderToStaticMarkup(
 			<SessionTabs
 				sessions={[]}
@@ -291,12 +296,14 @@ describe('phone chat tabs', () => {
 				onContext={vi.fn()}
 				onNewChat={vi.fn()}
 				onClose={vi.fn()}
+				onClosedTabs={vi.fn()}
 				creating={false}
 				closingId={null}
 				online
 			/>
 		)
 		expect(html).toContain('aria-label="New chat, same files"')
+		expect(html).toContain('aria-label="Closed tabs"')
 	})
 
 	test('makes a native child read-only and names the parent reply destination', () => {
@@ -304,6 +311,50 @@ describe('phone chat tabs', () => {
 
 		expect(html).toContain('Return to Alpha to reply')
 		expect(html).toContain('border-t')
+	})
+})
+
+describe('closed tab picker', () => {
+	test('finds closed chats by title and model and retains a restore action for duplicate titles', () => {
+		const sessions = [session, { ...session, id: 'chat-2', model: 'gpt-5.6-sol' }]
+		const html = renderToStaticMarkup(
+			<ClosedTabsList sessions={sessions} filter="alpha sol" restoringId={null} online onRestore={vi.fn()} />
+		)
+		expect(html).toContain('aria-label="Restore Alpha chat"')
+		expect(html.match(/<button/g)).toHaveLength(1)
+		const duplicates = renderToStaticMarkup(
+			<ClosedTabsList sessions={sessions} filter="" restoringId={null} online onRestore={vi.fn()} />
+		)
+		expect(duplicates.match(/aria-label="Restore Alpha chat"/g)).toHaveLength(2)
+	})
+
+	test('distinguishes an empty history from an unmatched search', () => {
+		const empty = renderToStaticMarkup(
+			<ClosedTabsList sessions={[]} filter="" restoringId={null} online onRestore={vi.fn()} />
+		)
+		const unmatched = renderToStaticMarkup(
+			<ClosedTabsList sessions={[session]} filter="missing" restoringId={null} online onRestore={vi.fn()} />
+		)
+		expect(empty).toContain('No closed tabs in this workspace.')
+		expect(unmatched).toContain('No closed tabs match your search.')
+	})
+
+	test('disables restores offline and prevents a second restore while one is waiting', () => {
+		const offline = renderToStaticMarkup(
+			<ClosedTabsList sessions={[session]} filter="" restoringId={null} online={false} onRestore={vi.fn()} />
+		)
+		const restoring = renderToStaticMarkup(
+			<ClosedTabsList
+				sessions={[session, { ...session, id: 'chat-2', title: 'Beta' }]}
+				filter=""
+				restoringId={session.id}
+				online
+				onRestore={vi.fn()}
+			/>
+		)
+		expect(offline).toContain('disabled=""')
+		expect(restoring.match(/disabled=""/g)).toHaveLength(2)
+		expect(restoring.match(/Restoring…/g)).toHaveLength(1)
 	})
 })
 

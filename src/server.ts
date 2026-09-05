@@ -172,6 +172,7 @@ import {
 	newChat,
 	pickActuator,
 	restartConductorApp,
+	restoreChat,
 	retryWontHelp,
 	type SendResult,
 	screenLocked,
@@ -3365,6 +3366,12 @@ const server = http.createServer(async (req, res) => {
 				})
 			}
 
+			const closedSessionsIn = routeParam(routes.closedSessions, req.method, pathname)
+			if (closedSessionsIn) {
+				if (!reads.getAnyWorkspace(closedSessionsIn)) return json(req, res, 404, { error: 'workspace not found' })
+				return json(req, res, 200, { sessions: reads.listClosedSessions(closedSessionsIn) })
+			}
+
 			// POST /api/workspaces/:id/sessions — open a new chat (Cmd+T) in the workspace
 			const newChatIn = routeParam(routes.newChat, req.method, pathname)
 			if (newChatIn) {
@@ -3718,6 +3725,22 @@ const server = http.createServer(async (req, res) => {
 					strategy: result.strategy,
 					session: reads.listSessions(ws.id).find(s => s.id === sessionId)
 				})
+			}
+
+			const restoreChatId = routeParam(routes.restoreChat, req.method, pathname)
+			if (restoreChatId) {
+				const body = JSON.parse((await readBody(req)) || '{}') as { workspaceId?: string }
+				const ownerId = reads.sessionWorkspaceId(restoreChatId)
+				if (!ownerId) return json(req, res, 404, { error: 'chat not found' })
+				if (body.workspaceId && body.workspaceId !== ownerId) {
+					return json(req, res, 409, { error: 'chat is not in that workspace' })
+				}
+				if (!reads.getWorkspace(ownerId)) {
+					return json(req, res, 409, { error: 'Restore this workspace in Conductor before restoring its tabs.' })
+				}
+				const result = await restoreChat(ownerId, restoreChatId, () => reads.getSession(restoreChatId) !== null)
+				if (!result.ok) return json(req, res, 502, result)
+				return json(req, res, 200, { ...result, session: reads.getSession(restoreChatId) })
 			}
 
 			// DELETE /api/sessions/:id { workspaceId?, closeRunning? } — Conductor's

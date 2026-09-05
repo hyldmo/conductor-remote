@@ -254,6 +254,8 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   context percentage or the segmented composer donut beside Attachments for estimated
   initial/chat/thinking/tool-call composition and the approximate payload size of each
   full-history fork format.
+- ✅ **Closed tabs** beside New chat — search closed conversations in this workspace
+  and restore the original tab with its history intact.
 - ✅ **Models** panel — change Claude Code and Codex defaults for new chats, written
   to `~/.conductor/settings.toml`, and see rolling plan usage from their structured
   CLI protocols with no model request. Cursor Agent and OpenCode keep their own
@@ -441,8 +443,9 @@ joining a line it would only time out waiting in.
 Worth knowing before you wire it up: `send_prompt` into a chat that is already
 working **steers that agent** rather than starting a new turn, and `stop_turn`
 destroys work in flight. `close_chat` keeps the transcript and is reversible with
-Conductor's ⌘⇧T; a working chat is refused until `close_running` explicitly confirms
-the desktop's own warning. The tool descriptions surface each of those choices.
+the phone's **Closed tabs** view or Conductor's ⌘⇧T; a working chat is refused until
+`close_running` explicitly confirms the desktop's own warning. The tool descriptions
+surface each of those choices.
 
 The workflow icon in either workspace header opens **Roles**. Models there are
 choices previously read from Conductor's real picker; a missing or ambiguous label
