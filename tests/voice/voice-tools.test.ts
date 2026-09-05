@@ -8,6 +8,7 @@ import { VoiceBriefBoard } from '../../src/voice/brief.ts'
 import type { VoiceCallTarget, VoiceChatContext } from '../../src/voice/context.ts'
 import type { SendPreview, WorkspacePreview } from '../../src/voice/preview.ts'
 import { PreviewStore } from '../../src/voice/preview.ts'
+import { VoiceRecall } from '../../src/voice/recall.ts'
 import { createVoiceTools, type VoiceDispatchResult, type VoiceWorkspaceCreateResult } from '../../src/voice/tools.ts'
 
 const dirs: string[] = []
@@ -52,6 +53,12 @@ function harness(status = 'idle') {
 		workspaceId: 'w-new'
 	}))
 	const announce = vi.fn()
+	const history = {
+		list: vi.fn(() => ({ calls: [], hasMore: false })),
+		search: vi.fn((query: string) => ({ query, hits: [], hasMore: false })),
+		read: vi.fn(() => null)
+	}
+	const recall = new VoiceRecall({ history, callId: 'call-a' })
 	const readChatContext = vi.fn(
 		(target: VoiceCallTarget): VoiceChatContext => ({
 			...target,
@@ -69,6 +76,7 @@ function harness(status = 'idle') {
 	const tools = createVoiceTools({
 		callId: 'call-a',
 		board,
+		recall,
 		previews: new PreviewStore(path.join(dir, 'previews.json')),
 		findSession: id => (id === 's1' ? state : null),
 		listRepos: () => [
@@ -80,7 +88,7 @@ function harness(status = 'idle') {
 		dispatch,
 		announce
 	})
-	return { tools, state, board, dispatch, createWorkspace, announce, readChatContext }
+	return { tools, state, board, dispatch, createWorkspace, announce, readChatContext, history, recall }
 }
 
 describe('createVoiceTools', () => {
@@ -90,12 +98,44 @@ describe('createVoiceTools', () => {
 			'voice_workspace_overview',
 			'voice_chat_context',
 			'voice_next_decision',
+			'voice_list_calls',
+			'voice_search_calls',
+			'voice_read_call',
 			'voice_list_repos',
 			'voice_create_workspace_preview',
 			'voice_create_workspace',
 			'voice_send_preview',
 			'voice_send'
 		])
+	})
+
+	it('loads no conversation history when creating tools and forwards only explicit recall requests', async () => {
+		const { tools, recall, history, readChatContext } = harness()
+		expect(history.list).not.toHaveBeenCalled()
+		expect(history.search).not.toHaveBeenCalled()
+		expect(history.read).not.toHaveBeenCalled()
+		expect(readChatContext).not.toHaveBeenCalled()
+		const list = vi.spyOn(recall, 'list')
+		const search = vi.spyOn(recall, 'search')
+		const read = vi.spyOn(recall, 'read')
+		await tool(tools, 'voice_list_calls').run({ started_since: 'yesterday', started_before: 'today', limit: 1 })
+		expect(list).toHaveBeenCalledWith(
+			expect.objectContaining({ startedSince: 'yesterday', startedBefore: 'today', limit: 1 })
+		)
+		await tool(tools, 'voice_search_calls').run({ query: 'lamp', call_id: 'old-call', offset: 2 })
+		expect(search).toHaveBeenCalledWith('lamp', expect.objectContaining({ callId: 'old-call', offset: 2 }))
+		await tool(tools, 'voice_read_call').run({
+			call_id: 'old-call',
+			near: 'item',
+			before: 2,
+			after: 3,
+			max_chars: 4_000
+		})
+		expect(read).toHaveBeenCalledWith(
+			'old-call',
+			expect.objectContaining({ near: 'item', before: 2, after: 3, maxChars: 4_000 })
+		)
+		expect(readChatContext).not.toHaveBeenCalled()
 	})
 
 	it('passes date, repo, status, and completion filters into a fresh overview', async () => {

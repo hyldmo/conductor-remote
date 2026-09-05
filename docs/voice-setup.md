@@ -4,8 +4,9 @@
 
 The workspace-list phone opens a fleet-wide control room. In the
 workspace-list header, tap the phone immediately left of **+**, then start the
-call. The orchestrator surveys every workspace, presents one bounded decision
-at a time, creates new workspaces, and queues exact prompts. Both writes happen
+call. Each new call opens with a neutral greeting and waits for your topic.
+Ask for a workspace overview, one decision at a time, or a recap of a previous
+call. It can also create new workspaces and queue exact prompts. Both writes happen
 only after it reads the target and text back and you confirm. It is not owned by
 the chat currently on screen: hide the sheet or move between workspaces and the
 same call continues.
@@ -25,17 +26,36 @@ are sent to OpenAI with the call; an update request reads the chat again. Sendin
 prompt back still requires spoken confirmation.
 
 Live captions keep both sides readable, and the text box in the call sheet is a
-fallback when speaking is inconvenient. The nine available actions are roll
-call, fresh workspace overview, chat context, next decision, repository list, workspace-create
+fallback when speaking is inconvenient. The available actions are roll
+call, fresh workspace overview, chat context, next decision, call-history list,
+search and read, repository list, workspace-create
 preview and confirmed creation, plus send preview and confirmed send. The two
 writes use the same persisted, one-use preview/confirmation gate as the dial-in
 orchestrator.
 
-An ordinary overview excludes workspaces marked **Done** or whose pull request
-is merged. Ask to include either when completed work is relevant. Overview
-requests can also filter by repository, live agent status, workspace status, PR
+A requested roll call, its counts, the decision queue, and ordinary overviews
+exclude workspaces marked **Done** or whose pull request is merged. The queue
+also skips work completed during a call. Ask for an overview including completed
+work when it is relevant. Overview requests can also filter by repository,
+live agent status, workspace status, PR
 status, and an `updated_since`/`updated_before` time window; each spoken row says
 how recently its selected chat changed.
+
+Past calls are available only when you ask. After reconnecting, ask **“What did
+we just talk about?”** to read the preceding call, or **“What did we talk about
+yesterday?”** to look up calls by date. You can also search a remembered topic.
+The live call is excluded from history lookups, and yesterday uses the Mac's
+calendar. A saved confirmation is part of that old conversation; a new action
+still needs confirmation in the current call.
+
+The text archive lives in
+`~/Library/Application Support/conductor-remote/voice-history.db`, a separate
+SQLite database from Conductor's coding chats. It stores spoken and typed text,
+timestamps, and markers for partial or interrupted replies; it does not store
+audio recordings. Transcripts are saved during the call, so captured text remains
+available after a dropped connection. New calls do not preload this archive or
+resume a previous discussion automatically. The Call history button can also
+open, copy, and download saved transcripts.
 
 This path needs the managed relay, its usual private phone URL, and an OpenAI API
 key. It does **not** need a phone number, SIP, a webhook, Funnel, or any other
@@ -71,9 +91,10 @@ screen locked, so use the optional dial-in transport for a pocketed commute.
 
 The optional voice listener turns a phone call into a small Conductor control room: hear a bounded fleet tally, walk one decision at a time, create a workspace, and dispatch an exact prompt after a spoken read-back and explicit confirmation. It does not expose the PWA or the relay API publicly.
 
-The scoped endpoint has nine tools: roll call, a fresh paged workspace overview, chat context,
-next decision, repository list, create preview, confirmed create, send preview,
-and confirmed send. Dial-in calls open with the fleet roll call.
+The scoped endpoint has the same twelve tools as the PWA: roll call, a fresh paged
+workspace overview, chat context, next decision, call-history list/search/read,
+repository list, create preview, confirmed create, send preview, and confirmed
+send. Dial-in calls also start fresh and wait for your topic.
 Forward-to-owner answers, artifact pushes, and voice grooming
 remain later milestones.
 
@@ -169,7 +190,7 @@ conductor-remote config set voice.webhook-secret "$OPENAI_WEBHOOK_SECRET"
 unset OPENAI_WEBHOOK_SECRET
 ```
 
-The relay accepts a valid incoming call through `POST /v1/realtime/calls/{call_id}/accept`, attaches an authenticated sideband WebSocket, and gives the session only the nine scoped remote MCP tools. Remote MCP follow-up responses are driven by the broker only after both the response and every tool call in it have finished, as required by OpenAI's [Realtime MCP guide](https://developers.openai.com/api/docs/guides/realtime-mcp).
+The relay accepts a valid incoming call through `POST /v1/realtime/calls/{call_id}/accept`, attaches an authenticated sideband WebSocket, and gives the session only the scoped remote MCP tools. Remote MCP follow-up responses are driven by the broker only after both the response and every tool call in it have finished, as required by OpenAI's [Realtime MCP guide](https://developers.openai.com/api/docs/guides/realtime-mcp).
 
 ## 5. Configure the Twilio number
 
@@ -205,9 +226,10 @@ conductor-remote service logs
 ~/Library/Application Support/conductor-remote/voice-funnel.json
 ~/Library/Application Support/conductor-remote/voice-calls.json
 ~/Library/Application Support/conductor-remote/voice-previews.json
+~/Library/Application Support/conductor-remote/voice-history.db
 ```
 
-Each call starts with the Mac's lock state. A confirmed send returns to the voice session immediately and reuses the relay's existing transcript receipt, retry, idempotency, and parked-prompt path. A landed send stays silent; a locked or failed send is announced. Merely hearing a decision does not clear it—dispatching it or explicitly skipping it advances the read mark.
+A requested roll call starts with the Mac's lock state. A confirmed send returns to the voice session immediately and reuses the relay's existing transcript receipt, retry, idempotency, and parked-prompt path. A landed send stays silent; a locked or failed send is announced. Merely hearing a decision does not clear it—dispatching it or explicitly skipping it advances the read mark.
 
 ### Saved transcripts
 

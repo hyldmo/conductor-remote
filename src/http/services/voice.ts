@@ -24,6 +24,8 @@ import { VoiceHistory } from '../../voice/history.ts'
 
 import { PreviewStore, type WorkspacePreview } from '../../voice/preview.ts'
 
+import { VoiceRecall } from '../../voice/recall.ts'
+
 import { createVoiceServer } from '../../voice/server.ts'
 
 import { createVoiceTools } from '../../voice/tools.ts'
@@ -158,6 +160,7 @@ export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads'
 		return createVoiceTools({
 			callId,
 			board: voiceBoard(callId),
+			recall: new VoiceRecall({ history: voiceHistory, callId }),
 			previews: voicePreviews,
 			findSession: sessionId => reads.listSessionStates().find(state => state.sessionId === sessionId) ?? null,
 			listRepos: () => reads.listRepos().map(repo => ({ name: repo.name, defaultBranch: repo.default_branch })),

@@ -267,7 +267,7 @@ export function VoiceCallSheet() {
 							<p className="mt-2 text-sm leading-relaxed text-muted">
 								{target
 									? `Continue from “${target.chatTitle}” with its recent conversation already in context. You can discuss the task and confirm a prompt to send back to this chat.`
-									: 'One orchestrator checks every workspace, brings you one decision at a time, and can create workspaces or queue exact prompts after reading them back for confirmation.'}
+									: 'Start a fresh conversation. Ask about your workspaces or recall a previous call, including one that dropped. Creating workspaces and sending prompts still require your confirmation.'}
 							</p>
 
 							<div className="mt-7 grid w-full grid-cols-2 gap-3 text-left">

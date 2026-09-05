@@ -8,6 +8,12 @@ import type { VoiceHistoryCall, VoiceHistoryEntry, VoiceHistorySearchResponse, V
 
 export const MAX_VOICE_SEARCH_CHARS = 500
 
+export interface VoiceHistoryFilters {
+	excludeCallId?: string
+	startedSince?: number
+	startedBefore?: number
+}
+
 interface StoredEntry extends VoiceHistoryEntry {
 	previousId?: string | null
 	parts: Record<string, { text: string; final: boolean }>
@@ -391,11 +397,26 @@ export class VoiceHistory {
 		return ordered(rows.map(row => JSON.parse(row.record) as StoredEntry))
 	}
 
-	list(limit = 30, offset = 0): { calls: VoiceHistorySummary[]; hasMore: boolean } {
+	list(limit = 30, offset = 0, filters: VoiceHistoryFilters = {}): { calls: VoiceHistorySummary[]; hasMore: boolean } {
 		for (const id of this.pending.keys()) this.safely(id, () => this.flush(id))
 		const rows = this.connection()
-			.prepare('SELECT record FROM calls ORDER BY started_at DESC, call_id DESC LIMIT ? OFFSET ?')
-			.all(limit + 1, offset)
+			.prepare(`
+				SELECT record FROM calls
+				WHERE (? IS NULL OR call_id != ?)
+					AND (? IS NULL OR started_at >= ?)
+					AND (? IS NULL OR started_at < ?)
+				ORDER BY started_at DESC, call_id DESC LIMIT ? OFFSET ?
+			`)
+			.all(
+				filters.excludeCallId ?? null,
+				filters.excludeCallId ?? null,
+				filters.startedSince ?? null,
+				filters.startedSince ?? null,
+				filters.startedBefore ?? null,
+				filters.startedBefore ?? null,
+				limit + 1,
+				offset
+			)
 		return {
 			calls: rows.slice(0, limit).map(row => {
 				const call = JSON.parse(row.record as string) as VoiceHistorySummary
@@ -417,7 +438,7 @@ export class VoiceHistory {
 
 	search(
 		query: string,
-		options: { limit?: number; offset?: number; callId?: string } = {}
+		options: VoiceHistoryFilters & { limit?: number; offset?: number; callId?: string } = {}
 	): VoiceHistorySearchResponse {
 		if (query.length > MAX_VOICE_SEARCH_CHARS)
 			throw new Error(`query must be at most ${MAX_VOICE_SEARCH_CHARS} characters`)
@@ -433,9 +454,26 @@ export class VoiceHistory {
 			FROM voice_search JOIN entries e ON e.seq = voice_search.rowid
 			JOIN calls c ON c.call_id = e.call_id
 			WHERE voice_search MATCH ? AND (? IS NULL OR e.call_id = ?)
+				AND (? IS NULL OR e.call_id != ?)
+				AND (? IS NULL OR c.started_at >= ?)
+				AND (? IS NULL OR c.started_at < ?)
 			ORDER BY bm25(voice_search), c.started_at DESC, e.seq DESC LIMIT ? OFFSET ?
 		`)
-			.all(HIT_OPEN, HIT_CLOSE, expression, options.callId ?? null, options.callId ?? null, limit + 1, offset)
+			.all(
+				HIT_OPEN,
+				HIT_CLOSE,
+				expression,
+				options.callId ?? null,
+				options.callId ?? null,
+				options.excludeCallId ?? null,
+				options.excludeCallId ?? null,
+				options.startedSince ?? null,
+				options.startedSince ?? null,
+				options.startedBefore ?? null,
+				options.startedBefore ?? null,
+				limit + 1,
+				offset
+			)
 		return {
 			query,
 			hasMore: rows.length > limit,
