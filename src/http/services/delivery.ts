@@ -82,11 +82,12 @@ export function createDeliveryServices(
 		sessionId: string,
 		text: string,
 		since: DeliveryCursor,
-		budgetDeadline: number
+		budgetDeadline: number,
+		receiptProbe = () => deliveredSince(sessionId, text, since)
 	): Promise<DeliveryReceipt | null> {
 		const stopAt = Math.min(Date.now() + CONFIRM_WINDOW_MS, budgetDeadline)
 		for (;;) {
-			const receipt = deliveredSince(sessionId, text, since)
+			const receipt = receiptProbe()
 			if (receipt) return receipt
 			if (Date.now() >= stopAt) return null
 			await sleep(300)
@@ -224,7 +225,8 @@ export function createDeliveryServices(
 		text: string,
 		budgetMs = SEND_BUDGET_MS,
 		queue = false,
-		cursor?: DeliveryCursor
+		cursor?: DeliveryCursor,
+		receiptProbe?: () => DeliveryReceipt | null
 	): Promise<SendResult & { attempts: number } & ({ ok: true; receipt: DeliveryReceipt } | { ok: false })> {
 		const located = locateChat(ws, sessionId)
 		if ('error' in located) return { ok: false, strategy: actuator.name, attempts: 0, error: located.error }
@@ -232,6 +234,7 @@ export function createDeliveryServices(
 		// *this* prompt arrive since we started", so a retry can't be fooled by an older
 		// identical prompt moving from the outbox into a new transcript row.
 		const before = cursor ?? reads.deliveryCursor(sessionId)
+		const probe = receiptProbe ?? (() => deliveredSince(sessionId, text, before))
 		const label = ws.branch ?? ws.id
 		const deadline = Date.now() + budgetMs
 		let attempts = 0
@@ -239,7 +242,7 @@ export function createDeliveryServices(
 		for (;;) {
 			// A persisted delegation cursor can already have a receipt after a restart
 			// or a late acceptance. Recover it before touching the composer again.
-			const existing = deliveredSince(sessionId, text, before)
+			const existing = probe()
 			if (existing) return { ok: true, strategy: last.strategy, attempts, receipt: existing }
 			attempts++
 			// The run gets the deadline, not a duration: `uiTurn` may hold it behind another
@@ -255,8 +258,8 @@ export function createDeliveryServices(
 			// an *earlier* attempt's row can be arriving, and typing again over that is the
 			// duplicate this whole path exists to avoid.
 			const landed = sendNeverStarted(last.error)
-				? deliveredSince(sessionId, text, before)
-				: await confirmDelivery(sessionId, text, before, deadline)
+				? probe()
+				: await confirmDelivery(sessionId, text, before, deadline, probe)
 			if (landed) {
 				if (attempts > 1) console.info(`[relay] send to ${label} landed on attempt ${attempts}`)
 				return { ok: true, strategy: last.strategy, attempts, receipt: landed }
@@ -275,7 +278,7 @@ export function createDeliveryServices(
 		}
 		const tried = attempts > 1 ? ` (tried ${attempts}×)` : ''
 		const error = last.ok
-			? `Send didn’t land in the chat — Conductor may have been asleep or unfocused${tried}. Try again.`
+			? `Could not confirm the sent message in Conductor${tried}. Check the chat before trying again.`
 			: `${last.error}${tried}`
 		console.warn(`[relay] send to ${label} failed after ${attempts} attempt(s): ${error}`)
 		return { ok: false, strategy: last.strategy, attempts, error }

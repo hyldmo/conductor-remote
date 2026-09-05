@@ -43,6 +43,7 @@ const ERROR_CODES = new Set<DelegationError['code']>([
 	'opening_failed',
 	'configuration_failed',
 	'send_failed',
+	'delivery_altered',
 	'completion_failed',
 	'return_failed'
 ])

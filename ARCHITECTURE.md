@@ -343,6 +343,16 @@ poll-only behavior. Opening/configuration still have at-least-once restart seman
 managed jobs keep the coordinator's stronger effect reconciliation and phase Batons.
 Returns already queued before an upgrade retain their exact saved text for receipt matching.
 
+Ordinary delivery also correlates by the handoff/report attachment's unique, percent-encoded
+path. That ASCII reference survives the observed Conductor socket corruption (`→` becoming
+`��`) and works with already-persisted assignments. Correlation stops retries and saves the
+accepted message id; it does not establish text integrity. The raw text for that exact id
+is checked before advancing, including after outbox promotion. A mismatch stays visible as
+`delivery_altered`, identifies the chat/message, and prevents automatic resends. Failed
+`send_failed`/`return_failed` jobs are reconciled read-only on queue wakes: a late receipt
+resumes observation and integrity checking, while an absent receipt leaves the failure intact.
+Workflow capability comparisons and uncorrelated sends retain exact raw-text matching.
+
 Role validation and the role editor share `currentModelCatalog`: each provider's labels
 come from the newest complete menu containing that provider. The observing chat's harness
 does not own every row. A menu for one provider cannot invalidate another provider's labels, while

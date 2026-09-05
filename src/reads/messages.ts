@@ -329,6 +329,18 @@ export class MessageReads {
 		return accepted ? { kind: 'outbox', id: accepted.message_id } : durableReceipt()
 	}
 
+	/** Compare an identified delivery against raw text without exposing private envelopes. */
+	// Recheck the durable row if promotion straddles the two reads.
+	deliveryTextMatches(sessionId: string, messageId: string, text: string): boolean {
+		const target = text.trim()
+		const durable = () => this.deliveryMessageRows('id = ?', [sessionId, messageId])[0]
+		const row = durable()
+		if (row) return row.content?.trim() === target
+		const queued = this.rawOutboxRows(sessionId, messageId)[0]
+		if (queued) return this.outboxText(queued.delivery_payload)?.trim() === target
+		return durable()?.content?.trim() === target
+	}
+
 	/** Follow one accepted id as Conductor promotes it from outbox to transcript. */
 	deliveryReceiptForId(sessionId: string, messageId: string): DeliveryReceipt | null {
 		if (!this.hasMessageOutbox()) {

@@ -116,6 +116,11 @@ export interface DelegationCompletion {
 }
 
 export interface DelegationQueueDeps {
+	/** Read-only recovery of failed sends; never opens, configures, or sends to a chat. */
+	reconcile?: (job: PersistedDelegation) => {
+		stage: 'sending' | 'returning'
+		delivery: DelegationDelivery
+	} | null
 	open: (job: PersistedDelegation) => Promise<OpenDelegationResult>
 	configure: (job: PersistedDelegation) => Promise<ConfigureDelegationResult>
 	send: (job: PersistedDelegation) => Promise<SendDelegationResult>

@@ -144,6 +144,146 @@ function returningJob(f: ReturnType<typeof fixture>, returnMode: 'queue' | 'stee
 }
 
 describe('delegation delivery receipts', () => {
+	test.each([
+		'outbox',
+		'message',
+		'error',
+		'interrupted'
+	])('never resends a UTF-8-corrupted assignment accepted via %s', async mode => {
+		const f = fixture()
+		f.job.prompt = 'globals → routing.json, legacy files untouched'
+		f.send.mockImplementationOnce(async (target, text) => {
+			// Reproduce Conductor decoding a socket chunk inside the three-byte arrow.
+			const bytes = Buffer.from(JSON.stringify({ message: text }))
+			const split = bytes.indexOf(Buffer.from('→')) + 2
+			const corrupted = JSON.parse(bytes.subarray(0, split).toString() + bytes.subarray(split).toString()).message
+			expect(corrupted).toBe(text.replace('→', '��'))
+			f.accept('corrupted', target.sessionId as string, corrupted)
+			if (mode === 'message') f.promote('corrupted')
+			if (mode === 'interrupted') throw new Error('interrupted after acceptance')
+			return { ok: mode !== 'error', strategy: 'test', ...(mode === 'error' ? { error: 'timed out' } : {}) }
+		})
+		const queue = f.createQueue()
+		queue.enqueue(f.store, f.job)
+		await queue.wake()
+		vi.setSystemTime(Date.now() + 10_000)
+		const resumed = f.createQueue()
+		resumed.resume([f.store])
+		await resumed.wake()
+		expect(f.store.get(f.job.id)).toMatchObject({
+			status: 'failed',
+			sendDelivery: { messageId: 'corrupted' },
+			failure: {
+				code: 'delivery_altered',
+				retryable: false,
+				message: expect.stringContaining('not be resent automatically')
+			}
+		})
+		await resumed.wake()
+		expect(f.send).toHaveBeenCalledTimes(1)
+	})
+
+	test('checks integrity again when an accepted outbox id is promoted', async () => {
+		const f = fixture()
+		const queue = f.createQueue()
+		queue.enqueue(f.store, f.job)
+		await queue.wake()
+		f.promote('sent-1')
+		f.db.prepare("UPDATE session_messages SET content = content || 'changed' WHERE id = 'sent-1'").run()
+		await queue.wake()
+		expect(f.store.get(f.job.id)?.failure?.code).toBe('delivery_altered')
+		expect(f.send).toHaveBeenCalledTimes(1)
+	})
+
+	test.each([false, true])('reconciles a late receipt after terminal send failure (altered=%s)', async altered => {
+		const f = fixture()
+		const queue = f.createQueue()
+		f.store.put({
+			...f.job,
+			status: 'failed',
+			attempts: 3,
+			sendDelivery: { rowid: 0, outboxIds: [] },
+			failure: { code: 'send_failed', message: 'No matching receipt', retryable: true }
+		})
+		queue.resume([f.store])
+		await queue.wake()
+		expect(f.store.get(f.job.id)?.status).toBe('failed')
+		f.accept('late-receipt', f.child.id, delegatedPrompt(f.job) + (altered ? 'changed' : ''))
+		f.promote('late-receipt')
+		await queue.wake()
+		expect(f.store.get(f.job.id)).toMatchObject(
+			altered
+				? { status: 'failed', failure: { code: 'delivery_altered' }, sendDelivery: { messageId: 'late-receipt' } }
+				: { status: 'running', sentRowid: 1 }
+		)
+		expect(f.send).not.toHaveBeenCalled()
+	})
+
+	test('does not adopt an older corrupted message promoted from the baseline outbox', async () => {
+		const f = fixture()
+		f.accept('older-corrupted', f.child.id, `${delegatedPrompt(f.job)}changed`)
+		f.send.mockImplementationOnce(async (target, text) => {
+			f.promote('older-corrupted')
+			f.accept('new', target.sessionId as string, text)
+			f.promote('new')
+			return { ok: true, strategy: 'test' }
+		})
+		const queue = f.createQueue()
+		queue.enqueue(f.store, f.job)
+		await queue.wake()
+		expect(f.store.get(f.job.id)).toMatchObject({ status: 'running', sentRowid: 2 })
+		expect(f.send).toHaveBeenCalledTimes(1)
+	})
+
+	test.each([false, true])('reconciles a failed return without sending again (altered=%s)', async altered => {
+		const f = fixture()
+		const job = returningJob(f, 'queue')
+		const text = `Report: ${job.handoff!.token}`
+		f.store.put({
+			...job,
+			status: 'failed',
+			attempts: 3,
+			returnText: text,
+			returnAttachment: job.handoff,
+			returnCursor: 0,
+			returnDelivery: { rowid: 0, outboxIds: [] },
+			failure: { code: 'return_failed', message: 'No matching receipt', retryable: true }
+		})
+		f.accept('late-return', job.parentSessionId, text + (altered ? 'changed' : ''))
+		f.promote('late-return')
+		const queue = f.createQueue()
+		queue.resume([f.store])
+		await queue.wake()
+		if (altered) {
+			expect(f.store.get(job.id)).toMatchObject({
+				status: 'failed',
+				failure: { code: 'delivery_altered' },
+				returnDelivery: { messageId: 'late-return' }
+			})
+		} else {
+			expect(f.store.get(job.id)).toBeNull()
+		}
+		expect(f.send).not.toHaveBeenCalled()
+	})
+
+	test.each(['steer', 'queue'] as const)('never resends a changed %s completion notice', async mode => {
+		const f = fixture()
+		f.send.mockImplementationOnce(async (target, text) => {
+			f.accept('changed-return', target.sessionId as string, `${text}changed`)
+			return { ok: false, strategy: 'test', error: 'timed out after acceptance' }
+		})
+		const queue = f.createQueue()
+		queue.enqueue(f.store, returningJob(f, mode))
+		await queue.wake()
+		expect(f.store.get(f.job.id)).toMatchObject({
+			status: 'failed',
+			returnDelivery: { messageId: 'changed-return' },
+			failure: { code: 'delivery_altered', retryable: false }
+		})
+		await queue.wake()
+		expect(f.send).toHaveBeenCalledTimes(1)
+	})
+
 	test('keeps an accepted child prompt pending across retries and restart until that id is dispatched', async () => {
 		const f = fixture()
 		const queue = f.createQueue()
