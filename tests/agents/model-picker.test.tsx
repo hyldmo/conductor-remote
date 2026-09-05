@@ -15,7 +15,7 @@ describe('model picker default', () => {
 			/>
 		)
 		expect(html.indexOf('>Auto</span>')).toBeLessThan(html.indexOf('>5.6 Luna</span>'))
-		expect(html).toContain('aria-label="Auto model settings"')
+		expect(html).toContain('aria-label="Open agents and Auto routing settings"')
 		const ordinary = renderToStaticMarkup(<ModelPicker open models={['5.6 Luna']} onSelect={vi.fn()} />)
 		expect(ordinary).not.toContain('>Auto</span>')
 	})

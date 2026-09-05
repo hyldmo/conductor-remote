@@ -21,6 +21,7 @@
  * The one exception is `src/shared.ts`, which is stdlib-free on purpose.
  */
 
+import type { AutoModelTuple } from './agents/auto-model/types.ts'
 import type { DefaultEfforts } from './agents/conductor-settings.ts'
 import type { CachedModelGroup } from './agents/model-cache.ts'
 import type { FirstPrompt } from './delivery/firstprompt.ts'
@@ -117,10 +118,42 @@ export interface ResolvedDelegatedRole extends DelegatedRole {
 	agentType: string
 }
 
-/** The versioned document persisted at `stateDir()/roles.json`. */
+/** Compatibility view of the canonical Markdown agent definitions. */
 export interface RolesConfig {
 	version: 1
 	roles: Record<string, DelegatedRole>
+}
+
+/** One `stateDir()/agents/<name>.md` file; unknown frontmatter stays on disk. */
+export interface AgentDefinition {
+	name: string
+	description?: string
+	model: string
+	effort?: AgentEffort
+	fast?: boolean
+	routing?: boolean
+	/** Verbatim Markdown body, applied only to delegation. */
+	preamble?: string
+}
+
+export interface AgentsConfig {
+	version: 1
+	agents: AgentDefinition[]
+}
+
+/** Routing globals in routing.json; profiles are derived from agent files. */
+export interface RoutingConfig {
+	version: 1
+	defaultAuto: boolean
+	router: AutoModelTuple
+	fallback: string
+	rules: string
+	timeoutMs: number
+}
+
+export interface RoutingConfigResponse {
+	config: RoutingConfig
+	issues: string[]
 }
 
 export type DelegationReturnMode = 'queue' | 'steer'
@@ -416,6 +449,46 @@ export interface RolesResponse extends RolesConfig {
 export type UpdateRolesResult =
 	| { ok: true; config: RolesConfig }
 	| { ok: false; error: DelegationError; issues?: Array<{ role: string; error: DelegationError }> }
+
+export interface AgentsResponse extends AgentsConfig {
+	issues: Array<{ agent: string; error: DelegationError }>
+	warning?: string
+}
+
+export type UpdateAgentsResult =
+	| { ok: true; config: AgentsResponse }
+	| { ok: false; error: DelegationError; issues?: Array<{ agent: string; error: DelegationError }> }
+
+/** User-scoped ~/.claude/agents imports; filenames, not opaque name: lines, are identity. */
+export interface AgentImportCandidate {
+	name: string
+	description?: string
+	/** Original scalar, which may be a native alias absent from the picker catalog. */
+	model: string
+	hasBody: boolean
+	collision: boolean
+}
+
+export interface AgentImportScanResponse {
+	candidates: AgentImportCandidate[]
+	skipped: Array<{ name: string; reason: string }>
+	truncated: boolean
+	limit: number
+}
+
+export interface ImportAgentsRequest {
+	names: string[]
+	overwrite?: boolean
+}
+
+export type AgentImportOutcome =
+	| { name: string; ok: true; overwritten: boolean }
+	| { name: string; ok: false; error: string }
+
+export interface ImportAgentsResult {
+	results: AgentImportOutcome[]
+	config: AgentsResponse
+}
 
 export interface DelegationsResponse {
 	delegations: DelegationProjection[]

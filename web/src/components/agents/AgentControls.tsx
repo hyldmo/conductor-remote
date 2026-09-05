@@ -6,9 +6,7 @@ import { cn } from '../../lib/cn.ts'
 import { EffortBars, ProviderMark } from './AgentIcons.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 
-const AutoModelSettings = lazy(() =>
-	import('./AutoModelSettings.tsx').then(module => ({ default: module.AutoModelSettings }))
-)
+const AgentsSettings = lazy(() => import('./AgentsSettings.tsx').then(module => ({ default: module.AgentsSettings })))
 
 /**
  * The compact agent-control row shared by an existing chat and the first-message
@@ -92,7 +90,7 @@ export function AgentControls({
 		<div className="min-w-0 flex-1">
 			{autoSettings ? (
 				<Suspense fallback={null}>
-					<AutoModelSettings onClose={() => setAutoSettings(false)} />
+					<AgentsSettings initial="routing" onClose={() => setAutoSettings(false)} />
 				</Suspense>
 			) : null}
 			<div className="flex min-w-0 items-center gap-0.5">

@@ -1,10 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { client } from '../lib/api.ts'
 import type {
+	AgentsResponse,
 	ContextBreakdownResponse,
 	ModelCatalogResponse,
 	ModelDefaultsResponse,
 	RolesResponse,
+	RoutingConfigResponse,
 	Session,
 	ToolUsageRange,
 	WorkflowRoleName
@@ -26,6 +28,32 @@ export function useModelCatalog() {
 
 export function useAutoModelConfig() {
 	return useQuery({ queryKey: ['auto-model-config'], queryFn: client.autoModelConfig, staleTime: 60_000, retry: false })
+}
+
+/** Canonical agent definitions and routing globals, read without opening the Mac UI. */
+export function useAgents() {
+	return useQuery<AgentsResponse>({ queryKey: ['agents'], queryFn: client.agents, staleTime: 30_000, retry: false })
+}
+
+/** User-scoped files are scanned only while the import list is open. */
+export function useAgentImportCandidates(enabled: boolean) {
+	return useQuery({
+		queryKey: ['agent-import-candidates'],
+		queryFn: client.agentImportCandidates,
+		enabled,
+		staleTime: 0,
+		refetchOnWindowFocus: false,
+		retry: false
+	})
+}
+
+export function useRouting() {
+	return useQuery<RoutingConfigResponse>({
+		queryKey: ['routing'],
+		queryFn: client.routing,
+		staleTime: 30_000,
+		retry: false
+	})
 }
 
 /** Provider-specific defaults shown by both the Models sheet and the new-chat composer. */

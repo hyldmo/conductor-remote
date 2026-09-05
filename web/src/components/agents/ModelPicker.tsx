@@ -114,7 +114,7 @@ export function ModelPicker({
 								{onAutoSettings ? (
 									<button
 										type="button"
-										aria-label="Auto model settings"
+										aria-label="Open agents and Auto routing settings"
 										className="px-3 text-muted"
 										onClick={() => {
 											setPicking(false)

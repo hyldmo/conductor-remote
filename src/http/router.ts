@@ -3,6 +3,7 @@ import http from 'node:http'
 import { InputError } from '../contracts/validation.ts'
 import { UiBusyError, uiQueueDepth, withUiPriority } from '../writes/ui-lock.ts'
 import { NOT_HANDLED } from './router-types.ts'
+import { createAgentsRoutes } from './routes/agents.ts'
 import { createAutoModelRoutes } from './routes/auto-model.ts'
 import { createCreateWorkspaceRoutes } from './routes/create-workspace.ts'
 import { createFilesRoutes } from './routes/files.ts'
@@ -18,6 +19,7 @@ import type { RelayServices } from './services.ts'
 export function createRelayServer(services: RelayServices) {
 	const { handleMcpHttp, serveStatic, authed, json, PayloadTooLargeError, workflowHttpError } = services
 	const handlers = [
+		createAgentsRoutes(services),
 		createAutoModelRoutes(services),
 		createStateRoutes(services),
 		createWorkflowsRoutes(services),

@@ -1,8 +1,8 @@
 /**
- * Global delegated-role definitions.
+ * Delegated-role defaults, validation and resolution.
  *
- * Roles are relay preferences, not Conductor state, and therefore live beside the
- * relay's other private JSON files. The decoder is strict on purpose: silently
+ * AgentStore now owns persistence; RoleStore reads legacy JSON during migration.
+ * The decoder is strict on purpose: silently
  * ignoring a hand-written `plan` field would make a role appear safe while still
  * inviting callers to depend on Conductor's currently unreliable Plan mode.
  */
@@ -228,7 +228,7 @@ export function resolveRole(config: RolesConfig, name: string, groups: CachedMod
 	return { ok: true, role: { ...cloneRole(role), agentType } }
 }
 
-/** Cached, process-local store. A rejected write leaves both memory and disk untouched. */
+/** Legacy JSON store retained for migration. Runtime consumers use AgentStore.roles. */
 export class RoleStore {
 	private readonly file: string
 	private cache: RoleStoreRead | null = null

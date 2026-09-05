@@ -1,5 +1,4 @@
 import path from 'node:path'
-import { AutoModelConfigStore } from '../../agents/auto-model/config.ts'
 import { chooseAutoModel, routingInput } from '../../agents/auto-model/decision.ts'
 import { runRouter } from '../../agents/auto-model/provider.ts'
 import { AutoModelQueue, type AutoTarget } from '../../agents/auto-model/queue.ts'
@@ -26,7 +25,7 @@ export function createAutoModelServices(services: BaseServices & DeliveryService
 		deliverPrompt,
 		STAGED_ATTACHMENTS_DIR
 	} = services
-	const autoModelConfig = new AutoModelConfigStore(path.join(stateDir(), 'auto-model.json'))
+	const autoModelConfig = services.agentStore.autoModel
 	const received = (job: AutoModelJob) =>
 		!!(
 			job.sessionId &&

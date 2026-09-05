@@ -2,6 +2,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test, vi } from 'vitest'
 import type { DelegationProjection, Session, WorkflowRunWire } from '../../../src/wire.ts'
+import { RoleEditorCard } from '../../../web/src/components/agents/RoleEditorCard.tsx'
+import { RoleChip } from '../../../web/src/components/orchestration/RoleChip.tsx'
+import { roleAgentType, roleDraftCanSave, roleModelProblem, roleWithModel } from '../../../web/src/lib/role-editor.ts'
 
 Object.defineProperty(globalThis, 'location', { configurable: true, value: { hash: '', pathname: '/', search: '' } })
 Object.defineProperty(globalThis, 'localStorage', {
@@ -10,19 +13,13 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const [
-	{ DelegationPipeline },
-	{ AgentSubtabStrip },
-	{ UiQuarantineBanner, WorkflowWarningBanner },
-	{ QueueBubble },
-	{ RoleChip, RoleEditorCard, roleAgentType, roleDraftCanSave, roleModelProblem, roleWithModel }
-] = await Promise.all([
-	import('../../../web/src/components/orchestration/DelegationPipeline.tsx'),
-	import('../../../web/src/components/orchestration/AgentSubtabs.tsx'),
-	import('../../../web/src/components/orchestration/WorkflowWarnings.tsx'),
-	import('../../../web/src/components/transcript/QueueBubble.tsx'),
-	import('../../../web/src/components/orchestration/RolesSettings.tsx')
-])
+const [{ DelegationPipeline }, { AgentSubtabStrip }, { UiQuarantineBanner, WorkflowWarningBanner }, { QueueBubble }] =
+	await Promise.all([
+		import('../../../web/src/components/orchestration/DelegationPipeline.tsx'),
+		import('../../../web/src/components/orchestration/AgentSubtabs.tsx'),
+		import('../../../web/src/components/orchestration/WorkflowWarnings.tsx'),
+		import('../../../web/src/components/transcript/QueueBubble.tsx')
+	])
 
 const running: DelegationProjection = {
 	id: 'job-1',
