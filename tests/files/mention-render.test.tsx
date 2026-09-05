@@ -28,8 +28,8 @@ const { Markdown } = await import('../../web/src/components/transcript/Markdown.
 const { buildResolver, MentionResolverProvider } = await import('../../web/src/lib/fileMentions.ts')
 const resolve = buildResolver(WORKTREE, ['src/git.ts'])
 
-function render(markdown: string, mentions = true) {
-	const chat = <Markdown>{markdown}</Markdown>
+function render(markdown: string, mentions = true, hideTranscriptAttachments = false) {
+	const chat = <Markdown hideTranscriptAttachments={hideTranscriptAttachments}>{markdown}</Markdown>
 	return renderToStaticMarkup(
 		mentions ? (
 			<MentionResolverProvider value={{ resolveMention: resolve, worktree: WORKTREE }}>{chat}</MentionResolverProvider>
@@ -114,5 +114,24 @@ describe('an attachment in a message', () => {
 
 		expect(html).toContain(`<button type="button" title="Open image ${WORKTREE}/${path}"`)
 		expect(html).toContain('wide shot.png')
+	})
+
+	it('hides the generated transcript attachment after a compact while retaining the new prompt', () => {
+		const path = '.context/attachments/def456/Transcript of prior chat.md'
+		const html = render(
+			`@⟦Transcript of prior chat.md⟧(${encodeURIComponent(path)})\nContinue with the next step`,
+			true,
+			true
+		)
+
+		expect(html).toContain('Continue with the next step')
+		expect(html).not.toContain('Transcript of prior chat.md')
+	})
+
+	it('keeps an ordinary attachment visible when transcript attachments are hidden', () => {
+		const path = '.context/attachments/def456/diagram.png'
+		const html = render(`@⟦diagram.png⟧(${encodeURIComponent(path)})\nContinue with the next step`, true, true)
+
+		expect(html).toContain('diagram.png')
 	})
 })

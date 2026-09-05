@@ -231,7 +231,7 @@ const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
 			>
 				<Bubble className={cn('max-w-[85%] bg-accent-soft text-text', e.queued && 'opacity-60')}>
 					{e.queued ? <Label>queued</Label> : null}
-					<Markdown>{e.text}</Markdown>
+					<Markdown hideTranscriptAttachments>{e.text}</Markdown>
 				</Bubble>
 				<span className="pr-1 text-[11px] text-faint">{messageTime(e.ts)}</span>
 			</div>
