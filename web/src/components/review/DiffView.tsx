@@ -46,8 +46,8 @@ function DiffFileRow({
 		<li>
 			<button
 				type="button"
-				title={file.path}
-				aria-label={file.path}
+				title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+				aria-label={file.oldPath ? `${file.path}, renamed from ${file.oldPath}` : file.path}
 				onClick={() => onSelectFile(file.path)}
 				aria-pressed={selected}
 				className={cn(
@@ -60,6 +60,11 @@ function DiffFileRow({
 					{alignWithFolders ? <span className="size-3.5 shrink-0" aria-hidden="true" /> : null}
 					<FileIcon path={file.path} />
 					<span className={cn('truncate', selected ? 'text-text' : 'text-muted')}>{label}</span>
+					{file.oldPath ? (
+						<span className="shrink-0 text-[10px] text-accent" aria-hidden="true">
+							R
+						</span>
+					) : null}
 				</span>
 				<span className="min-w-8 text-right text-add">{file.added ? `+${file.added}` : null}</span>
 				<span className="min-w-8 text-right text-del">{file.removed ? `−${file.removed}` : null}</span>
@@ -324,7 +329,15 @@ export function DiffFileViewer({
 						) : null}
 					</span>
 				}
-				subtitle={file?.path ?? filePath}
+				subtitle={
+					file?.oldPath ? (
+						<span title={`${file.oldPath} → ${file.path}`}>
+							{file.oldPath} → {file.path}
+						</span>
+					) : (
+						(file?.path ?? filePath)
+					)
+				}
 				actions={
 					<div className="flex shrink-0 items-center gap-0.5 lg:hidden">
 						<button

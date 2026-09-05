@@ -6,7 +6,10 @@ import { isPreviewableSource } from '../shared.ts'
 const exec = promisify(execFile)
 
 export interface DiffFile {
+	/** Worktree-relative destination for a rename, otherwise the changed path. */
 	path: string
+	/** Original path when Git detects a rename or copy. */
+	oldPath?: string
 	added: number
 	removed: number
 }
@@ -70,11 +73,11 @@ async function noIndexDiff(cwd: string, file: string): Promise<string> {
 async function untrackedDiff(cwd: string): Promise<{ files: DiffFile[]; patch: string }> {
 	let listing = ''
 	try {
-		listing = await git(cwd, ['ls-files', '--others', '--exclude-standard'])
+		listing = await git(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])
 	} catch {
 		return { files: [], patch: '' }
 	}
-	const paths = listing.split('\n').filter(Boolean)
+	const paths = listing.split('\0').filter(Boolean)
 	const files: DiffFile[] = []
 	const patches: string[] = []
 	for (const p of paths) {
@@ -170,6 +173,36 @@ export async function workspaceDiffStats(worktree: string, base: string): Promis
 }
 
 /**
+ * NUL-delimited numstat keeps paths literal. Renames/copies have an empty path in
+ * the count record followed by separate old/new path records; the human format's
+ * `src/{old.ts => folder/new.ts}` is a label, never a path we can navigate to.
+ */
+async function trackedDiffFiles(worktree: string, against: string): Promise<DiffFile[]> {
+	const numstat = await git(worktree, ['diff', '--numstat', '-z', against]).catch(() => '')
+	const records = numstat.split('\0')
+	const files: DiffFile[] = []
+	for (let i = 0; i < records.length; i++) {
+		const record = records[i]
+		if (!record) continue
+		const [added, removed, ...rest] = record.split('\t')
+		const file: DiffFile = {
+			path: rest.join('\t'),
+			added: added === '-' ? 0 : Number(added),
+			removed: removed === '-' ? 0 : Number(removed)
+		}
+		if (!file.path) {
+			const oldPath = records[++i]
+			const newPath = records[++i]
+			if (!oldPath || !newPath) break
+			file.oldPath = oldPath
+			file.path = newPath
+		}
+		files.push(file)
+	}
+	return files
+}
+
+/**
  * Everything the workspace changed relative to its target branch — committed
  * plus uncommitted — which is what a reviewer wants to see. Computed straight
  * from the worktree, so it's independent of Conductor entirely.
@@ -177,18 +210,7 @@ export async function workspaceDiffStats(worktree: string, base: string): Promis
 export async function workspaceDiff(worktree: string, base: string): Promise<WorkspaceDiff> {
 	const { ref, mergeBase, against } = await diffBasis(worktree, base)
 
-	const numstat = await git(worktree, ['diff', '--numstat', against]).catch(() => '')
-	const files: DiffFile[] = numstat
-		.split('\n')
-		.filter(Boolean)
-		.map(line => {
-			const [added, removed, ...rest] = line.split('\t')
-			return {
-				path: rest.join('\t'),
-				added: added === '-' ? 0 : Number(added),
-				removed: removed === '-' ? 0 : Number(removed)
-			}
-		})
+	const files = await trackedDiffFiles(worktree, against)
 
 	const trackedPatch = await git(worktree, ['diff', against]).catch(() => '')
 	const untracked = await untrackedDiff(worktree)
@@ -221,8 +243,14 @@ export async function workspaceFileDiff(
 	const { against } = await diffBasis(worktree, base)
 	// A literal pathspec prevents a filename beginning with `:` from becoming Git pathspec syntax.
 	const literalPathspec = `:(literal)${relative}`
-	const tracked = await git(worktree, ['diff', '--no-color', against, '--', literalPathspec]).catch(() => '')
-	if (tracked) return { path: relative, patch: tracked }
+	const file = (await trackedDiffFiles(worktree, against)).find(file => file.path === relative)
+	if (file) {
+		// Filtering to only the destination hides the source from rename detection and
+		// turns even a pure move into a full-file addition. Keep both sides in the diff.
+		const pathspecs = file.oldPath ? [`:(literal)${file.oldPath}`, literalPathspec] : [literalPathspec]
+		const tracked = await git(worktree, ['diff', '--no-color', against, '--', ...pathspecs]).catch(() => '')
+		return tracked ? { path: relative, patch: tracked } : null
+	}
 
 	// `git diff <base>` omits untracked files. Only synthesize a patch when Git says this
 	// exact path is untracked and not ignored; never let the request name an arbitrary file.

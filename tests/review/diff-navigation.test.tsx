@@ -168,6 +168,72 @@ describe('diff file navigation', () => {
 		expect(html).toContain('>src/file10.ts<')
 	})
 
+	it.each(['changed', 'all'] as const)('shows a rename at its destination in the %s file list', scope => {
+		const renamed: DiffFile = {
+			path: 'src/search/coordinator.ts',
+			oldPath: 'src/search.ts',
+			added: 0,
+			removed: 0
+		}
+		const scoped = filesForScope(scope, [renamed], [renamed.path])
+		for (const showFolders of [true, false]) {
+			const html = renderToStaticMarkup(
+				<DiffFileList
+					files={scoped}
+					scope={scope}
+					showFolders={showFolders}
+					selectedFile={renamed.path}
+					onSelectFile={vi.fn()}
+				/>
+			)
+			expect(html).toContain('aria-label="src/search/coordinator.ts, renamed from src/search.ts"')
+			expect(html).toContain('title="src/search.ts → src/search/coordinator.ts"')
+			expect(html).toContain('aria-pressed="true"')
+			expect(html).toContain('>R<')
+			if (showFolders) {
+				expect(html).toContain('aria-label="Collapse src/search, 1 file"')
+				expect(html).toContain('>coordinator.ts<')
+			} else {
+				expect(html).toContain('>src/search/coordinator.ts<')
+			}
+		}
+	})
+
+	it.each([false, true])('opens a pure rename with both paths (aggregate truncated: %s)', truncated => {
+		const renamed: DiffFile = { path: 'new.ts', oldPath: 'old.ts', added: 0, removed: 0 }
+		const renamePatch = [
+			'diff --git a/old.ts b/new.ts',
+			'similarity index 100%',
+			'rename from old.ts',
+			'rename to new.ts'
+		].join('\n')
+		const renameReview = {
+			...review,
+			query: {
+				...review.query,
+				data: { ...diff, files: [renamed], patch: truncated ? '' : renamePatch, truncated }
+			},
+			fileQuery: { ...review.fileQuery, data: { path: renamed.path, patch: renamePatch } }
+		}
+		const html = renderToStaticMarkup(
+			<QueryClientProvider client={new QueryClient()}>
+				<DiffFileViewer
+					review={renameReview}
+					filePath={renamed.path}
+					scope="changed"
+					showFolders
+					onSelectFile={vi.fn()}
+					onShowFiles={vi.fn()}
+					onClose={vi.fn()}
+				/>
+			</QueryClientProvider>
+		)
+		expect(html).toContain('title="old.ts → new.ts"')
+		expect(html).toContain('rename from old.ts')
+		expect(html).toContain('rename to new.ts')
+		expect(html).not.toContain('No textual patch')
+	})
+
 	it('splits a workspace patch into independently viewable files', () => {
 		const sections = splitWorkspacePatch(patch)
 
