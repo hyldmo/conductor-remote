@@ -7,6 +7,7 @@ import type { VoiceDiagnosticEvent } from '../../../src/voice/diagnostic-fields.
 import type { VoicePreview } from '../../../src/voice/preview.ts'
 import { getToken } from './auth-token.ts'
 import type {
+	AgentImportScanResponse,
 	AgentPatch,
 	AgentResult,
 	AgentsConfig,
@@ -30,6 +31,8 @@ import type {
 	DevServerState,
 	DismissDelegationResult,
 	FilePreviewResponse,
+	ImportAgentsRequest,
+	ImportAgentsResult,
 	LogsResponse,
 	MergeResult,
 	MessagesResponse,
@@ -233,6 +236,12 @@ function cachedObjectUrl(path: string): Promise<string> {
 
 export const client = {
 	agents: () => api<AgentsResponse>(routes.agents.path()),
+	agentImportCandidates: () => api<AgentImportScanResponse>(routes.agentImportCandidates.path()),
+	importAgents: (request: ImportAgentsRequest) =>
+		api<ImportAgentsResult>(routes.importAgents.path(), {
+			method: routes.importAgents.method,
+			body: JSON.stringify(request)
+		}),
 	updateAgents: (config: AgentsConfig) =>
 		api<UpdateAgentsResult>(routes.updateAgents.path(), {
 			method: routes.updateAgents.method,

@@ -129,6 +129,8 @@ export const routes = {
 	/** Canonical Markdown definitions and routing globals. */
 	agents: flat('GET', '/api/agents'),
 	updateAgents: flat('PATCH', '/api/agents'),
+	agentImportCandidates: flat('GET', '/api/agents/import'),
+	importAgents: flat('POST', '/api/agents/import'),
 	routing: flat('GET', '/api/routing'),
 	updateRouting: flat('PATCH', '/api/routing'),
 	/** Compatibility views for cached PWAs and MCP. */

@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from '../config.ts'
-import type { AgentDefinition, AgentsConfig, RolesConfig, RoutingConfig } from '../wire.ts'
+import type { AgentDefinition, AgentImportOutcome, AgentsConfig, RolesConfig, RoutingConfig } from '../wire.ts'
 import {
 	type AgentFile,
 	decodeAgent,
@@ -141,6 +141,48 @@ export class AgentStore {
 	readRoles(): RoleStoreRead {
 		const { agents, warning } = this.read()
 		return { config: agentsRoles(agents), ...(warning ? { warning } : {}) }
+	}
+
+	/** Include unreadable files: neither collision checks nor the cap may silently omit them. */
+	names(): string[] {
+		return this.inspect().names.map(filename => filename.slice(0, -3))
+	}
+
+	/** Import validated bytes directly; serializing would change foreign frontmatter. */
+	importFile(name: string, bytes: Buffer, overwrite = false): AgentImportOutcome {
+		let temporary: string | undefined
+		try {
+			if (!isUtf8(bytes)) throw new Error('agent definitions must be valid UTF-8')
+			const parsed = parseAgentFile(bytes.toString('utf8'))
+			decodeAgent({ name, ...parsed.fields, preamble: parsed.body })
+			const names = this.names()
+			const exists = names.includes(name)
+			if (exists && !overwrite)
+				throw new Error('An agent with this name already exists. Enable overwrite to replace it.')
+			if (!exists && names.length >= MAX_AGENTS) throw new Error(`Keep at most ${MAX_AGENTS} agents.`)
+			const file = path.join(this.directory, `${name}.md`)
+			if (exists && !fs.lstatSync(file).isFile()) throw new Error('The existing agent must be a regular file.')
+			temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`
+			fs.writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' })
+			if (exists) fs.renameSync(temporary, file)
+			else {
+				// Atomic no-clobber publication, including a file created after the collision check.
+				try {
+					fs.linkSync(temporary, file)
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+						throw new Error('An agent with this name appeared during import. Refresh and try again.')
+					throw error
+				}
+			}
+			return { name, ok: true, overwritten: exists }
+		} catch (error) {
+			return { name, ok: false, error: message(error) }
+		} finally {
+			this.cache = undefined
+			this.cacheStamp = undefined
+			if (temporary) fs.rmSync(temporary, { force: true })
+		}
 	}
 
 	private editable(): Snapshot {

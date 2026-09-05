@@ -5,13 +5,21 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { MAX_IMPORT_BYTES, MAX_IMPORT_FILES } from '../../src/agents/agent-import.ts'
 import { AgentStore } from '../../src/agents/agent-store.ts'
 import { DEFAULT_AUTO_MODEL_CONFIG } from '../../src/agents/auto-model/config.ts'
 import { routingGlobals } from '../../src/agents/routing.ts'
 import { createRelayServer } from '../../src/http/router.ts'
 import { createResponsesServices } from '../../src/http/services/responses.ts'
 import type { RelayServices } from '../../src/http/services.ts'
-import type { AgentDefinition, AgentsResponse, RolesResponse, UpdateAgentsResult } from '../../src/wire.ts'
+import type {
+	AgentDefinition,
+	AgentImportScanResponse,
+	AgentsResponse,
+	ImportAgentsResult,
+	RolesResponse,
+	UpdateAgentsResult
+} from '../../src/wire.ts'
 
 const servers: Server[] = []
 const directories: string[] = []
@@ -231,5 +239,209 @@ describe('agent and routing HTTP contracts', () => {
 		expect(f.store.routing.read()).toEqual(config)
 		fs.unlinkSync(f.file('helper'))
 		expect((await (await f.request('/api/routing')).json()).issues).toContain('Choose an existing fallback profile.')
+	})
+})
+
+async function importFixture() {
+	const f = await fixture()
+	const home = path.join(f.root, 'home')
+	const source = path.join(home, '.claude', 'agents')
+	fs.mkdirSync(source, { recursive: true })
+	vi.spyOn(os, 'homedir').mockReturnValue(home)
+	const candidate = (name: string, bytes = '---\nmodel: haiku\ndescription: Imported work.\n---\nInstructions.\n') => {
+		const file = path.join(source, `${name}.md`)
+		fs.writeFileSync(file, bytes)
+		return file
+	}
+	const scan = async (): Promise<AgentImportScanResponse> => {
+		const response = await f.request('/api/agents/import')
+		expect(response.status).toBe(200)
+		return response.json()
+	}
+	const importNames = async (names: string[], overwrite?: boolean): Promise<ImportAgentsResult> => {
+		const response = await f.request('/api/agents/import', 'POST', { names, overwrite })
+		expect(response.status).toBe(200)
+		return response.json()
+	}
+	return { ...f, home, source, candidate, scan, importNames }
+}
+
+describe('user-scoped Claude agent import HTTP contracts', () => {
+	test('authenticates both import routes before inspecting or copying files', async () => {
+		const f = await importFixture()
+		const names = vi.spyOn(f.store, 'names')
+		const copy = vi.spyOn(f.store, 'importFile')
+		for (const method of ['GET', 'POST'])
+			expect((await f.request('/api/agents/import', method, undefined, false)).status).toBe(401)
+		expect(names).not.toHaveBeenCalled()
+		expect(copy).not.toHaveBeenCalled()
+	})
+
+	test('treats a missing directory as empty without scanning repositories', async () => {
+		const f = await importFixture()
+		fs.rmSync(f.source, { recursive: true })
+		const repoAgents = path.join(f.home, 'repo', '.claude', 'agents')
+		fs.mkdirSync(repoAgents, { recursive: true })
+		fs.writeFileSync(path.join(repoAgents, 'ignored.md'), '---\nmodel: haiku\n---\n')
+		expect(await f.scan()).toEqual({ candidates: [], skipped: [], truncated: false, limit: MAX_IMPORT_FILES })
+		expect((await f.importNames(['ignored'])).results).toMatchObject([{ name: 'ignored', ok: false }])
+	})
+
+	test('previews filename identities, raw model scalars, bodies, collisions and rejected definitions', async () => {
+		const f = await importFixture()
+		f.candidate('good', '---\nname: opaque-other-name\nmodel: " haiku "\ndescription: Quick work.\n---\nBody\n')
+		f.candidate('helper', '---\nmodel: sonnet\n---\n \n')
+		f.candidate('bad', '---\nmodel: haiku\ndescription: >\n  Multiline\n---\n')
+		f.candidate('missing', '---\ndescription: No model\n---\n')
+		f.candidate('Upper')
+		fs.writeFileSync(path.join(f.source, 'utf8.md'), Buffer.from([0xff]))
+		fs.writeFileSync(path.join(f.source, 'ignored.txt'), 'Ignored')
+		const scan = await f.scan()
+		expect(scan.candidates).toEqual([
+			{ name: 'good', description: 'Quick work.', model: ' haiku ', hasBody: true, collision: false },
+			{ name: 'helper', model: 'sonnet', hasBody: false, collision: true }
+		])
+		expect(scan.skipped.map(entry => entry.name)).toEqual(['Upper', 'bad', 'missing', 'utf8'])
+		expect(scan.skipped.find(entry => entry.name === 'bad')?.reason).toContain('flat scalar')
+		expect(scan.skipped.find(entry => entry.name === 'missing')?.reason).toContain('model')
+		expect(scan.skipped.find(entry => entry.name === 'utf8')?.reason).toContain('UTF-8')
+		expect(scan.truncated).toBe(false)
+	})
+
+	test('skips symlinks, directories and oversized files and never imports their contents', async () => {
+		const f = await importFixture()
+		const outside = path.join(f.root, 'outside.md')
+		fs.writeFileSync(outside, '---\nmodel: haiku\n---\n')
+		fs.symlinkSync(outside, path.join(f.source, 'escape.md'))
+		fs.symlinkSync(f.candidate('good'), path.join(f.source, 'link.md'))
+		fs.mkdirSync(path.join(f.source, 'directory.md'))
+		fs.writeFileSync(path.join(f.source, 'huge.md'), Buffer.alloc(MAX_IMPORT_BYTES + 1, 'a'))
+		const scan = await f.scan()
+		expect(scan.candidates.map(candidate => candidate.name)).toEqual(['good'])
+		expect(scan.skipped.map(entry => entry.name)).toEqual(['directory', 'escape', 'huge', 'link'])
+		expect(scan.skipped.find(entry => entry.name === 'escape')?.reason).toContain('outside')
+		expect(scan.skipped.find(entry => entry.name === 'huge')?.reason).toContain('256 KiB')
+		const result = await f.importNames(['escape', 'link', 'directory', 'huge', '../outside'])
+		expect(result.results.every(outcome => !outcome.ok)).toBe(true)
+		expect(result.config.agents).toHaveLength(2)
+	})
+
+	test('copies bytes exactly, preserves foreign name/tools/color lines and reports native model issues', async () => {
+		const f = await importFixture()
+		const source = Buffer.from(
+			'---\r\n# Keep this comment\r\nname: other-identity\r\ntools:\r\n  - Read\r\n  - Bash\r\ncolor: purple\r\nmodel: haiku\r\ndescription: Quick work.\r\n---\r\n\r\n# Body ☃\r\nNo final newline'
+		)
+		fs.writeFileSync(path.join(f.source, 'imported.md'), source)
+		const result = await f.importNames(['imported'])
+		expect(result.results).toEqual([{ name: 'imported', ok: true, overwritten: false }])
+		expect(fs.readFileSync(f.file('imported'))).toEqual(source)
+		expect(fs.readFileSync(path.join(f.source, 'imported.md'))).toEqual(source)
+		expect(fs.statSync(f.file('imported')).mode & 0o777).toBe(0o600)
+		expect(result.config.agents.find(agent => agent.name === 'imported')).toMatchObject({
+			model: 'haiku',
+			description: 'Quick work.'
+		})
+		expect(result.config.issues).toMatchObject([{ agent: 'imported', error: { code: 'model_missing' } }])
+		expect(result.config.warning).toBeUndefined()
+		expect(result.config).toEqual(await (await f.request('/api/agents')).json())
+	})
+
+	test('refuses collisions individually and overwrites only with an explicit true option', async () => {
+		const f = await importFixture()
+		const original = fs.readFileSync(f.file('helper'))
+		f.candidate('helper')
+		f.candidate('fresh')
+		const result = await f.importNames(['helper', 'fresh'])
+		expect(result.results).toEqual([
+			{ name: 'helper', ok: false, error: expect.stringContaining('overwrite') },
+			{ name: 'fresh', ok: true, overwritten: false }
+		])
+		expect(fs.readFileSync(f.file('helper'))).toEqual(original)
+		expect((await f.importNames(['helper'], false)).results[0].ok).toBe(false)
+		expect((await f.importNames(['helper'], true)).results).toEqual([{ name: 'helper', ok: true, overwritten: true }])
+		expect(fs.readFileSync(f.file('helper'))).toEqual(fs.readFileSync(path.join(f.source, 'helper.md')))
+		expect(fs.readFileSync(f.file('extra'), 'utf8')).toContain('Simple work.')
+	})
+
+	test('counts unreadable canonical files as collisions and can repair one by explicit overwrite', async () => {
+		const f = await importFixture()
+		fs.writeFileSync(f.file('broken'), 'Malformed canonical file')
+		f.candidate('broken')
+		expect((await f.scan()).candidates[0].collision).toBe(true)
+		expect((await f.importNames(['broken'])).results[0].ok).toBe(false)
+		expect((await f.importNames(['broken'], true)).config.warning).toBeUndefined()
+		fs.symlinkSync(f.file('helper'), f.file('linked'))
+		f.candidate('linked')
+		expect((await f.importNames(['linked'], true)).results).toMatchObject([
+			{ ok: false, error: expect.stringContaining('regular file') }
+		])
+		expect(fs.readFileSync(f.file('helper'), 'utf8')).toContain('5.6 Sol')
+	})
+
+	test('caps the canonical roster at 32, including undecodable files, while permitting replacements', async () => {
+		const f = await importFixture()
+		const agents = Array.from({ length: 31 }, (_, index) => ({ name: `agent-${index}`, model: '5.6 Sol' }))
+		expect(f.store.write({ version: 1, agents }).ok).toBe(true)
+		f.candidate('first')
+		f.candidate('second')
+		fs.writeFileSync(f.file('bad'), 'Bad canonical file')
+		expect((await f.importNames(['first'])).results).toMatchObject([
+			{ ok: false, error: expect.stringContaining('32') }
+		])
+		fs.unlinkSync(f.file('bad'))
+		const result = await f.importNames(['first', 'second'])
+		expect(result.results).toEqual([
+			{ name: 'first', ok: true, overwritten: false },
+			{ name: 'second', ok: false, error: expect.stringContaining('32') }
+		])
+		expect(result.config.agents).toHaveLength(32)
+		f.candidate('first', '---\nmodel: sonnet\n---\nUpdated')
+		expect((await f.importNames(['first'], true)).results[0].ok).toBe(true)
+		expect(f.store.names()).toHaveLength(32)
+	})
+
+	test('bounds the scan and refuses ambiguous duplicate requests without copying either occurrence', async () => {
+		const f = await importFixture()
+		for (let index = 0; index <= MAX_IMPORT_FILES; index++) f.candidate(`agent-${String(index).padStart(2, '0')}`)
+		const scan = await f.scan()
+		expect(scan.candidates).toHaveLength(MAX_IMPORT_FILES)
+		expect(scan.truncated).toBe(true)
+		const result = await f.importNames(['agent-00', 'agent-00', 'agent-01', 'agent-64'])
+		expect(result.results.map(outcome => outcome.ok)).toEqual([false, false, true, false])
+		expect(result.results[0]).toMatchObject({ error: expect.stringContaining('more than once') })
+		expect(fs.existsSync(f.file('agent-00'))).toBe(false)
+		expect(fs.existsSync(f.file('agent-64'))).toBe(false)
+	})
+
+	test('rechecks source contents and canonical collisions at import time', async () => {
+		const f = await importFixture()
+		f.candidate('changed')
+		f.candidate('collision')
+		expect((await f.scan()).candidates).toHaveLength(2)
+		f.candidate('changed', '---\nmodel: haiku\nfast: maybe\n---\n')
+		fs.writeFileSync(f.file('collision'), '---\nmodel: 5.6 Sol\n---\nCreated after preview')
+		const result = await f.importNames(['changed', 'collision'])
+		expect(result.results).toMatchObject([
+			{ ok: false, error: expect.stringContaining('true or false') },
+			{ ok: false, error: expect.stringContaining('already exists') }
+		])
+		expect(fs.existsSync(f.file('changed'))).toBe(false)
+		expect(fs.readFileSync(f.file('collision'), 'utf8')).toContain('Created after preview')
+	})
+
+	test('validates the whole request before any writes', async () => {
+		const f = await importFixture()
+		f.candidate('good')
+		const copy = vi.spyOn(f.store, 'importFile')
+		for (const body of [
+			'{bad',
+			{},
+			{ names: [] },
+			{ names: ['good'], overwrite: 'true' },
+			{ names: ['good'], directory: '/tmp' },
+			{ names: Array(65).fill('good') }
+		])
+			expect((await f.request('/api/agents/import', 'POST', body)).status).toBe(400)
+		expect(copy).not.toHaveBeenCalled()
 	})
 })

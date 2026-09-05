@@ -4,10 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { currentModelCatalog } from '../../../../src/shared.ts'
 import { useAgents, useModelCatalog, useRouting } from '../../hooks/agents.ts'
+import { importAgentDefinitions, mergeImportedAgents } from '../../lib/agent-import.ts'
 import {
 	agentRoutingLock,
 	copyAgents,
 	isRoutableAgent,
+	MAX_AGENTS,
 	newAgentProblem,
 	normalizeAgentName,
 	routerModelProblem,
@@ -15,10 +17,17 @@ import {
 	saveAgentsSettings
 } from '../../lib/agents-settings.ts'
 import { roleAgentType, roleDraftCanSave, roleModelProblem } from '../../lib/role-editor.ts'
-import type { AgentDefinition, AgentsConfig, AgentsResponse, RoutingConfig } from '../../lib/types.ts'
+import type {
+	AgentDefinition,
+	AgentsConfig,
+	AgentsResponse,
+	ImportAgentsRequest,
+	RoutingConfig
+} from '../../lib/types.ts'
 import { BetaBadge } from '../BetaBadge.tsx'
 import { Spinner } from '../ui.tsx'
 import { AgentEditorCard } from './AgentEditorCard.tsx'
+import { AgentsImport } from './AgentsImport.tsx'
 import { RoutingSettingsSection } from './RoutingSettingsSection.tsx'
 
 const errorClass = 'rounded-xl border border-del/40 bg-del/5 p-3 text-xs text-del'
@@ -69,7 +78,12 @@ export function AgentsSettings({
 	}
 	const routerProblem = routing && groups ? routerModelProblem(routing.router, groups) : null
 	const routingProblems = config && routing ? routingDraftProblems(routing, config.agents) : []
-	const rosterProblem = config && config.agents.length === 0 ? 'Add at least one agent.' : null
+	const rosterProblem =
+		config && config.agents.length === 0
+			? 'Add at least one agent.'
+			: config && config.agents.length > MAX_AGENTS
+				? `Keep at most ${MAX_AGENTS} agents.`
+				: null
 	const warning = agentsQuery.data?.warning
 	const canSave =
 		ready &&
@@ -132,6 +146,21 @@ export function AgentsSettings({
 		setRoutingDraft(next)
 		setRoutingSaveIssues([])
 		setError(undefined)
+	}
+	const importAgents = async (request: ImportAgentsRequest) => {
+		if (saving.current || !agentsQuery.data) throw new Error('Wait for the current save to finish.')
+		const before = agentsQuery.data
+		saving.current = true
+		setBusy(true)
+		try {
+			const result = await importAgentDefinitions(queryClient, request)
+			setDraft(current => (current ? mergeImportedAgents(current, before, result) : undefined))
+			setSaveIssues([])
+			return result
+		} finally {
+			saving.current = false
+			setBusy(false)
+		}
 	}
 	const save = async () => {
 		if (!canSave || !config || !routing || saving.current) return
@@ -262,6 +291,7 @@ export function AgentsSettings({
 									</button>
 								</div>
 								{addError ? <p className="mt-1.5 px-1 text-xs text-del">{addError}</p> : null}
+								<AgentsImport onImport={importAgents} />
 							</div>
 							{rosterProblem ? <p className="text-xs text-del">{rosterProblem}</p> : null}
 							{invalid.size ? <p className="text-xs text-del">Resolve the agent model errors before saving.</p> : null}

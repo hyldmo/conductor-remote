@@ -4,8 +4,9 @@ import { roleModelIssues } from '../../agents/roles.ts'
 import { decodeRoutingConfig, routingIssues } from '../../agents/routing.ts'
 import { isRoute, routes } from '../../routes.ts'
 import type { AgentsConfig, AgentsResponse, UpdateAgentsResult } from '../../wire.ts'
-import { NOT_HANDLED, type RouteHandler } from '../router-types.ts'
+import type { RouteHandler } from '../router-types.ts'
 import type { RelayServices } from '../services.ts'
+import { createAgentImportRoutes } from './agent-import.ts'
 
 export function createAgentsRoutes(
 	services: Pick<RelayServices, 'agentStore' | 'routingConfig' | 'modelCache' | 'readBody' | 'json'>
@@ -17,6 +18,7 @@ export function createAgentsRoutes(
 		const stored = agentStore.read()
 		return { ...stored, issues: issuesFor(stored) }
 	}
+	const importRoutes = createAgentImportRoutes(services, response)
 	return async (req, res, url) => {
 		if (isRoute(routes.agents, req.method, url.pathname)) return json(req, res, 200, response())
 		if (isRoute(routes.updateAgents, req.method, url.pathname)) {
@@ -60,6 +62,6 @@ export function createAgentsRoutes(
 				return json(req, res, 400, { error: error instanceof Error ? error.message : 'Invalid routing settings.' })
 			}
 		}
-		return NOT_HANDLED
+		return importRoutes(req, res, url)
 	}
 }

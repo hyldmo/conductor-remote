@@ -458,6 +458,37 @@ export type UpdateAgentsResult =
 	| { ok: true; config: AgentsResponse }
 	| { ok: false; error: DelegationError; issues?: Array<{ agent: string; error: DelegationError }> }
 
+/** User-scoped ~/.claude/agents imports; filenames, not opaque name: lines, are identity. */
+export interface AgentImportCandidate {
+	name: string
+	description?: string
+	/** Original scalar, which may be a native alias absent from the picker catalog. */
+	model: string
+	hasBody: boolean
+	collision: boolean
+}
+
+export interface AgentImportScanResponse {
+	candidates: AgentImportCandidate[]
+	skipped: Array<{ name: string; reason: string }>
+	truncated: boolean
+	limit: number
+}
+
+export interface ImportAgentsRequest {
+	names: string[]
+	overwrite?: boolean
+}
+
+export type AgentImportOutcome =
+	| { name: string; ok: true; overwritten: boolean }
+	| { name: string; ok: false; error: string }
+
+export interface ImportAgentsResult {
+	results: AgentImportOutcome[]
+	config: AgentsResponse
+}
+
 export interface DelegationsResponse {
 	delegations: DelegationProjection[]
 }
