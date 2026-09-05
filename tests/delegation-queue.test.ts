@@ -123,9 +123,9 @@ describe('delegation queue', () => {
 		expect(calls).toEqual(['open', 'configure:5.6 Terra:false', 'send', 'return:queue:success'])
 		expect(persisted.list().jobs).toEqual([])
 		expect(persisted.sessionRoles().sessions).toMatchObject({
-			'parent-1': { role: 'planning' },
-			'child-1': { role: 'exploration', delegationId: 'job-1' }
+			'child-1': { role: 'exploration', delegationId: 'job-1', parentSessionId: 'parent-1' }
 		})
+		expect(persisted.sessionRoles().sessions).not.toHaveProperty('parent-1')
 	})
 
 	test('does not charge a blocked action and fails visibly after three real attempts', async () => {

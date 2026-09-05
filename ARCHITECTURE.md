@@ -92,10 +92,12 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   workflow-coordinator.ts  deterministic Workflow lifecycle, effect receipts/reconciliation,
                   job ownership, recovery mutations, and secret-free phone projections
   relay-processes.ts discovers compatible UI-capable relay processes by PID/start identity
-  delegations.ts  legacy worktree-local JSON job/session-role queue; accepted upgrade-era jobs
-                  may drain, but ordinary new delegation intake is rejected
+  delegation-intake.ts validates ordinary-chat tasks, role/provider and Workflow ownership
+                  before persisting a lightweight child in the worktree queue
+  delegations.ts  worktree-local JSON job/session-role queue for ad hoc children; persists
+                  their parent links and resumes accepted upgrade-era jobs too
   session-poller.ts one two-second live-session read fanned out synchronously to notifications,
-                  legacy delegation progress, and Workflow receipt observation; async listener
+                  ad hoc delegation progress, and Workflow receipt observation; async listener
                   work cannot hold the clock
   sendonce.ts     the send memo: answers a repeated clientId with the first send's outcome
   firstprompt.ts  persisted queue for ordinary new-workspace first prompts, from setup on;
@@ -177,7 +179,7 @@ dist/            built PWA (gitignored) — what the relay serves
 dist-node/       compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball
 ```
 
-## Deterministic Workflow and legacy delegated chats
+## Deterministic Workflow and lightweight delegated chats
 
 `roles.json` is global configuration, not run state. Workflow preflight resolves exact
 picker labels and freezes the complete planning, exploration, and implementation role
@@ -203,7 +205,7 @@ The coordinator advances
 `creating_workspace → binding_root → pending_root → exploring → planning → implementing → reviewing`.
 A delivered root receipt activates the dormant bootstrap explorer, so one tracked
 explorer is mechanical rather than a suggestion. The planner can request additional
-independent explorers. `delegate_task` is accepted only from that run's root with a
+independent explorers. Workflow-scoped `delegate_task` is accepted only from that run's root with a
 hashed, causally delivered capability for its exact cycle, revision, phase, and next
 role. Every current exploration Baton must exist as a durable parent message—not merely
 an accepted outbox row—before implementation opens. Implementation Batons likewise
@@ -242,11 +244,30 @@ implementation goes through the implementation role. That is an orchestration an
 prompt contract, not an OS sandbox: an ordinary Conductor root still has filesystem
 tools, and the relay cannot remove them from an already-running chat.
 
-`delegations.ts` now exists only for upgrade compatibility. Previously accepted JSON
-jobs under `.context/delegations/` may finish and retain their legacy role-chip/session
-metadata, but ordinary new delegation intake is rejected. New `delegate_task` requests
-must carry a valid Workflow id and phase capability and are persisted in
-`orchestration.db`, never in the legacy queue.
+Ordinary chats use a lightweight path through `delegation-intake.ts` and `delegations.ts`.
+`delegate_task` without either Workflow credential posts to `/api/sessions/:id/delegate`.
+Intake rejects unknown fields, missing or same-provider roles, invalid transcript cuts,
+and any parent owned by an active Workflow before enqueue. If Workflow ownership cannot
+be read because the orchestration schema is incompatible, intake stays closed. Supplying
+either Workflow credential selects the managed path and requires both; a failed managed
+call never falls back to ordinary delegation.
+
+The ad hoc queue persists each task and frozen role under `.context/delegations/`, then
+opens/configures/sends a child through the shared background-priority UI lock. Children
+can run concurrently; their creation does not create a Workflow or assign a planning
+role to the parent. `sessions.json` records `parentSessionId` on each child so completed
+subtabs stay attached to their parent after the successful job file is removed. Older
+role documents without a parent retain the existing planning-parent display fallback.
+The child instruction keeps transcript content as context, limits exploration to reads,
+and treats the Baton's suggested role as advice rather than another phase to start.
+Restart semantics remain the existing queue's at-least-once side effects and receipt-based
+Baton delivery; managed jobs keep the coordinator's stronger effect reconciliation.
+
+Role validation and the role editor share `currentModelCatalog`: each provider's labels
+come from the newest complete menu containing that provider. The observing chat's harness
+does not own every row. A menu for one provider cannot invalidate another provider's labels, while
+a newer menu for the same provider retires renamed labels. Explicitly partial selections
+(`snapshotAt: null`) do not replace menus; pre-snapshot cache entries remain readable.
 
 ## Re-deriving Conductor internals (if a Conductor update breaks something)
 

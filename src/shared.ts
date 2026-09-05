@@ -291,9 +291,8 @@ export function modelCatalogIncludes(model: string, groups: readonly { models: r
 }
 
 /**
- * Complete picker reads are whole-menu observations, not provider slices. Ignore
- * groups learned only from a successful single-model selection, then use the
- * newest complete observation to describe what Conductor can select.
+ * Return the latest observed menu, ignoring groups learned only from selections.
+ * A menu can expose only some providers; use currentModelCatalog for role choices.
  */
 export function newestModelSnapshot<
 	T extends { models: readonly string[]; updatedAt: number; snapshotAt?: number | null }
@@ -307,6 +306,29 @@ export function newestModelSnapshot<
 		if (!newest || observedAt >= newestObservedAt) newest = group
 	}
 	return newest
+}
+
+/**
+ * The newest menu containing a provider owns that provider's labels. A menu for one
+ * provider (including a pre-snapshotAt cache) cannot invalidate another provider's
+ * roles, while a newer menu for the same provider retires renamed labels. agentType names
+ * the chat that exposed the menu, not the provider of every model in it.
+ */
+export function currentModelCatalog(
+	groups: readonly { models: readonly string[]; updatedAt: number; snapshotAt?: number | null }[]
+): string[] {
+	const providers = new Map<string, { observedAt: number; models: string[] }>()
+	for (const group of groups) {
+		if (group.snapshotAt === null) continue
+		const observedAt = group.snapshotAt ?? group.updatedAt
+		for (const provider of groupModelPickerLabels([...group.models])) {
+			const current = providers.get(provider.label)
+			if (!current || observedAt >= current.observedAt) {
+				providers.set(provider.label, { observedAt, models: provider.models })
+			}
+		}
+	}
+	return [...new Set([...providers.values()].flatMap(provider => provider.models))].sort((a, b) => a.localeCompare(b))
 }
 
 /** Stable, case-insensitive grouping shared by every model selector. */

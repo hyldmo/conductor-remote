@@ -529,20 +529,32 @@ Two asymmetric halves — keep them separate:
     mode is currently unreliable: keep the generic control available, but do not
     use it as an orchestration role setting, test mechanism, or completion signal.
 
-    **Cross-provider delegation is a persisted sibling-chat queue, never a
-    subagent and never Plan mode** (`src/roles.ts`, `src/delegations.ts`). Global
+    **Lightweight cross-provider delegation is a persisted sibling-chat queue**
+    (`src/roles.ts`, `src/delegation-intake.ts`, `src/delegations.ts`). An ordinary
+    chat calls `delegate_task` with its session id, a role, and a focused prompt;
+    use `exploration` for independent codebase reads, with its model resolved
+    from Roles. Several children can run concurrently without creating a
+    Workflow or assigning a planning role to the parent. Skills such as gstack
+    should route helper agents through this same MCP path; the copyable user
+    override lives in [docs/conductor-agent-routing.md](docs/conductor-agent-routing.md).
+    A chat owned by an active Workflow must use the root's capability path instead.
+    Global
     `roles.json` stores an exact cached picker label plus optional effort/fast and
     preamble; it has no `plan` field, and strict decoding rejects one. Intake also
     rejects an unavailable label, an unsupported provider family, and a role on the
     parent's provider before any UI action, then freezes the resolved provider/settings
     on a worktree-local job. The cache's `agentType` only says which chat exposed the
-    whole picker snapshot; provider identity comes from the exact model label. One
+    picker snapshot; provider identity comes from the exact model label. Each
+    provider's newest observed menu supplies its labels, so a menu for one provider
+    cannot invalidate another provider's roles. One
     producer advances opening → configuring → sending → running →
     returning behind background-priority `uiTurn` calls. Side effects are at-least-
     once across a relay restart; a lock or saturated UI queue costs no attempt, and
     three real failures remain visible until dismissed. Successful job files disappear only after the
     exact parent user-row receipt, while `.context/delegations/sessions.json` keeps
-    both chats' role chips alive until the worktree is archived.
+    child role chips and exact parent ids alive until the worktree is archived.
+    New ad hoc jobs never mark an ordinary parent as `planning`: that marker is
+    also used by the sidebar's pre-coordinator Workflow identity fallback.
 
     **Workflow mode is the explicit root entry point, not Conductor Plan mode**
     (`src/workflow.ts`, `web/src/components/WorkflowModePill.tsx`). The pill in New

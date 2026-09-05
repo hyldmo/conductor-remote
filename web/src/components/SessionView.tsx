@@ -98,8 +98,9 @@ export function delegationPipelineForParentSession(
 	const workflow = workflows.find(candidate => candidate.rootSessionId === sessionId)
 	const parentJobs = jobs.filter(job => job.parentSessionId === sessionId)
 	const activeAssignment = roles[sessionId]
+	const hasPersistedChildren = Object.values(roles).some(assignment => assignment.parentSessionId === sessionId)
 	const hasPersistedLegacyChildren = Object.values(roles).some(
-		assignment => assignment.delegationId && !assignment.workflowId
+		assignment => assignment.delegationId && !assignment.workflowId && !assignment.parentSessionId
 	)
 	// Legacy jobs were deleted after returning, while their role assignments survived.
 	// Their old role document did not record the parent id, but did mark that parent as
@@ -109,7 +110,7 @@ export function delegationPipelineForParentSession(
 		!activeAssignment.delegationId &&
 		!activeAssignment.workflowId &&
 		hasPersistedLegacyChildren
-	if (!workflow && !parentJobs.length && !isLegacyParent) return undefined
+	if (!workflow && !parentJobs.length && !hasPersistedChildren && !isLegacyParent) return undefined
 
 	const parentLegacyJobIds = new Set(parentJobs.filter(job => !job.workflowId).map(job => job.id))
 	const scopedRoles = Object.fromEntries(
@@ -117,6 +118,7 @@ export function delegationPipelineForParentSession(
 			if (candidateId === sessionId) return true
 			if (assignment.workflowId) return assignment.workflowId === workflow?.id
 			if (!assignment.delegationId) return false
+			if (assignment.parentSessionId) return assignment.parentSessionId === sessionId
 			return isLegacyParent || parentLegacyJobIds.has(assignment.delegationId)
 		})
 	)
@@ -220,7 +222,7 @@ export function SessionView() {
 	}
 	const sessionRoles = { ...(sessionsData?.session_roles ?? {}), ...(ws?.session_roles ?? {}) }
 	const delegations = ws?.delegations ?? []
-	const legacyDelegations = delegations.filter(job => !job.workflowId)
+	const adHocDelegations = delegations.filter(job => !job.workflowId)
 	const workspaceWorkflows = (data?.workflows ?? []).filter(run => run.workspaceId === workspaceId)
 	if (ws?.workflow && !workspaceWorkflows.some(run => run.id === ws.workflow?.id)) workspaceWorkflows.push(ws.workflow)
 	const sessionWorkflow = workflowForActiveSession(workspaceWorkflows, sessionId, sessionRoles, delegations)
@@ -643,7 +645,7 @@ export function SessionView() {
 								workingSince={workingSince}
 								turnStartedAt={activeSession?.turn_started_at}
 								waiting={activeSession?.background_tasks}
-								delegations={legacyDelegations}
+								delegations={adHocDelegations}
 								agentType={activeSession?.agent_type}
 								model={activeSession?.model}
 								selectedSubagentId={pickedSubagent}

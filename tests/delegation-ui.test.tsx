@@ -139,7 +139,7 @@ describe('delegation phone surfaces', () => {
 		expect(html).toContain('bg-surface-2')
 	})
 
-	test('renders managed state only from WorkflowRunWire and keeps legacy tabs distinct', () => {
+	test('renders managed state only from WorkflowRunWire and keeps ad hoc tabs distinct', () => {
 		const managedJob = { ...running, workflowId: blockedWorkflow.id, bootstrap: true }
 		const withoutProjection = renderToStaticMarkup(<DelegationPipeline jobs={[managedJob]} onSelectSession={vi.fn()} />)
 		expect(withoutProjection).toBe('')
@@ -156,7 +156,8 @@ describe('delegation phone surfaces', () => {
 		expect(html).toContain('The child tab may already exist.')
 		expect(html).toContain('Review risky replay')
 		expect(html).toContain('Cancel workflow')
-		expect(html).toContain('Legacy')
+		expect(html).toContain('Delegated agents')
+		expect(html).not.toContain('Legacy')
 	})
 
 	test('keeps review stable until the phone explicitly marks it complete', () => {
@@ -280,17 +281,19 @@ describe('delegation phone surfaces', () => {
 		expect(roleDraftCanSave(true, false, [], 1)).toBe(false)
 	})
 
-	test('uses only the newest whole-picker snapshot for role validation', () => {
+	test('uses the latest observation per provider for role validation', () => {
 		const currentModels = ['5.6 Sol', 'opencode-go/muse-spark-1.3-contributor']
 		const groups = [
-			{ agentType: 'claude', models: ['Fable 5.1'], updatedAt: 1 },
+			{ agentType: 'claude', models: ['Fable 5'], updatedAt: 0 },
+			{ agentType: 'codex', models: ['Fable 5.1'], updatedAt: 1 },
 			{ agentType: 'codex', models: currentModels, updatedAt: 2 }
 		]
 
-		expect(roleAgentType({ model: 'Fable 5.1' }, groups)).toBeNull()
+		expect(roleAgentType({ model: 'Fable 5.1' }, groups)).toBe('claude')
 		expect(roleAgentType({ model: '5.6 Sol' }, groups)).toBe('codex')
 		expect(roleAgentType({ model: 'opencode-go/muse-spark-1.3-contributor' }, groups)).toBe('acp')
-		expect(roleModelProblem({ model: 'Fable 5.1' }, groups)).toContain('newest picker snapshot')
+		expect(roleModelProblem({ model: 'Fable 5.1' }, groups)).toBeNull()
+		expect(roleModelProblem({ model: 'Fable 5' }, groups)).toContain('current picker catalog')
 		expect(roleModelProblem({ model: 'unknown-model' }, groups)).toContain('exact model')
 	})
 

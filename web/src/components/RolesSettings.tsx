@@ -5,9 +5,9 @@ import { createPortal } from 'react-dom'
 import {
 	agentTypeCanExposeEffort,
 	agentTypeCanExposeFastMode,
+	currentModelCatalog,
 	modelAgentType,
-	modelCatalogIncludes,
-	newestModelSnapshot
+	modelPickerLabel
 } from '../../../src/shared.ts'
 import { useModelCatalog, useRoles } from '../hooks.ts'
 import { EFFORT_LABELS } from '../lib/agent.ts'
@@ -54,9 +54,8 @@ export function roleWithModel(role: DelegatedRole, model: string): DelegatedRole
 }
 
 export function roleModelProblem(role: DelegatedRole, groups: CachedModelGroup[]): string | null {
-	const snapshot = newestModelSnapshot(groups)
-	if (!snapshot || !modelCatalogIncludes(role.model, [snapshot])) {
-		return 'Choose an exact model from Conductor’s newest picker snapshot.'
+	if (!currentModelCatalog(groups).includes(modelPickerLabel(role.model))) {
+		return 'Choose an exact model from Conductor’s current picker catalog.'
 	}
 	const agentType = modelAgentType(role.model)
 	if (!agentType) return 'This model label does not identify a supported provider.'
@@ -70,10 +69,9 @@ export function roleModelProblem(role: DelegatedRole, groups: CachedModelGroup[]
 	return null
 }
 
-/** Each cache group is a whole-menu snapshot; provider identity comes from the exact label. */
+/** Each provider uses its latest observed menu; identity comes from the exact model label. */
 export function roleAgentType(role: DelegatedRole, groups: CachedModelGroup[]): string | null {
-	const snapshot = newestModelSnapshot(groups)
-	if (!snapshot || !modelCatalogIncludes(role.model, [snapshot])) return null
+	if (!currentModelCatalog(groups).includes(modelPickerLabel(role.model))) return null
 	return modelAgentType(role.model) ?? null
 }
 
@@ -221,7 +219,7 @@ export function RolesSettings({ onClose }: { onClose: () => void }) {
 	}, [rolesQuery.data, dirty])
 
 	const groups = modelCatalog.data?.groups
-	const models = useMemo(() => newestModelSnapshot(groups ?? [])?.models ?? [], [groups])
+	const models = useMemo(() => currentModelCatalog(groups ?? []), [groups])
 	const remoteIssues = new Map(rolesQuery.data?.issues.map(issue => [issue.role, issue.error.message]) ?? [])
 	const config = draft
 	const invalid = new Map<string, string>()

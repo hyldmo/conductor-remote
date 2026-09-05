@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+import { chatCursor } from '../src/chat-cursor.ts'
 import { type CallOptions, createTools, INSTRUCTIONS, type RelayCall, type Tool } from '../src/mcp-tools.ts'
 import { routes } from '../src/routes.ts'
 import type { RolesResponse } from '../src/wire.ts'
@@ -25,13 +26,14 @@ const roles: RolesResponse = {
 }
 
 describe('delegation MCP tools', () => {
-	test('limits agent mutations to a previously authorized Workflow delegation', () => {
+	test('offers lightweight delegation while keeping Workflow start and recovery phone-owned', () => {
 		const tools = createTools(async <T>() => roles as T)
 		const delegate = tools.find(candidate => candidate.name === 'delegate_task')
 		if (!delegate) throw new Error('delegate_task does not exist')
 
-		expect(delegate.description).toContain('Workflow this root already belongs to')
-		expect(INSTRUCTIONS).toContain('Workflow already authorized from the phone')
+		expect(delegate.description).toContain('lightweight tracked sibling chat')
+		expect(INSTRUCTIONS).toContain('several independent explorers')
+		expect(INSTRUCTIONS).toContain('MCP cannot start a Workflow')
 		expect(INSTRUCTIONS).not.toContain('Plan mode')
 		expect(tools.map(candidate => candidate.name)).not.toContain('set_role')
 		expect(tools.map(candidate => candidate.name)).not.toContain('dismiss_delegation')
@@ -58,8 +60,17 @@ describe('delegation MCP tools', () => {
 			required: string[]
 			additionalProperties?: boolean
 		}
-		expect(Object.keys(schema.properties)).toEqual(['workflow_id', 'phase_capability', 'session_id', 'role', 'prompt'])
-		expect(schema.required).toEqual(Object.keys(schema.properties))
+		expect(Object.keys(schema.properties)).toEqual([
+			'workflow_id',
+			'phase_capability',
+			'session_id',
+			'role',
+			'prompt',
+			'return_mode',
+			'through',
+			'include_thinking'
+		])
+		expect(schema.required).toEqual(['session_id', 'role', 'prompt'])
 		expect(schema.additionalProperties).toBe(false)
 
 		const output = await delegate.run({
@@ -82,6 +93,81 @@ describe('delegation MCP tools', () => {
 			}
 		})
 		expect(output).toContain('job-1')
+	})
+
+	test('posts an ordinary child to the session route with only its task and optional handoff choices', async () => {
+		const calls: { route: string; options?: CallOptions }[] = []
+		const delegate = tool('delegate_task', async <T>(route: string, options?: CallOptions) => {
+			calls.push({ route, options })
+			return {
+				ok: true,
+				delegationId: 'spark-job',
+				role: 'exploration',
+				model: 'opencode-go/muse-spark-1.3-contributor'
+			} as T
+		})
+		const task = { session_id: 'parent/chat', role: 'exploration', prompt: 'Trace the queue.' }
+		expect(await delegate.run(task)).toContain('spark-job')
+		await delegate.run({
+			...task,
+			role: 'codebase',
+			return_mode: 'steer',
+			through: chatCursor(77),
+			include_thinking: true
+		})
+		expect(calls).toEqual([
+			{
+				route: routes.delegateTask.path('parent/chat'),
+				options: { method: 'POST', body: { role: 'exploration', prompt: 'Trace the queue.' } }
+			},
+			{
+				route: routes.delegateTask.path('parent/chat'),
+				options: {
+					method: 'POST',
+					body: {
+						role: 'codebase',
+						prompt: 'Trace the queue.',
+						returnMode: 'steer',
+						throughRowid: 77,
+						includeThinking: true
+					}
+				}
+			}
+		])
+	})
+
+	test.each([
+		{ workflow_id: 'run' },
+		{ phase_capability: 'cap' },
+		{ workflow_id: '', phase_capability: 'cap' },
+		{ workflow_id: null },
+		{ return_mode: 'invalid' },
+		{ through: '77' },
+		{ through: 77 },
+		{ include_thinking: 'true' },
+		{ model: 'Spark' }
+	])('rejects partial Workflow credentials and invalid ordinary options %# without falling back', async extra => {
+		let calls = 0
+		const delegate = tool('delegate_task', async <T>() => {
+			calls += 1
+			return {} as T
+		})
+		await expect(
+			delegate.run({ session_id: 'parent', role: 'exploration', prompt: 'Inspect.', ...extra })
+		).rejects.toThrow()
+		expect(calls).toBe(0)
+	})
+
+	test('surfaces a Workflow ownership refusal without trying another route', async () => {
+		const routesSeen: string[] = []
+		const delegate = tool('delegate_task', async <T>(route: string) => {
+			routesSeen.push(route)
+			return { ok: false, error: { code: 'workflow_required', message: 'Use the root capability.' } } as T
+		})
+		await expect(
+			delegate.run({ session_id: 'workflow-child', role: 'exploration', prompt: 'Inspect.' })
+		).rejects.toThrow('workflow_required')
+		expect(routesSeen).toEqual([routes.delegateTask.path('workflow-child')])
 	})
 
 	test('rejects role overrides and unknown fields before calling the relay', async () => {

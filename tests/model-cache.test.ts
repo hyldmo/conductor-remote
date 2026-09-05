@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { ModelCache } from '../src/model-cache.ts'
-import { newestModelSnapshot } from '../src/shared.ts'
+import { currentModelCatalog, newestModelSnapshot } from '../src/shared.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -57,5 +57,24 @@ describe('model cache', () => {
 		expect(groups.find(entry => entry.agentType === 'codex')?.snapshotAt).toBeNull()
 		expect(newestModelSnapshot(groups)?.models).toEqual(['5.6 Sol', '5.6 Terra', 'Fable 5.1'])
 		expect(newestModelSnapshot(new ModelCache(file).list())?.models).toEqual(['5.6 Sol', '5.6 Terra', 'Fable 5.1'])
+	})
+
+	test('keeps provider menus independent across restarts and retires renamed labels within their provider', () => {
+		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-model-cache-'))
+		temporaryDirectories.push(directory)
+		const file = path.join(directory, 'models.json')
+		const spark = 'opencode-go/muse-spark-1.3-contributor'
+		fs.writeFileSync(
+			file,
+			JSON.stringify([
+				{ agentType: 'claude', models: ['Fable 5', '5.6 Sol'], updatedAt: 1 },
+				{ agentType: 'codex', models: ['Fable 5.1', '5.6 Sol'], snapshotAt: 2, updatedAt: 2 },
+				{ agentType: 'acp', models: [spark], updatedAt: 3 }
+			])
+		)
+		const cache = new ModelCache(file)
+		expect(currentModelCatalog(cache.list())).toEqual(['5.6 Sol', 'Fable 5.1', spark])
+		cache.remember('acp', [spark])
+		expect(currentModelCatalog(new ModelCache(file).list())).toEqual(['5.6 Sol', 'Fable 5.1', spark])
 	})
 })
