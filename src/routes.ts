@@ -74,6 +74,8 @@ export const routes = {
 	updateModelDefaults: flat('PATCH', '/api/models/defaults'),
 	/** Rolling subscription limits, read without a model request from each provider CLI. */
 	planUsage: flat('GET', '/api/usage'),
+	/** Estimated tool input/result tokens from recent saved chat activity. */
+	toolUsage: flat('GET', '/api/usage/tools'),
 	/** Mint a short-lived OpenAI SIP URI for an authenticated native client. */
 	voiceTicket: flat('POST', '/api/voice/ticket'),
 	/** Negotiate one app-wide PWA orchestrator call through the relay. */

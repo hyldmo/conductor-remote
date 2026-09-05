@@ -44,6 +44,7 @@ import type { DevRunConfig } from './run-configs.ts'
 import type { IndexStatus, SearchResult as SearchEvidence } from './search.ts'
 import type { Settings } from './settings.ts'
 import type { OpenAIRealtimeVoice, VoiceLanguage } from './shared.ts'
+import type { ToolUsageSnapshot } from './tool-usage.ts'
 import type { TranscriptEntry } from './transcript.ts'
 import type { ActuatorInfo, SendResult as ActuatorSendResult } from './writes.ts'
 
@@ -646,6 +647,10 @@ export interface ModelDefaultsResponse {
 
 /** GET /api/usage — provider subscription windows read from local agent CLIs. */
 export type PlanUsageResponse = PlanUsageSnapshot
+
+/** GET /api/usage/tools — recent tool traffic, separate from provider plan limits. */
+export type ToolUsageResponse = ToolUsageSnapshot
+export type { ToolUsageRange, ToolUsageRow } from './tool-usage.ts'
 
 /** POST /api/sessions/:id/default-model — the star is re-read before success. */
 export interface DefaultModelResult {

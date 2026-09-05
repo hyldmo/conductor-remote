@@ -60,7 +60,7 @@ export function estimateTextTokens(text: string): number {
 	return text ? Math.ceil(Buffer.byteLength(text, 'utf8') / BYTES_PER_TOKEN) : 0
 }
 
-function parsedFrame(row: ContextMessageRow): Frame | null {
+export function parseContextFrame(row: ContextMessageRow): Frame | null {
 	const content = row.content ?? ''
 	if (!content.startsWith('{')) return null
 	try {
@@ -90,15 +90,38 @@ function isCompactBoundary(frame: Frame | null): boolean {
  * ordinary text. Providers account for those specially; treating base64 as prose can
  * turn one screenshot into hundreds of thousands of imaginary tool tokens.
  */
-function blockBytes(block: unknown): number {
-	const json = JSON.stringify(block, function (key, value: unknown) {
+export function contextBlockBytes(block: unknown): number {
+	function visibleValue(this: { type?: unknown; mimeType?: unknown }, key: string, value: unknown): unknown {
 		if (key === 'signature' || key === 'encrypted_content') return undefined
 		if (typeof value === 'string' && /^data:[^;,]+;base64,/i.test(value)) return '[binary data]'
-		if (key === 'data' && typeof value === 'string' && (this as { type?: unknown }).type === 'base64') {
-			return '[binary image]'
+		if (key === 'data' && typeof value === 'string' && ['base64', 'image', 'audio'].includes(String(this.type))) {
+			return '[binary data]'
+		}
+		if (key === 'blob' && typeof value === 'string' && typeof this.mimeType === 'string') return '[binary data]'
+		// Codex often saves an MCP result as serialized JSON inside the tool_result
+		// string. Its image.data is still binary, even though the outer frame looks
+		// textual. Preserve ordinary JSON formatting unless a payload was stripped.
+		if (
+			key === 'content' &&
+			this.type === 'tool_result' &&
+			typeof value === 'string' &&
+			(/"(?:data|blob|signature|encrypted_content)"\s*:/.test(value) || /data:[^;,]+;base64,/i.test(value))
+		) {
+			try {
+				let changed = false
+				const cleaned = JSON.stringify(JSON.parse(value), function (nestedKey, nestedValue: unknown) {
+					const visible = visibleValue.call(this, nestedKey, nestedValue)
+					if (visible !== nestedValue) changed = true
+					return visible
+				})
+				if (changed) return cleaned
+			} catch {
+				// Ordinary tool text need not be JSON.
+			}
 		}
 		return value
-	})
+	}
+	const json = JSON.stringify(block, visibleValue)
 	return json ? Buffer.byteLength(json, 'utf8') : 0
 }
 
@@ -145,7 +168,7 @@ export function estimateContextCategories(
 	totalTokens: number
 ): { categories: ContextCategories; compacted: boolean } {
 	const total = Number.isFinite(totalTokens) ? Math.max(0, Math.round(totalTokens)) : 0
-	const parsed: ParsedRow[] = rows.map(row => ({ ...row, frame: parsedFrame(row) }))
+	const parsed: ParsedRow[] = rows.map(row => ({ ...row, frame: parseContextFrame(row) }))
 	// A Claude subagent's frames are copied into its parent chat. Its own result and
 	// compaction markers describe the child's window, not the session meter beside this
 	// tab, so only root frames may define the completed cut or reset the active history.
@@ -177,7 +200,7 @@ export function estimateContextCategories(
 		for (const raw of blocks as FrameBlock[]) {
 			if (!raw || typeof raw !== 'object') continue
 			const type = typeof raw.type === 'string' ? raw.type : ''
-			const size = blockBytes(raw)
+			const size = contextBlockBytes(raw)
 			if (type === 'tool_use' || type === 'tool_result') bytes.tools += size
 			else if (/thinking|reasoning/.test(type)) bytes.thinking += size
 			else if ((type === 'text' || type === 'output_text') && frame.type !== 'user') bytes.chat += size

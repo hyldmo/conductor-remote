@@ -25,6 +25,7 @@ import type {
 	Session,
 	StartWorkflowRequest,
 	StateResponse,
+	ToolUsageRange,
 	TranscriptEntry,
 	UiQuarantineWire,
 	WorkflowAdoptionCandidate,
@@ -778,6 +779,16 @@ export function usePlanUsage(enabled: boolean) {
 		enabled,
 		staleTime: 60_000,
 		gcTime: Number.POSITIVE_INFINITY,
+		retry: false
+	})
+}
+
+/** Recent tool traffic is scanned only while Models is open. */
+export function useToolUsage(range: ToolUsageRange) {
+	return useQuery({
+		queryKey: ['tool-usage', range],
+		queryFn: () => client.toolUsage(range),
+		staleTime: 60_000,
 		retry: false
 	})
 }
