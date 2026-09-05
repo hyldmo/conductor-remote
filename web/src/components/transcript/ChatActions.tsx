@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, GitFork, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, Copy, GitFork, Loader2, Minimize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { renderTranscript, transcriptThrough } from '../../../../src/shared.ts'
 import { copyText } from '../../lib/clipboard.ts'
@@ -26,7 +26,9 @@ export function ChatActions({
 	working,
 	rowid,
 	through,
-	onFork
+	onFork,
+	onCompact,
+	compactUnavailable
 }: {
 	text: string
 	entries: TranscriptEntry[]
@@ -40,14 +42,18 @@ export function ChatActions({
 	rowid: number
 	through?: number
 	onFork?: (format: SplitFormat) => Promise<void>
+	onCompact?: (format: SplitFormat) => Promise<void>
+	compactUnavailable?: string
 }) {
-	const [menuOpen, setMenuOpen] = useState<'copy' | 'fork' | null>(null)
+	const [menuOpen, setMenuOpen] = useState<'copy' | 'fork' | 'compact' | null>(null)
 	const [copied, setCopied] = useState<'response' | 'chat' | null>(null)
 	const [copyError, setCopyError] = useState<string | null>(null)
 	const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const copyMenuButton = useRef<HTMLButtonElement>(null)
 	const forkMenuButton = useRef<HTMLButtonElement>(null)
-	const [forking, setForking] = useState(false)
+	const compactMenuButton = useRef<HTMLButtonElement>(null)
+	const transferInFlight = useRef(false)
+	const [transferring, setTransferring] = useState<'fork' | 'compact' | null>(null)
 	const [forkError, setForkError] = useState<string | null>(null)
 	const [destination, setDestination] = useState<'chat' | 'workspace'>('chat')
 
@@ -90,23 +96,26 @@ export function ChatActions({
 		}
 	}
 
-	const fork = async (cut: TranscriptCut) => {
-		if (!onFork || forking) return
-		setForking(true)
+	const fork = async (cut: TranscriptCut, replace = false) => {
+		const transfer = replace ? onCompact : onFork
+		if (!transfer || transferInFlight.current || (replace && compactUnavailable)) return
+		transferInFlight.current = true
+		setTransferring(replace ? 'compact' : 'fork')
 		setForkError(null)
 		setMenuOpen(null)
 		try {
-			await onFork({
+			await transfer({
 				thinking: cut.thinking,
 				tools: cut.tools,
-				destination,
+				destination: replace ? 'chat' : destination,
 				through: cut.only ? undefined : through,
 				only: cut.only ? rowid : undefined
 			})
 		} catch (err) {
-			setForkError(err instanceof Error ? err.message : 'Could not fork this chat')
+			setForkError(err instanceof Error ? err.message : `Could not ${replace ? 'compact' : 'fork'} this chat`)
 		} finally {
-			setForking(false)
+			transferInFlight.current = false
+			setTransferring(null)
 		}
 	}
 
@@ -148,7 +157,7 @@ export function ChatActions({
 							<button
 								type="button"
 								onClick={() => void fork({ thinking: true, tools: false })}
-								disabled={forking}
+								disabled={!!transferring}
 								aria-label={
 									destination === 'workspace'
 										? 'Fork to a new workspace with reasoning'
@@ -159,14 +168,14 @@ export function ChatActions({
 								title={destination === 'workspace' ? 'New workspace with current code' : 'New chat, same files'}
 								className="flex h-7 items-center gap-1 whitespace-nowrap px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
 							>
-								{forking ? <Loader2 size={13} className="animate-spin" /> : <GitFork size={13} />}
+								{transferring === 'fork' ? <Loader2 size={13} className="animate-spin" /> : <GitFork size={13} />}
 								{destination === 'workspace' ? 'Fork workspace' : 'Fork'}
 							</button>
 							<button
 								ref={forkMenuButton}
 								type="button"
 								onClick={() => setMenuOpen(open => (open === 'fork' ? null : 'fork'))}
-								disabled={forking}
+								disabled={!!transferring}
 								aria-label="Choose fork options"
 								aria-haspopup="menu"
 								aria-expanded={menuOpen === 'fork'}
@@ -204,6 +213,40 @@ export function ChatActions({
 									</span>
 								</button>
 								<TranscriptOptions onSelect={cut => void fork(cut)} />
+							</TranscriptMenu>
+						) : null}
+					</div>
+				) : null}
+				{onCompact ? (
+					<div className="relative">
+						<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
+							<button
+								type="button"
+								onClick={() => void fork({ thinking: true, tools: false }, true)}
+								disabled={!!transferring || !!compactUnavailable}
+								aria-label="Compact chat with reasoning"
+								title={compactUnavailable ?? 'Start fresh context and keep the conversation above a divider'}
+								className="flex h-7 items-center gap-1 whitespace-nowrap px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
+							>
+								{transferring === 'compact' ? <Loader2 size={13} className="animate-spin" /> : <Minimize2 size={13} />}
+								Compact
+							</button>
+							<button
+								ref={compactMenuButton}
+								type="button"
+								onClick={() => setMenuOpen(open => (open === 'compact' ? null : 'compact'))}
+								disabled={!!transferring || !!compactUnavailable}
+								aria-label="Choose compact options"
+								aria-haspopup="menu"
+								aria-expanded={menuOpen === 'compact'}
+								className="flex size-7 items-center justify-center border-l border-border-soft transition active:bg-surface-2 disabled:opacity-50"
+							>
+								<ChevronDown size={14} className={cn('transition-transform', menuOpen === 'compact' && 'rotate-180')} />
+							</button>
+						</div>
+						{menuOpen === 'compact' ? (
+							<TranscriptMenu label="Compact options" anchor={compactMenuButton} onClose={() => setMenuOpen(null)}>
+								<TranscriptOptions onSelect={cut => void fork(cut, true)} />
 							</TranscriptMenu>
 						) : null}
 					</div>

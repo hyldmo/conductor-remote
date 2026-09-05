@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useSendPrompt } from '../../hooks/send.ts'
 import { useTranscript } from '../../hooks/transcript.ts'
 import { client } from '../../lib/api.ts'
@@ -16,10 +16,12 @@ import { ChatActions } from './ChatActions.tsx'
 import { NodeEntry, PendingEntry, QueuedEntry, StepGroup, SubagentResult, subagentFinal } from './entries.tsx'
 import { groupSteps, rowKey } from './grouping.ts'
 import { MessageNav } from './MessageNav.tsx'
+import { TranscriptHistory } from './TranscriptHistory.tsx'
 import type { SplitFormat } from './types.ts'
 
 export function Transcript({
 	sessionId,
+	historySessionIds = [],
 	workspaceId,
 	working,
 	workingSince,
@@ -32,12 +34,16 @@ export function Transcript({
 	model,
 	selectedSubagentId,
 	onFork,
+	onCompact,
+	compactUnavailable,
 	onSelectSession,
 	onSelectSubagent,
 	onDismissDelegation,
 	onOpenRoles
 }: {
 	sessionId: string | null
+	/** Prior real chats, oldest first, kept inline above the fresh context. */
+	historySessionIds?: string[]
 	workspaceId: string
 	working?: boolean
 	/**
@@ -68,6 +74,9 @@ export function Transcript({
 	selectedSubagentId?: string | null
 	/** Opens a new chat or workspace with a selected transcript cut staged as an attachment. */
 	onFork?: (format: SplitFormat) => Promise<void>
+	/** Latest response only; same formats as Fork, keeping prior chats inline in this UI tab. */
+	onCompact?: (format: SplitFormat) => Promise<void>
+	compactUnavailable?: string
 	onSelectSession?: (sessionId: string) => void
 	/** Native children share this session; selection addresses their durable tool call instead. */
 	onSelectSubagent?: (toolUseId: string | null) => void
@@ -78,9 +87,15 @@ export function Transcript({
 	const pending = useApp(s => s.pending)
 	const removePending = useApp(s => s.removePending)
 	const sendPrompt = useSendPrompt()
+	const cannotCompact =
+		compactUnavailable ?? (entries.some(e => e.queued) ? 'Send or dismiss queued prompts before compacting' : undefined)
 	const queryClient = useQueryClient()
 	const scroller = useRef<HTMLDivElement>(null)
 	const atBottom = useRef(true)
+	const historyLayout = useCallback(() => {
+		const el = scroller.current
+		if (el && atBottom.current) el.scrollTop = el.scrollHeight
+	}, [])
 
 	// Conductor interleaves a native agent's frames with its parent's, but gives every
 	// child a durable pointer back to the spawning tool call. Rebuild that hierarchy,
@@ -223,6 +238,11 @@ export function Transcript({
 					className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3"
 					data-subagent-transcript={selectedSubagent?.label}
 				>
+					{!showingSubagent
+						? historySessionIds.map(id => (
+								<TranscriptHistory key={id} sessionId={id} onLayout={historyLayout} onFork={onFork} />
+							))
+						: null}
 					{loading && empty ? (
 						<Spinner label="Loading transcript…" />
 					) : error && empty ? (
@@ -265,6 +285,8 @@ export function Transcript({
 									rowid={actionTarget.rowid}
 									working={working}
 									onFork={onFork}
+									onCompact={onCompact}
+									compactUnavailable={cannotCompact}
 								/>
 							) : null}
 							{!showingSubagent && delegations.length && onSelectSession && onDismissDelegation && onOpenRoles ? (

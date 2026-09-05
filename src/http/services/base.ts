@@ -22,8 +22,8 @@ import { Reads } from '../../reads/repository.ts'
 import { SessionPoller } from '../../reads/session-poller.ts'
 import type { Workspace } from '../../reads/types.ts'
 import { SearchIndex } from '../../search/coordinator.ts'
-
 import { attachmentTokens } from '../../shared.ts'
+import { ChatHistoryStore } from '../../transcript/chat-history.ts'
 import { PlanUsageService } from '../../usage/plan-usage.ts'
 import { ToolUsageService } from '../../usage/tool-usage-service.ts'
 import { pickActuator } from '../../writes/actuator.ts'
@@ -79,6 +79,7 @@ export function createBaseServices() {
 	// relay state alongside the prompt queues. This lets a brand-new workspace choose
 	// from a list before Conductor has created its first chat.
 	const modelCache = new ModelCache(path.join(stateDir(), 'model-cache.json'))
+	const chatHistory = new ChatHistoryStore(path.join(stateDir(), 'chat-history.json'))
 
 	const planUsage = new PlanUsageService()
 
@@ -275,6 +276,7 @@ export function createBaseServices() {
 		orchestration,
 		stagedAttachmentIdsInObjective,
 		modelCache,
+		chatHistory,
 		sessionPoller,
 		delegationStore,
 		relayIdentity,

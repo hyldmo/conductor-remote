@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUp, GitFork, Info, LoaderCircle, PhoneCall, Snowflake, Square, WifiOff } from 'lucide-react'
+import { ArrowUp, Info, LoaderCircle, Minimize2, PhoneCall, Snowflake, Square, WifiOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useContextBreakdown, useWorkflowRoleReadiness } from '../../hooks/agents.ts'
 import { useSendPrompt } from '../../hooks/send.ts'
@@ -43,7 +43,8 @@ export function Composer({
 	workspaceId,
 	working,
 	actuator,
-	onFork,
+	onCompact,
+	compactUnavailable,
 	onCall,
 	callActive = false,
 	onContext,
@@ -60,8 +61,9 @@ export function Composer({
 	/** Is this chat mid-answer? Conductor's status, or our own optimistic hint (see SessionView). */
 	working: boolean
 	actuator?: ActuatorInfo
-	/** Fork this full chat and keep the composed prompt in the new chat's draft. */
-	onFork?: (prompt: string) => Promise<void>
+	/** Start fresh context while keeping conversation history and moving the draft. */
+	onCompact?: () => Promise<void>
+	compactUnavailable?: string
 	/** Start a call with this pane's active chat as its initial context. */
 	onCall?: () => void
 	callActive?: boolean
@@ -92,8 +94,8 @@ export function Composer({
 	const queryClient = useQueryClient()
 	const [stopping, setStopping] = useState(false)
 	const [stopError, setStopError] = useState<string | null>(null)
-	const [forking, setForking] = useState(false)
-	const [forkError, setForkError] = useState<string | null>(null)
+	const [compacting, setCompacting] = useState(false)
+	const [compactError, setCompactError] = useState<string | null>(null)
 	const [workflowChoice, setWorkflowChoice] = useState<{ sessionId: string | null; active: boolean }>({
 		sessionId: null,
 		active: false
@@ -173,7 +175,7 @@ export function Composer({
 			!prompt ||
 			uploading ||
 			attachmentError ||
-			forking ||
+			compacting ||
 			!sessionId ||
 			!online ||
 			workflowSendPending ||
@@ -201,18 +203,17 @@ export function Composer({
 		}
 	}
 
-	const forkDraft = async () => {
-		if (!(onFork && prompt) || uploading || attachmentError || forking || !online) return
-		setForking(true)
-		setForkError(null)
+	const compactDraft = async () => {
+		if (!(onCompact && prompt) || uploading || attachmentError || compacting || compactUnavailable || !online) return
+		setCompacting(true)
+		setCompactError(null)
 		try {
-			await onFork(prompt)
-			clearDraftContent(draftKey)
+			await onCompact()
 			attachmentUploads.clearPending()
 		} catch (err) {
-			setForkError(err instanceof Error ? err.message : 'Could not fork this chat')
+			setCompactError(err instanceof Error ? err.message : 'Could not compact this chat')
 		} finally {
-			setForking(false)
+			setCompacting(false)
 		}
 	}
 
@@ -252,7 +253,7 @@ export function Composer({
 		!attachmentError &&
 		!workflowSendPending &&
 		(!workflowMode || workflowReady)
-	const coldCache = !working && canSend && session && onFork ? coldPromptCache(session) : null
+	const coldCache = !working && canSend && session && onCompact ? coldPromptCache(session) : null
 
 	return (
 		<div className="pb-safe border-t border-border-soft bg-bg px-3 pt-2">
@@ -283,22 +284,22 @@ export function Composer({
 					<div className="min-w-0 flex-1">
 						<div className="text-xs font-medium">Prompt cache may be cold</div>
 						<div className="text-[11px] text-muted">Idle past its {coldCache.ttlLabel} window</div>
-						{forkError ? (
+						{compactError ? (
 							<div className="mt-0.5 text-[11px] text-del" role="alert">
-								{forkError}
-								{isLockedError(forkError) ? <UnlockLink className="ml-1" /> : null}
+								{compactError}
+								{isLockedError(compactError) ? <UnlockLink className="ml-1" /> : null}
 							</div>
 						) : null}
 					</div>
 					<button
 						type="button"
-						onClick={() => void forkDraft()}
-						disabled={forking || !online}
-						title="Start a fresh chat with this transcript attached and keep the draft"
+						onClick={() => void compactDraft()}
+						disabled={compacting || !!compactUnavailable || !online}
+						title={compactUnavailable ?? 'Start fresh context and keep the conversation and draft'}
 						className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-cold-cache/12 px-2.5 text-xs font-semibold transition active:scale-[0.97] active:bg-cold-cache/20 disabled:opacity-50"
 					>
-						{forking ? <LoaderCircle size={13} className="animate-spin" /> : <GitFork size={13} />}
-						Fork draft
+						{compacting ? <LoaderCircle size={13} className="animate-spin" /> : <Minimize2 size={13} />}
+						Compact
 					</button>
 				</div>
 			) : null}
@@ -314,7 +315,7 @@ export function Composer({
 					ref={ref}
 					rows={1}
 					value={text}
-					disabled={disabled || forking}
+					disabled={disabled || compacting}
 					placeholder={
 						disabled ? 'No active session' : workflowMode ? 'What should the workflow accomplish?' : 'Send a prompt…'
 					}
@@ -376,7 +377,7 @@ export function Composer({
 						</button>
 					) : null}
 					{session && onContext ? <ContextDonutButton session={session} onOpen={onContext} /> : null}
-					<AttachmentPickerButton uploads={attachmentUploads} disabled={disabled || forking || !online} />
+					<AttachmentPickerButton uploads={attachmentUploads} disabled={disabled || compacting || !online} />
 					{canStop ? (
 						<button
 							type="button"
@@ -399,7 +400,7 @@ export function Composer({
 						<button
 							type="button"
 							onClick={() => send()}
-							disabled={disabled || !canSend || forking || !online}
+							disabled={disabled || !canSend || compacting || !online}
 							aria-label="Send"
 							className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-on-solid transition active:scale-95 disabled:bg-surface-2 disabled:text-faint"
 						>
