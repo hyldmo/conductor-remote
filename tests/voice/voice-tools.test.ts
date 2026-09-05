@@ -144,6 +144,8 @@ describe('createVoiceTools', () => {
 			spoken: 'Filtered overview.',
 			asOf: '2026-09-02T12:00:00.000Z',
 			current: 0,
+			waitingForYou: 0,
+			waiting: [],
 			dormant: 0,
 			completed: 0,
 			filtered: 0,
@@ -158,7 +160,8 @@ describe('createVoiceTools', () => {
 			updated_since: 'today',
 			updated_before: '2026-09-03',
 			include_done: true,
-			include_merged: true
+			include_merged: true,
+			include_dormant: true
 		})
 		expect(overview).toHaveBeenCalledWith(3, {
 			repo: 'conductor-remote',
@@ -167,7 +170,8 @@ describe('createVoiceTools', () => {
 			updatedSince: 'today',
 			updatedBefore: '2026-09-03',
 			includeDone: true,
-			includeMerged: true
+			includeMerged: true,
+			includeDormant: true
 		})
 	})
 

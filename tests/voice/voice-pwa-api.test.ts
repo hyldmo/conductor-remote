@@ -18,6 +18,7 @@ describe('PWA voice call target', () => {
 		const target = { workspaceId: 'workspace-1', sessionId: 'selected-chat' }
 		await client.voiceCall('offer', 'marin', 'en', target)
 		await client.voiceCall('offer', 'cedar', 'auto')
+		await client.voiceCall('offer', 'cedar', 'auto', undefined, 1.5)
 		expect(fetcher).toHaveBeenNthCalledWith(
 			1,
 			routes.voiceCall.path(),
@@ -30,6 +31,11 @@ describe('PWA voice call target', () => {
 			2,
 			routes.voiceCall.path(),
 			expect.objectContaining({ body: JSON.stringify({ sdp: 'offer', voice: 'cedar', language: 'auto' }) })
+		)
+		expect(fetcher).toHaveBeenNthCalledWith(
+			3,
+			routes.voiceCall.path(),
+			expect.objectContaining({ body: JSON.stringify({ sdp: 'offer', voice: 'cedar', language: 'auto', speed: 1.5 }) })
 		)
 	})
 })

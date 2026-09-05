@@ -61,6 +61,7 @@ export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads'
 				model: voiceConfig.model,
 				reasoningEffort: voiceConfig.reasoningEffort,
 				voice: voiceConfig.voice,
+				speed: voiceConfig.speed,
 				mcpUrl: voiceConfig.publicBaseUrl ? `${voiceConfig.publicBaseUrl}/mcp` : null,
 				mcpToken: voiceConfig.mcpToken,
 				stateFile: path.join(stateDir(), 'voice-calls.json'),

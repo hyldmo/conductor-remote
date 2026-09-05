@@ -57,6 +57,21 @@ function workspace(id: string, overrides: Partial<Workspace> = {}): Workspace {
 	}
 }
 
+function boardFor(states: SessionState[], messages: Record<string, string> = {}, workspaces?: Workspace[]) {
+	return new VoiceBriefBoard({
+		reads: {
+			listWorkspaces: () => workspaces ?? states.map(s => workspace(s.sessionId)),
+			listSessionStates: () => states,
+			lastAssistantText: id => messages[id] ?? 'The work is complete.',
+			lastQuestionInput: () => null
+		},
+		locked: async () => false,
+		readPrefs: () => ({ readMarks: {}, drafts: {} }),
+		writePrefs: () => ({ readMarks: {}, drafts: {} }),
+		now: () => NOW
+	})
+}
+
 describe('voice decision parsing', () => {
 	it('extracts the gstack decision brief grammar and its recommendation', () => {
 		const parsed = parseProseDecision(`The listener is built, but no process starts it yet.
@@ -103,6 +118,134 @@ Recommendation: B, because the observer socket is the long pole.`)
 })
 
 describe('VoiceBriefBoard', () => {
+	it('lists the newest work first, names idle questions, and does not mistake unread updates for waits', async () => {
+		const states = [
+			state('yesterday-error', 'error', '2026-09-01 12:00:00'),
+			state('running', 'working', '2026-09-02 11:59:00'),
+			state('question', 'idle', '2026-09-02 11:58:00'),
+			state('unread', 'idle', '2026-09-02 11:57:00')
+		]
+		const board = boardFor(
+			states,
+			{
+				question: 'The checks pass. Should I merge the PR?'
+			},
+			states.map(s =>
+				workspace(s.sessionId, {
+					unread_sessions: [{ id: s.sessionId, at: s.updatedAt }]
+				})
+			)
+		)
+		const first = await board.workspaceOverview()
+		expect(first.workspaces.map(item => item.sessionId)).toEqual(['running', 'question', 'unread'])
+		expect(first.waitingForYou).toBe(1)
+		expect(first.workspaces[1]).toMatchObject({
+			status: 'is waiting for you',
+			waitingForYou: { sessionId: 'question', question: 'Should I merge the PR?' }
+		})
+		expect(first.workspaces[2].waitingForYou).toBeNull()
+		expect((await board.workspaceOverview(first.cursor ?? 0)).workspaces.map(item => item.sessionId)).toEqual([
+			'yesterday-error'
+		])
+		expect(
+			(await board.workspaceOverview(0, { agentStatus: 'needs-you' })).workspaces.map(item => item.sessionId)
+		).toEqual(['question'])
+	})
+
+	it('keeps a sibling chat waiting for input visible beside newer running work', async () => {
+		const states = [
+			state('running', 'working', '2026-09-02 11:59:00', { workspaceId: 'w-shared' }),
+			state('waiting', 'needs_user_input', '2026-09-02 11:40:00', {
+				workspaceId: 'w-shared',
+				sessionTitle: 'API decision'
+			})
+		]
+		const board = boardFor(states, { waiting: 'Which API should I use?' }, [workspace('shared')])
+		const overview = await board.workspaceOverview()
+		expect(overview).toMatchObject({ current: 1, waitingForYou: 1 })
+		expect(overview.workspaces[0]).toMatchObject({
+			sessionId: 'running',
+			status: 'is working',
+			updatedAt: '2026-09-02 11:59:00',
+			waitingForYou: { sessionId: 'waiting', chatTitle: 'API decision', question: 'Which API should I use?' }
+		})
+		expect(overview.spoken).toContain('API decision is waiting for you. Which API should I use?')
+	})
+
+	it('names waiting work beyond the latest page without displacing newer activity', async () => {
+		const states = [
+			...['one', 'two', 'three'].map((id, index) => state(id, 'working', `2026-09-02 11:5${9 - index}:00`)),
+			state('waiting', 'idle', '2026-09-02 10:00:00')
+		]
+		const overview = await boardFor(states, { waiting: 'May I ship?' }).workspaceOverview()
+		expect(overview.workspaces.map(item => item.sessionId)).toEqual(['one', 'two', 'three'])
+		expect(overview.waitingForYou).toBe(1)
+		expect(overview.waiting).toMatchObject([
+			{ sessionId: 'waiting', workspaceId: 'w-waiting', question: 'May I ship?' }
+		])
+	})
+
+	it('ages errors and input waits out too, preserves running work, and can explicitly recover older work', async () => {
+		const states = ['idle', 'error', 'needs_user_input', 'needs_plan_response', 'working'].map(status =>
+			state(status, status, '2026-08-28 12:00:00')
+		)
+		const board = boardFor(states)
+		const overview = await board.workspaceOverview()
+		expect(overview).toMatchObject({ current: 1, dormant: 4, waitingForYou: 0 })
+		expect(overview.workspaces.map(item => item.sessionId)).toEqual(['working'])
+		expect(await board.rollCall()).toMatchObject({ working: 1, needsYou: 0, dormant: 4, queue: [] })
+		expect((await board.workspaceOverview(0, { includeDormant: true })).current).toBe(5)
+		expect(
+			(await board.workspaceOverview(0, { updatedSince: '2026-08-28', updatedBefore: '2026-08-29' })).current
+		).toBe(5)
+	})
+
+	it('lets recent activity outrank an old error in the decision queue as relevance halves each day', async () => {
+		const states = [
+			state('old-error', 'error', '2026-08-31 12:00:00'),
+			state('question', 'idle', '2026-09-02 11:58:00'),
+			state('unread', 'idle', '2026-09-02 11:57:00')
+		]
+		const board = boardFor(
+			states,
+			{ question: 'May I deploy?' },
+			states.map(s =>
+				workspace(s.sessionId, {
+					unread_sessions: [{ id: s.sessionId, at: s.updatedAt }]
+				})
+			)
+		)
+		const roll = await board.rollCall()
+		expect(roll.queue.map(item => item.sessionId)).toEqual(['question', 'unread', 'old-error'])
+		expect(roll.needsYou).toBe(2)
+		expect((await board.nextDecision())?.spoken).toContain('Decision needed: May I deploy?')
+	})
+
+	it('does not resurrect a historical structured question after an idle chat finishes', async () => {
+		const lastQuestionInput = vi.fn(() => ({
+			questions: [{ question: 'Ship?', options: [{ label: 'Yes' }, { label: 'No' }] }]
+		}))
+		const board = new VoiceBriefBoard({
+			reads: {
+				listWorkspaces: () => [workspace('finished'), workspace('waiting')],
+				listSessionStates: () => [
+					state('finished', 'idle', '2026-09-02 11:59:00'),
+					state('waiting', 'needs_plan_response', '2026-09-02 11:58:00')
+				],
+				lastAssistantText: () => 'All done.',
+				lastQuestionInput
+			},
+			locked: async () => false,
+			readPrefs: () => ({ readMarks: {}, drafts: {} }),
+			writePrefs: () => ({ readMarks: {}, drafts: {} }),
+			now: () => NOW
+		})
+		const overview = await board.workspaceOverview(0, { agentStatus: 'needs-you' })
+		expect(overview.workspaces.map(item => item.sessionId)).toEqual(['waiting'])
+		expect(overview.workspaces[0].waitingForYou?.question).toBe('Ship?')
+		expect(lastQuestionInput.mock.calls).toEqual([['waiting']])
+	})
+
 	it('builds a fresh overview of current workspaces with their latest agent updates', async () => {
 		const active = state('active', 'working', '2026-09-02 11:45:00')
 		const old = state('old', 'idle', '2026-08-20 00:00:00')
@@ -368,13 +511,13 @@ describe('VoiceBriefBoard', () => {
 
 		const roll = await board.rollCall()
 		expect(roll.spoken.startsWith('Mac is unlocked; sends can land.')).toBe(true)
-		expect(roll.spoken).toContain('1 working, 4 need you, 1 dormant')
+		expect(roll.spoken).toContain('1 working, 3 need you, 1 dormant')
 		expect(roll.spoken.length).toBeLessThanOrEqual(600)
-		expect(roll.queue.map(q => q.sessionId)).toEqual(['error', 'input', 'question', 'unread', 'recent'])
+		expect(roll.queue.map(q => q.sessionId)).toEqual(['question', 'input', 'error', 'unread', 'recent'])
 
 		const decision = await board.nextDecision()
-		expect(decision?.sessionId).toBe('error')
-		expect(decision?.spoken).toContain('Workspace error')
+		expect(decision?.sessionId).toBe('question')
+		expect(decision?.spoken).toContain('Which endpoint?')
 		expect(decision?.spoken.length).toBeLessThanOrEqual(400)
 	})
 

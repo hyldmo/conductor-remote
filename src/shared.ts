@@ -419,6 +419,11 @@ export function isVoiceLanguage(value: unknown): value is VoiceLanguage {
 	return typeof value === 'string' && (VOICE_LANGUAGES as readonly string[]).includes(value)
 }
 
+/** Realtime's speech-speed range, shared by the browser, call API, and CLI setting. */
+export function isVoiceSpeed(value: unknown): value is number {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0.25 && value <= 1.5
+}
+
 /** One attachment token in Conductor's prompt syntax. */
 export interface AttachmentToken {
 	/** Character offsets in the prompt, with `end` immediately after the closing parenthesis. */

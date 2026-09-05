@@ -84,6 +84,7 @@ function setup(apiOrigin = 'https://api.openai.com') {
 		model: 'gpt-realtime-2.1-mini',
 		reasoningEffort: 'low',
 		voice: 'marin',
+		speed: 1.4,
 		mcpUrl: 'https://mac.example/voice/mcp',
 		mcpToken: 'voice-only-token',
 		stateFile: path.join(dir, 'voice-calls.json'),
@@ -123,7 +124,7 @@ describe('the call accept payload', () => {
 			model: 'gpt-realtime-2.1',
 			reasoning: { effort: 'medium' },
 			instructions: VOICE_INSTRUCTIONS,
-			audio: { output: { voice: 'marin' } },
+			audio: { output: { voice: 'marin', speed: 1.25 } },
 			tools: [
 				{
 					type: 'mcp',
@@ -195,7 +196,10 @@ describe('VoiceBroker', () => {
 	it('accepts, persists, and opens the authenticated observer socket', async () => {
 		const { broker, sockets, socketFactory, fetcher } = setup()
 		await broker.accept('rtc_1')
-		expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ reasoning: { effort: 'low' } })
+		expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({
+			reasoning: { effort: 'low' },
+			audio: { output: { speed: 1.4 } }
+		})
 		expect(fetcher).toHaveBeenCalledWith(
 			'https://api.openai.com/v1/realtime/calls/rtc_1/accept',
 			expect.objectContaining({

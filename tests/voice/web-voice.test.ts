@@ -3,6 +3,7 @@ import {
 	DEFAULT_VOICE_PREFERENCES,
 	loadVoicePreferences,
 	parseVoiceEvent,
+	saveVoicePreferences,
 	voiceToolLabel
 } from '../../web/src/lib/voice/connection.ts'
 
@@ -70,5 +71,28 @@ describe('the browser voice seam', () => {
 	it('falls back from stale local preferences', () => {
 		const storage = { getItem: () => JSON.stringify({ voice: 'not-a-voice', language: 'xx' }) }
 		expect(loadVoicePreferences(storage)).toEqual(DEFAULT_VOICE_PREFERENCES)
+	})
+
+	it('remembers a device speed and can return to the relay default without losing voice or language', () => {
+		let saved = JSON.stringify({ voice: 'cedar', language: 'no' })
+		const storage = {
+			getItem: () => saved,
+			setItem: (_key: string, value: string) => {
+				saved = value
+			}
+		}
+		const prefs = loadVoicePreferences(storage)
+		expect(prefs).toEqual({ voice: 'cedar', language: 'no' })
+		saveVoicePreferences({ ...prefs, speed: 1.5 }, storage)
+		expect(loadVoicePreferences(storage)).toEqual({ voice: 'cedar', language: 'no', speed: 1.5 })
+		saveVoicePreferences({ ...prefs, speed: undefined }, storage)
+		expect(loadVoicePreferences(storage)).toEqual(prefs)
+	})
+
+	it.each([null, '1.5', 0, 2])('ignores an invalid saved speed: %s', speed => {
+		expect(loadVoicePreferences({ getItem: () => JSON.stringify({ voice: 'cedar', language: 'en', speed }) })).toEqual({
+			voice: 'cedar',
+			language: 'en'
+		})
 	})
 })

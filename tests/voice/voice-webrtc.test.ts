@@ -16,7 +16,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 					transcription: Record<string, unknown>
 					turn_detection: Record<string, unknown>
 				}
-				output: { voice: string }
+				output: { voice: string; speed: number }
 			}
 			tools: Array<{ type: string; name: string; parameters: Record<string, unknown> }>
 		}
@@ -35,6 +35,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 			interrupt_response: true
 		})
 		expect(session.audio.output.voice).toBe('marin')
+		expect(session.audio.output.speed).toBe(1.25)
 		expect(session.tools.map(tool => [tool.type, tool.name])).toEqual([
 			['function', 'voice_roll_call'],
 			['function', 'voice_workspace_overview'],
@@ -79,7 +80,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 				'sk-secret',
 				'https://eu.api.openai.com/',
 				'v=0\r\na=offer',
-				{ model: 'gpt-realtime-2.1', reasoningEffort: 'low', voice: 'marin', language: 'en' },
+				{ model: 'gpt-realtime-2.1', reasoningEffort: 'low', voice: 'marin', speed: 1.4, language: 'en' },
 				'safe-id',
 				fetcher
 			)
@@ -100,6 +101,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 		}
 		expect(configured.model).toBe('gpt-realtime-2.1')
 		expect(configured.reasoning).toEqual({ effort: 'low' })
+		expect(configured).toMatchObject({ audio: { output: { speed: 1.4 } } })
 		expect(configured.tools).toHaveLength(12)
 	})
 

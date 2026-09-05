@@ -17,6 +17,7 @@ const config: VoiceConfig = {
 	model: 'gpt-realtime',
 	reasoningEffort: 'medium',
 	voice: 'marin',
+	speed: 1.25,
 	sipHost: 'sip.api.openai.com'
 }
 

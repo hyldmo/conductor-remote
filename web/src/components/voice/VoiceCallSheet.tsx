@@ -16,6 +16,8 @@ const LANGUAGE_OPTIONS: [VoiceLanguage, string][] = [
 	['en', 'English']
 ]
 
+const SPEED_OPTIONS = [0.5, 0.75, 1, 1.1, 1.25, 1.5]
+
 function voiceLabel(voice: OpenAIRealtimeVoice): string {
 	return voice[0].toUpperCase() + voice.slice(1)
 }
@@ -295,6 +297,23 @@ export function VoiceCallSheet() {
 										{LANGUAGE_OPTIONS.map(([value, label]) => (
 											<option key={value} value={value}>
 												{label}
+											</option>
+										))}
+									</select>
+								</label>
+								<label className="col-span-2 text-xs font-medium text-muted">
+									Speech speed
+									<select
+										value={voice.preferences.speed ?? ''}
+										onChange={event =>
+											voice.setSpeed(event.target.value === '' ? undefined : Number(event.target.value))
+										}
+										className="mt-1.5 block h-11 w-full rounded-xl border border-border bg-surface-2 px-3 text-sm text-text [color-scheme:dark]"
+									>
+										<option value="">Default</option>
+										{SPEED_OPTIONS.map(speed => (
+											<option key={speed} value={speed}>
+												{speed}×
 											</option>
 										))}
 									</select>
