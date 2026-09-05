@@ -1,7 +1,39 @@
 import { describe, expect, test } from 'vitest'
-import { coordinator, startExisting } from './fixtures.ts'
+import { WorkflowCoordinator } from '../../../src/orchestration/workflow/coordinator.ts'
+import { WorkflowRoleVerificationError } from '../../../src/orchestration/workflow/errors.ts'
+import { uiTurn } from '../../../src/writes/ui-lock.ts'
+import { coordinator, relay, startExisting } from './fixtures.ts'
 
 describe('WorkflowCoordinator durable barriers', () => {
+	test('offers Retry for a known role mismatch after successful apply without quarantine', async () => {
+		const { db, fake } = coordinator()
+		const defaults = fake.deps()
+		let mismatch = true
+		const value = new WorkflowCoordinator(db, relay, {
+			...defaults,
+			configureSession: call =>
+				mismatch
+					? uiTurn(async () => {
+							throw new WorkflowRoleVerificationError()
+						})
+					: defaults.configureSession(call)
+		})
+		const { workflow } = await startExisting(value)
+		await value.wake(workflow.id)
+		expect(value.projection(workflow.id)).toMatchObject({
+			phase: 'blocked',
+			actions: { canRetry: true, canReplayAmbiguous: false }
+		})
+		expect(db.getWorkflowRun(workflow.id)?.blocked?.retryClass).toBe('deterministic')
+		expect(db.getWorkflowEffect(workflow.id, 'configure-root')).toMatchObject({ state: 'failed', mayExecute: true })
+		expect(db.getUiQuarantine().active).toBe(false)
+		mismatch = false
+		await value.retry({ clientId: 'retry-mismatch', workflowId: workflow.id })
+		await value.wake(workflow.id)
+		expect(fake.sent).toHaveLength(1)
+		expect(db.getWorkflowEffect(workflow.id, 'configure-root')?.attemptCount).toBe(2)
+		db.close()
+	})
 	test('blocks pre-dispatch failures as retryable and post-dispatch failures as explicit replay risk', async () => {
 		const deterministic = coordinator()
 		const first = await startExisting(deterministic.value)

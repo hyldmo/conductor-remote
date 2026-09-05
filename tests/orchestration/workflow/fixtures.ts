@@ -176,6 +176,7 @@ export class FakeEffects {
 				if (this.failMaterialize) throw new Error('handoff render interrupted')
 				return undefined
 			},
+			materializeReport: async ({ job }) => `report-for-${job.id}-${job.attemptCount}`,
 			sendPrompt: async ({ effect, sessionId, text }) =>
 				uiTurn(async () => {
 					const receipt =

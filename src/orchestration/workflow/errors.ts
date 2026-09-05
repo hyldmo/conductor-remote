@@ -18,3 +18,23 @@ export class WorkflowCoordinatorError extends Error {
 		this.retryable = options.retryable ?? false
 	}
 }
+
+/** Only raised after the role write has finished successfully and a present chat was read back. */
+export class WorkflowRoleVerificationError extends WorkflowCoordinatorError {
+	constructor() {
+		super(
+			'workflow_role_verification_failed',
+			'Conductor no longer matches every frozen role setting; no fallback was selected.',
+			{ retryable: true }
+		)
+		this.name = 'WorkflowRoleVerificationError'
+	}
+}
+
+/** The process inventory could not be read. No incompatible relay was observed. */
+export class WorkflowCompatibilityReadError extends WorkflowCoordinatorError {
+	constructor(message: string) {
+		super('workflow_incompatible_relay', message, { retryable: true })
+		this.name = 'WorkflowCompatibilityReadError'
+	}
+}

@@ -1,6 +1,8 @@
 import { and, asc, eq } from 'drizzle-orm'
 import { decodeEvent } from './codecs.ts'
 import type { PersistenceConnection } from './connection.ts'
+import { idempotentMutation } from './idempotency.ts'
+import { requireRun } from './records.ts'
 import { workflowEvents } from './schema.ts'
 import type { WorkflowEventRecord } from './types.ts'
 import { nonEmpty, optionalJson } from './values.ts'
@@ -42,4 +44,16 @@ export function appendEvent(
 
 export function touchRun(context: PersistenceConnection, runId: string, at: number): void {
 	context.db.prepare('UPDATE workflow_runs SET updated_at = ? WHERE id = ?').run(at, runId)
+}
+
+/** Audit read-only probes and notification attempts without changing run/phase state. */
+export function recordWorkflowObservation(
+	context: PersistenceConnection,
+	input: { runId: string; eventKey: string; type: string; data?: unknown }
+): void {
+	idempotentMutation(context, 'workflow_observation', `${input.runId}:${input.eventKey}`, input, () => {
+		requireRun(context, input.runId)
+		appendEvent(context, input.runId, input.eventKey, input.type, input.data)
+		return { runId: input.runId }
+	})
 }

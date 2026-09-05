@@ -1,5 +1,8 @@
 import { type WorkflowRunProjection, type WorkflowRunRecord, WorkflowTransitionError } from '../persistence/db.ts'
+import { notifyBlockedRun } from './blocked.ts'
+import { compatibilityReadFailed, compatibilityReadRecovered } from './compatibility.ts'
 import { markReceiptLost, reconcileBlockedEffect } from './effect-recovery.ts'
+import { WorkflowCompatibilityReadError } from './errors.ts'
 import {
 	cleanUnknown,
 	effectSessionId,
@@ -26,6 +29,8 @@ export function wake(context: WorkflowContext, runId: string): Promise<WorkflowR
 
 export async function wakeInternal(context: WorkflowContext, runId: string): Promise<WorkflowRunProjection> {
 	heartbeat(context)
+	let compatibilityFailed = false
+	let compatibilityChecked = false
 	for (let step = 0; step < MAX_WAKE_STEPS; step++) {
 		const run = requireRun(context, runId)
 		if (run.phase === 'cancelled') {
@@ -34,12 +39,19 @@ export async function wakeInternal(context: WorkflowContext, runId: string): Pro
 		}
 		if (run.phase === 'completed') break
 		if (run.phase === 'blocked') {
+			await notifyBlockedRun(context, run)
 			if (await reconcileBlockedEffect(context, run)) continue
 			break
 		}
 		try {
 			await assertCompatible(context)
+			compatibilityChecked = true
 		} catch (error) {
+			compatibilityFailed = true
+			if (error instanceof WorkflowCompatibilityReadError) {
+				compatibilityReadFailed(context, requireRun(context, runId), error)
+				break
+			}
 			blockRun(context, run, {
 				actionId: `compatibility:${run.id}`,
 				errorCode: 'workflow_incompatible_relay',
@@ -52,6 +64,11 @@ export async function wakeInternal(context: WorkflowContext, runId: string): Pro
 		try {
 			changed = await driveOnce(context, run)
 		} catch (error) {
+			if (error instanceof WorkflowCompatibilityReadError) {
+				compatibilityFailed = true
+				compatibilityReadFailed(context, requireRun(context, runId), error)
+				break
+			}
 			if (error instanceof WorkflowTransitionError) {
 				const current = requireRun(context, runId)
 				if (current.phase !== run.phase || current.cancellationGeneration !== run.cancellationGeneration) continue
@@ -60,6 +77,8 @@ export async function wakeInternal(context: WorkflowContext, runId: string): Pro
 		}
 		if (!changed) break
 	}
+	if (compatibilityChecked && !compatibilityFailed) compatibilityReadRecovered(context, runId)
+	await notifyBlockedRun(context, requireRun(context, runId))
 	return projection(context, runId)
 }
 

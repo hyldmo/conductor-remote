@@ -1,9 +1,14 @@
 import type http from 'node:http'
 import { materializeStagedAttachments } from '../../files/staged-attachments.ts'
 import { WorkflowCoordinator } from '../../orchestration/workflow/coordinator.ts'
-import { WorkflowCoordinatorError } from '../../orchestration/workflow/errors.ts'
+import {
+	WorkflowCompatibilityReadError,
+	WorkflowCoordinatorError,
+	WorkflowRoleVerificationError
+} from '../../orchestration/workflow/errors.ts'
 import { WorkflowRequestError, workflowClientIsMcp } from '../../orchestration/workflow/http.ts'
 import type { FrozenWorkflowRole } from '../../orchestration/workflow/prompts.ts'
+import { workflowReportBody } from '../../orchestration/workflow/report.ts'
 import type { DeliveryReceipt } from '../../reads/types.ts'
 import { renderTranscript } from '../../transcript/parser.ts'
 
@@ -11,6 +16,7 @@ import { retryWontHelp, screenLocked } from '../../writes/guards.ts'
 import type { BaseServices } from './base.ts'
 import type { DelegationsServices } from './delegations.ts'
 import type { DeliveryServices } from './delivery.ts'
+import { createWorkflowNotificationServices } from './workflow-notifications.ts'
 import type { WorkflowProbesServices, WorkflowSessionBaseline, WorkflowWorkspaceBaseline } from './workflow-probes.ts'
 
 export function createWorkflowServices(
@@ -44,7 +50,7 @@ export function createWorkflowServices(
 			| 'readsDeliveryCursor'
 			| 'workflowEffectMarker'
 		> &
-		Pick<DeliveryServices, 'applyAgentPatch' | 'openChat'> &
+		Pick<DeliveryServices, 'applyAgentPatch' | 'openChat' | 'locateChat' | 'confirmDelivery' | 'CONFIRM_WINDOW_MS'> &
 		Pick<DelegationsServices, 'batonText'>
 ) {
 	const {
@@ -79,6 +85,7 @@ export function createWorkflowServices(
 
 	const workflowCoordinator = orchestration.writable
 		? new WorkflowCoordinator(orchestration, relayIdentity, {
+				...createWorkflowNotificationServices(services),
 				captureWorkspaceBaseline: async repoName => {
 					const repo = reads.listRepos().find(candidate => candidate.name === repoName)
 					if (!repo) {
@@ -180,12 +187,13 @@ export function createWorkflowServices(
 							)
 						}
 						const session = reads.getSession(sessionId)
-						if (!session || !sessionMatchesWorkflowRole(session, role)) {
+						if (!session) {
 							throw new WorkflowCoordinatorError(
 								'workflow_effect_failed',
-								'Conductor no longer matches every frozen role setting; no fallback was selected.'
+								'The Workflow chat disappeared after applying its role settings.'
 							)
 						}
+						if (!sessionMatchesWorkflowRole(session, role)) throw new WorkflowRoleVerificationError()
 						return {
 							sessionId,
 							agentType: session.agent_type,
@@ -269,6 +277,16 @@ export function createWorkflowServices(
 					return stableWorkflowAttachment(ws.worktree, job.id, `Workflow ${job.role} handoff.md`, body)
 				},
 				sendPrompt: call => sendWorkflowPrompt(call, false),
+				materializeReport: async ({ run, job, outcome }) => {
+					const ws = run.workspaceId ? reads.getWorkspace(run.workspaceId) : null
+					if (!ws?.worktree) throw new Error('The Workflow report worktree is unavailable.')
+					return stableWorkflowAttachment(
+						ws.worktree,
+						`${job.id}:report:${job.attemptCount}`,
+						`Workflow ${job.role} report.md`,
+						workflowReportBody(run, job, outcome)
+					)
+				},
 				returnBaton: call => sendWorkflowPrompt(call, true),
 				resolveDeliveryReceipt: async ({ sessionId, receipt }) => {
 					const current = reads.deliveryReceiptForId(sessionId, receipt.id)
@@ -308,6 +326,8 @@ export function createWorkflowServices(
 					return {
 						kind: 'success' as const,
 						baton: batonText(last.text),
+						text: last.text,
+						assistantRowid: last.rowid,
 						evidence: { assistantRowid: last.rowid }
 					}
 				},
@@ -416,7 +436,8 @@ export function createWorkflowServices(
 				assertCompatibleRelays: async () => {
 					const error = await workflowCompatibilityError()
 					if (error) {
-						throw new WorkflowCoordinatorError('workflow_incompatible_relay', error, {
+						if (error.kind === 'unverified') throw new WorkflowCompatibilityReadError(error.message)
+						throw new WorkflowCoordinatorError('workflow_incompatible_relay', error.message, {
 							status: 409,
 							retryable: true
 						})
