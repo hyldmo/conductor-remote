@@ -437,12 +437,36 @@ describe('VoiceBroker', () => {
 })
 
 describe('estimateRealtimeCost', () => {
-	it('uses the published mini text and audio rates', () => {
+	it.each([
+		['gpt-realtime-2.1', 0.144],
+		['gpt-realtime-2.1-mini', 0.0418]
+	])('uses the published %s text and audio rates', (model, expected) => {
 		expect(
-			estimateRealtimeCost('gpt-realtime-2.1-mini', {
+			estimateRealtimeCost(model, {
 				input_token_details: { text_tokens: 1_000, audio_tokens: 2_000, cached_tokens: 0 },
 				output_token_details: { text_tokens: 500, audio_tokens: 1_000 }
 			})
-		).toBeCloseTo(0.0418, 8)
+		).toBeCloseTo(expected, 8)
+	})
+
+	it.each([
+		['gpt-realtime-2.1', 0.1115],
+		['gpt-realtime-2.1-mini', 0.031965]
+	])('discounts cached text and audio exactly once for %s', (model, expected) => {
+		expect(
+			estimateRealtimeCost(model, {
+				input_token_details: {
+					text_tokens: 1_000,
+					audio_tokens: 2_000,
+					cached_tokens: 1_250,
+					cached_tokens_details: { text_tokens: 250, audio_tokens: 1_000 }
+				},
+				output_token_details: { text_tokens: 500, audio_tokens: 1_000 }
+			})
+		).toBeCloseTo(expected, 8)
+	})
+
+	it('leaves unpriced models unknown', () => {
+		expect(estimateRealtimeCost('unpriced-model', { input_token_details: { text_tokens: 1_000 } })).toBeNull()
 	})
 })

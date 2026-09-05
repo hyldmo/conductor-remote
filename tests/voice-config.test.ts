@@ -17,13 +17,13 @@ function file(): string {
 }
 
 describe('voice config', () => {
-	it('mints distinct scoped secrets and defaults to the current mini model', () => {
+	it('mints distinct scoped secrets and defaults to GPT-Realtime-2.1', () => {
 		const target = file()
 		const config = readVoiceConfig(target)
 		expect(config.mcpToken).toHaveLength(32)
 		expect(config.trunkSecret).toHaveLength(64)
 		expect(config.trunkSecret).not.toBe(config.mcpToken)
-		expect(config.model).toBe('gpt-realtime-2.1-mini')
+		expect(config.model).toBe('gpt-realtime-2.1')
 		expect(config.sipHost).toBe('sip.api.openai.com')
 		expect(fs.statSync(target).mode & 0o777).toBe(0o600)
 	})

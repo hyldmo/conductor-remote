@@ -235,14 +235,20 @@ Search uses `GET /api/voice/search?q=…&limit=12&offset=0`, optionally with `ca
 
 ### Cost
 
-The default is `gpt-realtime-2.1-mini`. OpenAI currently publishes these per-million-token prices:
+The default is `gpt-realtime-2.1`. Existing installations keep their saved model; switch them with:
+
+```bash
+conductor-remote config set voice.model gpt-realtime-2.1
+```
+
+This restarts the relay; start a new call to use the new model. OpenAI currently publishes these per-million-token prices for GPT-Realtime-2.1:
 
 | Modality | Input | Cached input | Output |
 | --- | ---: | ---: | ---: |
-| Text | $0.60 | $0.06 | $2.40 |
-| Audio | $10.00 | $0.30 | $20.00 |
+| Text | $4.00 | $0.40 | $24.00 |
+| Audio | $32.00 | $0.40 | $64.00 |
 
-The broker logs actual token usage and an estimate for every completed response. Use those lines for this workflow's real per-call cost; Twilio phone-number and PSTN charges are separate and depend on the account/country. The rate source is the [GPT-Realtime-2.1 Mini model page](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini).
+The broker logs actual token usage and an estimate for every completed response. Use those lines for this workflow's real per-call cost; Twilio phone-number and PSTN charges are separate and depend on the account/country. The rate source is the [GPT-Realtime-2.1 model page](https://developers.openai.com/api/docs/models/gpt-realtime-2.1). `gpt-realtime-2.1-mini` remains available through `voice.model`, with its own cost estimates using the [Mini model rates](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini).
 
 ### Disable or rotate
 
