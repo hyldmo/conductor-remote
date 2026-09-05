@@ -140,7 +140,7 @@ describe('delegation phone surfaces', () => {
 
 		expect(html).toContain('exploration')
 		expect(html).toContain('Muse Spark')
-		expect(html).toContain('bg-surface-2')
+		expect(html).toContain('bg-text text-bg')
 	})
 
 	test('renders managed state only from WorkflowRunWire and keeps ad hoc tabs distinct', () => {
@@ -237,14 +237,22 @@ describe('delegation phone surfaces', () => {
 		expect(html).toContain('unsupported future schema')
 	})
 
-	test('shares the agent strip with selectable provider-native children', () => {
+	test.each([0, 1])('keeps both native subtabs visible with only child %s selected', selectedIndex => {
 		const tabs = [
 			{
 				key: 'tool-call-1',
 				label: 'Inspect parser',
 				model: '5.6 Sol',
 				agentType: 'codex',
-				selected: true,
+				selected: selectedIndex === 0,
+				onSelect: vi.fn()
+			},
+			{
+				key: 'tool-call-2',
+				label: 'Inspect rendering',
+				model: '5.6 Terra',
+				agentType: 'codex',
+				selected: selectedIndex === 1,
 				onSelect: vi.fn()
 			}
 		]
@@ -254,7 +262,16 @@ describe('delegation phone surfaces', () => {
 		expect(html).toContain('aria-current="page"')
 		expect(html).toContain('Inspect parser')
 		expect(html).toContain('5.6 Sol')
-		expect(renderToStaticMarkup(<AgentSubtabStrip label="Subagents" tabs={tabs} parentSelected={false} />)).toBe('')
+		expect(html).toContain('Inspect rendering')
+		expect(html).toContain('5.6 Terra')
+		expect(html.match(/<button/g)).toHaveLength(2)
+		const selectedButtons = html.match(/<button\b[^>]*aria-current="page"[^>]*>[\s\S]*?<\/button>/g) ?? []
+		expect(selectedButtons).toHaveLength(1)
+		expect(selectedButtons[0]).toContain(tabs[selectedIndex].label)
+		expect(selectedButtons[0]).toContain('bg-text text-bg')
+		// Provider icons and metadata need contrasting ink on the inverted surface too.
+		expect(selectedButtons[0]).not.toContain('color:var(--color-provider-openai)')
+		expect(selectedButtons[0]).toContain('text-bg/75')
 	})
 
 	test('role identity survives independently of an active job', () => {

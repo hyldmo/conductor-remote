@@ -209,13 +209,13 @@ export function Transcript({
 			agentType: agentType ?? null,
 			...(failed ? { status: 'Failed', state: 'failed' as const } : {}),
 			selected,
-			...(onSelectSubagent ? { onSelect: () => onSelectSubagent(selected ? null : subagent.id) } : {})
+			...(onSelectSubagent ? { onSelect: () => onSelectSubagent(subagent.id) } : {})
 		}
 	})
 
 	return (
 		<div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-			<AgentSubtabStrip tabs={nativeTabs} label="Subagents" parentSelected={!selectedSubagentId} />
+			<AgentSubtabStrip tabs={nativeTabs} label="Subagents" />
 			<div className="relative flex min-h-0 min-w-0 flex-1">
 				<div
 					ref={scroller}

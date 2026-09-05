@@ -9,7 +9,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'history', { configurable: true, value: { replaceState: () => {} } })
 
-const { delegationPipelineForParentSession, workflowForActiveSession } = await import(
+const { delegationPipelineForParentSession, delegationPipelinesForSession, workflowForActiveSession } = await import(
 	'../../web/src/components/session/selection.ts'
 )
 const { DiffButton, DiffFileScopeToggle, DiffFolderToggle } = await import(
@@ -18,6 +18,7 @@ const { DiffButton, DiffFileScopeToggle, DiffFolderToggle } = await import(
 const { SessionTabs } = await import('../../web/src/components/session/SessionTabs.tsx')
 const { SubagentReplyNotice } = await import('../../web/src/components/session/SessionNotices.tsx')
 const { ClosedTabsList } = await import('../../web/src/components/session/ClosedTabsSheet.tsx')
+const { DelegationPipeline } = await import('../../web/src/components/orchestration/DelegationPipeline.tsx')
 
 const session: Session = {
 	id: 'chat-1',
@@ -95,7 +96,7 @@ describe('phone chat tabs', () => {
 		expect(workflowForActiveSession([first, second], 'ordinary-chat', {}, [childJob])).toBeUndefined()
 	})
 
-	test('shows delegation subtabs only beneath the selected parent tab', () => {
+	test('scopes delegation subtabs to their owning parent', () => {
 		const workflow: WorkflowRunWire = {
 			id: 'workflow-1',
 			workspaceId: 'workspace-1',
@@ -147,6 +148,40 @@ describe('phone chat tabs', () => {
 		expect(selected?.roles).toEqual(roles)
 		expect(delegationPipelineForParentSession([workflow], [childJob], roles, 'child-1')).toBeUndefined()
 		expect(delegationPipelineForParentSession([workflow], [childJob], roles, 'ordinary-chat')).toBeUndefined()
+		// Opening a child retains its parent's row even before its role snapshot arrives.
+		expect(delegationPipelinesForSession([workflow], [childJob], roles, 'child-1')).toEqual([selected])
+		expect(delegationPipelinesForSession([workflow], [childJob], {}, 'child-1')[0]?.jobs).toEqual([childJob])
+		// Returned jobs can disappear, leaving only the durable Workflow assignment.
+		expect(delegationPipelinesForSession([workflow], [], roles, 'child-1')[0]?.workflow).toBe(workflow)
+		expect(delegationPipelinesForSession([workflow], [childJob], roles, 'ordinary-chat')).toEqual([])
+	})
+
+	test.each(['parent', 'child-1', 'child-2'])('keeps completed sibling subtabs visible with %s selected', activeId => {
+		const roles = {
+			'child-1': { role: 'exploration', delegationId: 'job-1', parentSessionId: 'parent', assignedAt: 1 },
+			'child-2': { role: 'review', delegationId: 'job-2', parentSessionId: 'parent', assignedAt: 2 },
+			unrelated: { role: 'implementation', delegationId: 'job-3', parentSessionId: 'other-parent', assignedAt: 3 }
+		}
+		const sessions = Object.keys(roles).map(id => ({ ...session, id }))
+		const pipelines = delegationPipelinesForSession([], [], roles, activeId)
+		const html = renderToStaticMarkup(
+			pipelines.map(pipeline => (
+				<DelegationPipeline
+					key={pipeline.parentSessionId}
+					{...pipeline}
+					sessions={sessions}
+					activeSessionId={activeId}
+					onSelectSession={vi.fn()}
+				/>
+			))
+		)
+		expect(html).toContain('exploration')
+		expect(html).toContain('review')
+		expect(html).not.toContain('implementation')
+		expect(html.match(/<button/g)).toHaveLength(2)
+		const selectedButtons = html.match(/<button\b[^>]*aria-current="page"[^>]*>[\s\S]*?<\/button>/g) ?? []
+		expect(selectedButtons).toHaveLength(activeId === 'parent' ? 0 : 1)
+		if (activeId !== 'parent') expect(selectedButtons[0]).toContain(activeId === 'child-1' ? 'exploration' : 'review')
 	})
 
 	test('a delegated parent does not appear as its own child when it has a nested delegation', () => {
@@ -156,6 +191,12 @@ describe('phone chat tabs', () => {
 		}
 		expect(delegationPipelineForParentSession([], [], roles, 'parent')?.roles).toEqual({ child: roles.child })
 		expect(delegationPipelineForParentSession([], [], roles, 'root')?.roles).toEqual({ parent: roles.parent })
+		for (const activeId of ['parent', 'child']) {
+			expect(delegationPipelinesForSession([], [], roles, activeId).map(pipeline => pipeline.parentSessionId)).toEqual([
+				'root',
+				'parent'
+			])
+		}
 	})
 
 	test('keeps completed ad hoc children under their exact parent without a planning role', () => {
@@ -177,6 +218,9 @@ describe('phone chat tabs', () => {
 			'old-planner': roles['old-planner'],
 			'old-child': roles['old-child']
 		})
+		expect(delegationPipelinesForSession([], [], roles, 'old-child').map(pipeline => pipeline.parentSessionId)).toEqual(
+			['old-planner']
+		)
 	})
 
 	test('hides the close control when there is only one tab', () => {

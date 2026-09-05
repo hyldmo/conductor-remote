@@ -31,7 +31,7 @@ import { Composer } from './Composer.tsx'
 import { DiffButton, DiffPanel, MobileDiffNavigator } from './DiffPanel.tsx'
 import { SubagentReplyNotice } from './SessionNotices.tsx'
 import { SessionTabs, TabCloseNotice } from './SessionTabs.tsx'
-import { delegationPipelineForParentSession, workflowForActiveSession } from './selection.ts'
+import { delegationPipelinesForSession, workflowForActiveSession } from './selection.ts'
 
 export function SessionView() {
 	const { workspaceId } = useParams<{ workspaceId: string }>()
@@ -143,11 +143,11 @@ export function SessionView() {
 	const workspaceWorkflows = (data?.workflows ?? []).filter(run => run.workspaceId === workspaceId)
 	if (ws?.workflow && !workspaceWorkflows.some(run => run.id === ws.workflow?.id)) workspaceWorkflows.push(ws.workflow)
 	const sessionWorkflow = workflowForActiveSession(workspaceWorkflows, sessionId, sessionRoles, delegations)
-	const delegationPipeline = delegationPipelineForParentSession(
+	const delegationPipelines = delegationPipelinesForSession(
 		workspaceWorkflows,
 		delegations,
 		sessionRoles,
-		pickedSubagent || activeDiffFile ? null : sessionId
+		activeDiffFile ? null : sessionId
 	)
 	const activeWorkflowAssignment = sessionId ? sessionRoles[sessionId] : undefined
 	const activeWorkflowJob = sessionId
@@ -496,16 +496,17 @@ export function SessionView() {
 							</button>
 						</div>
 					) : null}
-					{delegationPipeline ? (
+					{delegationPipelines.map(delegationPipeline => (
 						<DelegationPipeline
+							key={delegationPipeline.parentSessionId}
 							workflow={delegationPipeline.workflow}
 							jobs={delegationPipeline.jobs}
 							sessions={sessions}
 							roles={delegationPipeline.roles}
-							activeSessionId={sessionId}
+							activeSessionId={pickedSubagent ? null : sessionId}
 							onSelectSession={pickSession}
 						/>
-					) : null}
+					))}
 					{ws.delegation_warning || delegationError ? (
 						<div className="shrink-0 border-b border-del/30 bg-del/5 px-3 py-1.5 text-xs text-del">
 							{delegationError ?? ws.delegation_warning}

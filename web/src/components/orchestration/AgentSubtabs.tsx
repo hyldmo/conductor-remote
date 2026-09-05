@@ -114,17 +114,8 @@ export function PipelineTabs({
  * Keeping the presentation address-agnostic lets both preserve the same visual
  * hierarchy without pretending a native child is a promptable Conductor chat.
  */
-export function AgentSubtabStrip({
-	tabs,
-	label,
-	parentSelected = true
-}: {
-	tabs: AgentSubtab[]
-	label: string
-	/** A child view uses the transcript area but does not own this navigation level. */
-	parentSelected?: boolean
-}) {
-	if (!parentSelected || !tabs.length) return null
+export function AgentSubtabStrip({ tabs, label }: { tabs: AgentSubtab[]; label: string }) {
+	if (!tabs.length) return null
 	return (
 		<nav
 			aria-label={label}
@@ -134,11 +125,18 @@ export function AgentSubtabStrip({
 				const failed = tab.state === 'failed'
 				const contents = (
 					<>
-						<ProviderMark agentType={tab.agentType} model={tab.model} className="size-3.5" />
+						<ProviderMark agentType={tab.agentType} model={tab.model} monochrome={tab.selected} className="size-3.5" />
 						<span className="max-w-28 truncate font-medium">{tab.label}</span>
-						{tab.model ? <span className="max-w-28 truncate text-faint">{tab.model}</span> : null}
+						{tab.model ? (
+							<span className={cn('max-w-28 truncate', tab.selected ? 'text-bg/75' : 'text-faint')}>{tab.model}</span>
+						) : null}
 						{tab.status ? (
-							<span className={cn('flex shrink-0 items-center gap-1', failed ? 'text-del' : 'text-muted')}>
+							<span
+								className={cn(
+									'flex shrink-0 items-center gap-1',
+									tab.selected ? 'text-bg/75' : failed ? 'text-del' : 'text-muted'
+								)}
+							>
 								{tab.state === 'failed' ? (
 									<AlertTriangle size={10} />
 								) : tab.state === 'waiting' ? (
@@ -162,9 +160,11 @@ export function AgentSubtabStrip({
 								onClick={tab.onSelect}
 								aria-current={tab.selected ? 'page' : undefined}
 								className={cn(
-									'flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-border-soft px-2 text-[11px] active:bg-surface-2',
-									tab.selected && 'border-accent/50 bg-surface-2',
-									failed && 'border-del/40'
+									'flex h-7 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px]',
+									tab.selected
+										? 'border-text bg-text text-bg active:bg-text/90'
+										: 'border-border-soft active:bg-surface-2',
+									failed && !tab.selected && 'border-del/40'
 								)}
 							>
 								{contents}
