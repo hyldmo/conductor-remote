@@ -1,0 +1,79 @@
+/* Keep native range interaction and keyboard support; the separate rail aligns
+   its endpoints with the centres of the 24px thumb in WebKit and Firefox. */
+.voice-speed-range {
+	position: relative;
+	display: block;
+	width: 100%;
+	height: 44px;
+	margin: 0;
+	appearance: none;
+	-webkit-appearance: none;
+	border-radius: 8px;
+	background: transparent;
+	cursor: pointer;
+	touch-action: pan-y;
+}
+
+.voice-speed-range:focus-visible {
+	outline: none;
+}
+
+.voice-speed-range::-webkit-slider-runnable-track {
+	height: 6px;
+	background: transparent;
+}
+
+.voice-speed-range::-moz-range-track {
+	height: 6px;
+	background: transparent;
+}
+
+.voice-speed-range::-webkit-slider-thumb {
+	width: 24px;
+	height: 24px;
+	margin-top: -9px;
+	-webkit-appearance: none;
+	border: 4px solid var(--color-voice);
+	border-radius: 50%;
+	background: var(--color-surface);
+	transition: transform 150ms ease;
+}
+
+.voice-speed-range::-moz-range-thumb {
+	box-sizing: border-box;
+	width: 24px;
+	height: 24px;
+	border: 4px solid var(--color-voice);
+	border-radius: 50%;
+	background: var(--color-surface);
+	transition: transform 150ms ease;
+}
+
+.voice-speed-range:focus-visible::-webkit-slider-thumb {
+	outline: 2px solid var(--color-voice);
+	outline-offset: 4px;
+}
+
+.voice-speed-range:focus-visible::-moz-range-thumb {
+	outline: 2px solid var(--color-voice);
+	outline-offset: 4px;
+}
+
+.voice-speed-range:hover::-webkit-slider-thumb,
+.voice-speed-range:active::-webkit-slider-thumb {
+	transform: scale(1.15);
+}
+
+.voice-speed-range:hover::-moz-range-thumb,
+.voice-speed-range:active::-moz-range-thumb {
+	transform: scale(1.15);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.voice-speed-range::-webkit-slider-thumb {
+		transition: none;
+	}
+	.voice-speed-range::-moz-range-thumb {
+		transition: none;
+	}
+}
