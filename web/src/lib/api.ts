@@ -9,6 +9,8 @@ import { getToken } from './auth-token.ts'
 import type {
 	AgentPatch,
 	AgentResult,
+	AgentsConfig,
+	AgentsResponse,
 	ArchiveResult,
 	AutoModelConfig,
 	AutoModelConfigResponse,
@@ -49,6 +51,8 @@ import type {
 	RestoreChatResult,
 	RolesConfig,
 	RolesResponse,
+	RoutingConfig,
+	RoutingConfigResponse,
 	SearchResponse,
 	SendPromptRequest,
 	SendResult,
@@ -63,6 +67,7 @@ import type {
 	StopResult,
 	ToolUsageRange,
 	ToolUsageResponse,
+	UpdateAgentsResult,
 	UpdateRolesResult,
 	UploadAttachmentResult,
 	VoiceCallResponse,
@@ -87,7 +92,8 @@ import type {
 export class ApiError extends Error {
 	constructor(
 		message: string,
-		readonly status: number
+		readonly status: number,
+		readonly body?: unknown
 	) {
 		super(message)
 	}
@@ -162,7 +168,7 @@ async function api<T>(
 	}
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as { error?: unknown }
-		throw new ApiError(responseErrorMessage(body.error, `HTTP ${res.status}`), res.status)
+		throw new ApiError(responseErrorMessage(body.error, `HTTP ${res.status}`), res.status, body)
 	}
 	if (expectedStatus !== undefined && res.status !== expectedStatus) {
 		throw new ApiError(`Expected HTTP ${expectedStatus}, received ${res.status}`, res.status)
@@ -226,6 +232,18 @@ function cachedObjectUrl(path: string): Promise<string> {
 }
 
 export const client = {
+	agents: () => api<AgentsResponse>(routes.agents.path()),
+	updateAgents: (config: AgentsConfig) =>
+		api<UpdateAgentsResult>(routes.updateAgents.path(), {
+			method: routes.updateAgents.method,
+			body: JSON.stringify(config)
+		}),
+	routing: () => api<RoutingConfigResponse>(routes.routing.path()),
+	updateRouting: (config: RoutingConfig) =>
+		api<RoutingConfigResponse>(routes.updateRouting.path(), {
+			method: routes.updateRouting.method,
+			body: JSON.stringify(config)
+		}),
 	autoModelConfig: () => api<AutoModelConfigResponse>(routes.autoModelConfig.path()),
 	updateAutoModelConfig: (config: AutoModelConfig) =>
 		api<AutoModelConfigResponse>(routes.updateAutoModelConfig.path(), {

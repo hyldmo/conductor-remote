@@ -17,10 +17,10 @@ import { type PromptIndicatorState, promptIndicator } from '../../lib/prompts/pe
 import { conversationTabs, latestChat, previousChats } from '../../lib/transcript/history.ts'
 import type { WorkflowRoleName } from '../../lib/types.ts'
 import { useApp, WORKING_HINT_MS } from '../../store.ts'
+import { AgentsSettings } from '../agents/AgentsSettings.tsx'
 import { ContextBreakdownSheet } from '../agents/ContextBreakdownSheet.tsx'
 import { Header } from '../Header.tsx'
 import { DelegationPipeline } from '../orchestration/DelegationPipeline.tsx'
-import { RolesSettings } from '../orchestration/RolesSettings.tsx'
 import { DiffFileViewer, type DiffReviewState } from '../review/DiffView.tsx'
 import { Transcript } from '../transcript/Transcript.tsx'
 import type { SplitFormat } from '../transcript/types.ts'
@@ -63,7 +63,7 @@ export function SessionView() {
 	// including a notification for the same chat, returns the pane to the transcript.
 	const activeDiffFile = selectedDiff?.locationKey === location.key ? selectedDiffFile : null
 	const diffNavigatorOpen = diffNavigatorLocation === location.key
-	const [rolesOpen, setRolesOpen] = useState(false)
+	const [agentsOpen, setAgentsOpen] = useState(false)
 	const [delegationError, setDelegationError] = useState<string | null>(null)
 	const [creatingChat, setCreatingChat] = useState(false)
 	const [closingChat, setClosingChat] = useState<string | null>(null)
@@ -495,8 +495,8 @@ export function SessionView() {
 								<DevServerControls workspaceId={ws.id} />
 								<button
 									type="button"
-									onClick={() => setRolesOpen(true)}
-									aria-label="Open delegated roles"
+									onClick={() => setAgentsOpen(true)}
+									aria-label="Open agents"
 									className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2"
 								>
 									<Workflow size={18} />
@@ -640,7 +640,7 @@ export function SessionView() {
 								onSelectSession={pickSession}
 								onSelectSubagent={pickSubagent}
 								onDismissDelegation={delegationId => void dismissDelegation(delegationId)}
-								onOpenRoles={() => setRolesOpen(true)}
+								onOpenRoles={() => setAgentsOpen(true)}
 							/>
 						)}
 						{diffOpen && diffNavigatorOpen ? (
@@ -712,7 +712,7 @@ export function SessionView() {
 						onClose={closeDiff}
 					/>
 				) : null}
-				{rolesOpen ? <RolesSettings onClose={() => setRolesOpen(false)} /> : null}
+				{agentsOpen ? <AgentsSettings onClose={() => setAgentsOpen(false)} /> : null}
 				{contextSession && contextSession.workspaceId === workspaceId ? (
 					<ContextBreakdownSheet
 						sessionId={contextSession.id}

@@ -31,7 +31,7 @@ export function DelegationBubbles({
 				const actions: QueueBubbleAction[] = []
 				if (peer) actions.push({ label: parent ? 'Open worker' : 'Open parent', onClick: () => onSelectSession(peer) })
 				if (failed) {
-					actions.push({ label: 'Edit roles', onClick: onOpenRoles, primary: true })
+					actions.push({ label: 'Edit agents', onClick: onOpenRoles, primary: true })
 					actions.push({ label: 'Dismiss delegation', onClick: () => onDismiss(job.id) })
 				}
 				return (

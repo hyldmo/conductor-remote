@@ -32,9 +32,9 @@ import { unreadCount } from '../../lib/read.ts'
 import { readThemePreference, type ThemePreference, writeThemePreference } from '../../lib/theme.ts'
 import { ALL_REPOS, selectedRepos, workspaceFilterSummary } from '../../lib/workspace-filter.ts'
 import { type GroupBy, type SortBy, useApp, WORKING_HINT_MS } from '../../store.ts'
+import { AgentsSettings } from '../agents/AgentsSettings.tsx'
 import { PlanUsageSheet } from '../agents/PlanUsageSheet.tsx'
 import { HeaderFrame } from '../Header.tsx'
-import { RolesSettings } from '../orchestration/RolesSettings.tsx'
 import { WorkflowSummary } from '../orchestration/WorkflowSummary.tsx'
 import { SearchSheet } from '../search/SearchSheet.tsx'
 import { ConnectSheet } from '../settings/ConnectSheet.tsx'
@@ -63,7 +63,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const [newOpen, setNewOpen] = useState(false)
 	const [logsOpen, setLogsOpen] = useState(false)
 	const [usageOpen, setUsageOpen] = useState(false)
-	const [rolesOpen, setRolesOpen] = useState(false)
+	const [agentsOpen, setAgentsOpen] = useState(false)
 	const searchOpen = useCommandStore(s => s.open)
 	const setSearchOpen = useCommandStore(s => s.setOpen)
 	const [theme, setTheme] = useState(readThemePreference)
@@ -190,12 +190,12 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 				run: () => setLogsOpen(true)
 			},
 			{
-				id: 'app.roles',
-				label: 'Delegated roles',
+				id: 'app.agents',
+				label: 'Agents',
 				group: 'App',
 				icon: Workflow,
-				keywords: ['workflow', 'planning', 'exploration', 'implementation', 'models'],
-				run: () => setRolesOpen(true)
+				keywords: ['roles', 'routing', 'auto', 'workflow', 'planning', 'exploration', 'implementation', 'models'],
+				run: () => setAgentsOpen(true)
 			},
 			{
 				id: 'app.controlRoom',
@@ -374,8 +374,8 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 						</button>
 						<button
 							type="button"
-							onClick={() => setRolesOpen(true)}
-							aria-label="Open delegated roles"
+							onClick={() => setAgentsOpen(true)}
+							aria-label="Open agents"
 							className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 min-[360px]:size-9"
 						>
 							<Workflow size={18} />
@@ -522,7 +522,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 			) : null}
 			{logsOpen ? <LogsSheet onClose={() => setLogsOpen(false)} /> : null}
 			{usageOpen ? <PlanUsageSheet onClose={() => setUsageOpen(false)} /> : null}
-			{rolesOpen ? <RolesSettings onClose={() => setRolesOpen(false)} /> : null}
+			{agentsOpen ? <AgentsSettings onClose={() => setAgentsOpen(false)} /> : null}
 		</div>
 	)
 }

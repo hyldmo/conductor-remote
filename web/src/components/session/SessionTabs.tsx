@@ -5,7 +5,7 @@ import type { PromptIndicatorState } from '../../lib/prompts/pending.ts'
 import { isUnread, type ReadMarks } from '../../lib/read.ts'
 import type { Session, SessionRoleAssignment } from '../../lib/types.ts'
 import { FileIcon } from '../FileIcon.tsx'
-import { RoleChip } from '../orchestration/RolesSettings.tsx'
+import { RoleChip } from '../orchestration/RoleChip.tsx'
 import { PromptStatusDot } from '../ui.tsx'
 import { ContextButton } from './SessionNotices.tsx'
 
