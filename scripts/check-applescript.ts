@@ -3,12 +3,12 @@
  * calls exists.
  *
  * This stays a standalone repository check because
- * `src/conductor.applescript` is a thousand lines of a language nothing else here
- * looks at: `tsc` sees a string, Biome sees a string, and a stray quote or a
+ * `src/writes/applescript/` holds a language nothing else here looks at:
+ * `tsc` sees a string, Biome sees a string, and a stray quote or a
  * renamed handler shows up for the first time as a failed send on someone's phone.
  *
  * Two checks, because they catch different things:
- *  - **osacompile** parses the file the way `osascript` will. It reports
+ *  - **osacompile** parses the assembled program the way `osascript` will. It reports
  *    `file:line: error: … (-2741)`, so a syntax error names its own line instead
  *    of arriving as "Conductor took too long to respond" hours later.
  *  - **Handler resolution** — every `my someHandler()` in the script *and* in the
@@ -26,18 +26,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { packageRoot } from '../src/pkg-root.ts'
+import { conductorAppleScriptSources } from '../src/writes/applescript/source.ts'
 
 const root = packageRoot(import.meta.dirname)
 const srcDir = path.join(root, 'src')
-const scripts = fs
-	.readdirSync(srcDir)
-	.filter(f => f.endsWith('.applescript'))
-	.map(f => path.join(srcDir, f))
-
-if (scripts.length === 0) {
-	console.error('no .applescript files in src/ — did the loader in writes.ts lose its script?')
-	process.exit(1)
-}
+const sources = conductorAppleScriptSources()
+const program = sources.map(source => source.text).join('')
 
 const problems: string[] = []
 
@@ -47,17 +41,19 @@ function names(text: string, pattern: RegExp): Set<string> {
 }
 
 const defined = new Set<string>()
-const scriptText = scripts.map(f => fs.readFileSync(f, 'utf8'))
-for (const text of scriptText) for (const n of names(text, /^on\s+([A-Za-z_]\w*)\s*\(/gm)) defined.add(n)
+for (const { text } of sources) for (const n of names(text, /^on\s+([A-Za-z_]\w*)\s*\(/gm)) defined.add(n)
 
 // The TS side appends a few lines of `my handler()` to the script before running it,
 // so those call sites are part of the same program and are checked with it.
 const callers = [
-	...scripts.map((f, i) => ({ file: path.relative(root, f), text: scriptText[i] })),
+	...sources.map(source => ({ file: path.relative(root, source.file), text: source.text })),
 	...fs
-		.readdirSync(srcDir)
-		.filter(f => f.endsWith('.ts'))
-		.map(f => ({ file: `src/${f}`, text: fs.readFileSync(path.join(srcDir, f), 'utf8') }))
+		.readdirSync(srcDir, { recursive: true, withFileTypes: true })
+		.filter(f => f.isFile() && f.name.endsWith('.ts'))
+		.map(f => {
+			const file = path.join(f.parentPath, f.name)
+			return { file: path.relative(root, file), text: fs.readFileSync(file, 'utf8') }
+		})
 ]
 for (const { file, text } of callers) {
 	for (const called of names(text, /\bmy\s+([A-Za-z_]\w*)\s*\(/g)) {
@@ -66,16 +62,27 @@ for (const { file, text } of callers) {
 }
 
 if (process.platform === 'darwin') {
-	const out = path.join(os.tmpdir(), `relay-applescript-check-${process.pid}.scpt`)
-	for (const file of scripts) {
-		try {
-			execFileSync('osacompile', ['-o', out, file], { stdio: ['ignore', 'ignore', 'pipe'] })
-		} catch (err) {
-			const stderr = err && typeof err === 'object' && 'stderr' in err ? String(err.stderr).trim() : String(err)
-			problems.push(stderr)
-		}
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-applescript-check-'))
+	const file = path.join(directory, 'conductor.applescript')
+	const out = path.join(directory, 'conductor.scpt')
+	try {
+		// Cross-part handler references share this one compilation unit, just as
+		// they do when the runtime appends an action to the assembled program.
+		fs.writeFileSync(file, program)
+		execFileSync('osacompile', ['-o', out, file], { stdio: ['ignore', 'ignore', 'pipe'] })
+	} catch (err) {
+		const stderr = err && typeof err === 'object' && 'stderr' in err ? String(err.stderr).trim() : String(err)
+		const location = new RegExp(`${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:(\\d+)`, 'g')
+		problems.push(
+			stderr.replace(location, (_match, value: string) => {
+				const line = Number(value)
+				const source = sources.findLast(part => part.firstLine <= line)
+				return source ? `${path.relative(root, source.file)}:${line - source.firstLine + 1}` : `${file}:${line}`
+			})
+		)
+	} finally {
+		fs.rmSync(directory, { force: true, recursive: true })
 	}
-	fs.rmSync(out, { force: true, recursive: true })
 } else {
 	console.log(`applescript: osacompile skipped on ${process.platform}; checked handler references only`)
 }
@@ -84,4 +91,4 @@ if (problems.length > 0) {
 	for (const p of problems) console.error(p)
 	process.exit(1)
 }
-console.log(`applescript: ${scripts.length} file(s) ok, ${defined.size} handlers`)
+console.log(`applescript: ${sources.length} parts, one program, ${defined.size} handlers ok`)

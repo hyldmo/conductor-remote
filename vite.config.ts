@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// The relay (src/server.ts) serves the built `dist/` in production and does its
+// The relay (src/http/services/files.ts) serves the built `dist/` in production and does its
 // own SPA fallback. In dev, Vite serves `web/` with HMR and proxies /api to the
 // relay so the phone can hit one origin.
 //
@@ -20,15 +20,24 @@ const webModule = (path: string) => fileURLToPath(new URL(path, import.meta.url)
 // Baked into the bundle as `__APP_VERSION__` so the running app knows which build it
 // is — shown on the Connect sheet beside the relay version, and compared against the
 // relay's reported version to force a service-worker update when this client is stale.
-// Same package.json the relay reads for its own version (src/autoupdate.ts), so a fresh
+// Same package.json the relay reads for its own version (src/host/autoupdate.ts), so a fresh
 // client and the relay report identical strings; a mismatch means the client is behind.
 // `0.0.0-development` in a dev checkout (semantic-release stamps the real version at publish).
-const appVersion = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string })
-	.version
+const { version: appVersion, repository } = JSON.parse(
+	readFileSync(new URL('./package.json', import.meta.url), 'utf8')
+) as {
+	version: string
+	repository: { url: string }
+}
+const repositoryUrl = repository.url
+	.replace(/^git\+/, '')
+	.replace(/\.git\/?$/, '')
+	.replace(/\/$/, '')
 
 export default defineConfig({
 	define: {
-		__APP_VERSION__: JSON.stringify(appVersion)
+		__APP_VERSION__: JSON.stringify(appVersion),
+		__APP_RELEASES_URL__: JSON.stringify(`${repositoryUrl}/releases`)
 	},
 	root: 'web',
 	resolve: {
@@ -37,9 +46,9 @@ export default defineConfig({
 			// import. Workbox would consequently precache more than 11 MB even though
 			// the phone only ever requests the grammar for the file on screen. Keep the
 			// renderer intact while giving it the relay's deliberately bounded registry.
-			{ find: /^shiki$/, replacement: webModule('./web/src/lib/pierre-shiki.ts') },
-			{ find: /^shiki\/wasm$/, replacement: webModule('./web/src/lib/pierre-shiki-wasm.ts') },
-			{ find: '@pierre/theming/themes', replacement: webModule('./web/src/lib/pierre-themes.ts') }
+			{ find: /^shiki$/, replacement: webModule('./web/src/lib/syntax/pierre-shiki.ts') },
+			{ find: /^shiki\/wasm$/, replacement: webModule('./web/src/lib/syntax/pierre-shiki-wasm.ts') },
+			{ find: '@pierre/theming/themes', replacement: webModule('./web/src/lib/syntax/pierre-themes.ts') }
 		]
 	},
 	// Repo-root `public/` (outside the `web` root) so Conductor's repo-icon lookup —

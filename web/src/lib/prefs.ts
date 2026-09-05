@@ -5,8 +5,8 @@
  * still read them while the relay updates underneath it. A separate metadata document
  * carries revision timestamps and deletion tombstones for the host merge.
  */
-import { AGENT_DRAFT_PREFIX } from './agentDraft.ts'
-import { DRAFT_PREFIX } from './draft.ts'
+import { AGENT_DRAFT_PREFIX } from './prompts/agent-draft.ts'
+import { DRAFT_PREFIX } from './prompts/draft.ts'
 import { READ_MARKS_KEY, type ReadMarks } from './read.ts'
 import type { AgentPatch, DraftAttachment, Prefs, SyncedDraft } from './types.ts'
 

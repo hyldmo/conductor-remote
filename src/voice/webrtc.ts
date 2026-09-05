@@ -1,9 +1,9 @@
 /** Server-mediated WebRTC session creation for the PWA control-room call. */
 import type { OpenAIRealtimeVoice, VoiceLanguage } from '../shared.ts'
-import { oneLine } from '../speech.ts'
 import { type VoiceReasoningEffort, voiceReasoning } from './config.ts'
 import type { VoiceChatContext } from './context.ts'
 import { VOICE_INSTRUCTIONS, workspaceVoiceInstructions } from './prompt.ts'
+import { oneLine } from './speech.ts'
 import { voiceFunctionTools } from './tools.ts'
 import { voiceTranscription } from './transcription.ts'
 

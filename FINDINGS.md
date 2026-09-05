@@ -52,7 +52,7 @@ settings TOML, never those stale DB rows, while per-chat reads remain SQLite.
 
 The phone's **Models** sheet reads and updates the two file-backed new-chat
 defaults directly: `models.claude_code.default_effort_level` and
-`models.codex.default_thinking_level`. `src/conductor-settings.ts` changes only
+`models.codex.default_thinking_level`. `src/agents/conductor-settings.ts` changes only
 the requested assignment and writes atomically, preserving comments, review
 levels and unknown future keys around it. Cursor Agent and OpenCode have provider
 cards in the same sheet but no invented effort setting: Conductor's user schema
@@ -98,7 +98,7 @@ newly staged file that now matches `.gitignore` is not dropped. Capture does not
 move HEAD or modify files. `restore` moves HEAD and then restores both trees.
 
 The documented deep links can create a fresh workspace but expose no fork or
-checkpoint parameter. `src/fork-workspace.ts` therefore mirrors the same Git
+checkpoint parameter. `src/git/fork-workspace.ts` therefore mirrors the same Git
 layers around that supported creation path: retain the objects under short-lived
 private refs, wait for the new worktree, verify it shares the source's Git common
 directory and is still clean, restore the source state onto its fresh branch, and
@@ -125,7 +125,7 @@ two major harnesses do expose it through the exact binaries Conductor bundles:
 
 Cursor Agent has only auth status in its CLI, and OpenCode `stats` totals locally
 recorded tokens/cost rather than a provider subscription allowance. The relay reports
-those two as unavailable. `src/plan-usage.ts` normalizes the supported responses,
+those two as unavailable. `src/usage/plan-usage.ts` normalizes the supported responses,
 runs them concurrently on demand, coalesces simultaneous reads, and caches the result
 for one minute; no plan read rides the 2.5s workspace poll.
 
@@ -235,13 +235,13 @@ restart is the one lever likely to re-read SQLite and was not tried, since two
 agents were working; it is useless as a mechanism anyway.)
 
 So the trap is not that the write fails. It is that **the write succeeds for
-every reader except the one that matters**: `reads.ts` selects `manual_status`
+every reader except the one that matters**: `src/reads/workspaces.ts` selects `manual_status`
 straight from the row, so the phone would show the new status, confidently and
-wrongly, while the Mac showed the old one. Worse, `server.ts`'s status route
+wrongly, while the Mac showed the old one. Worse, the status route (now `src/http/routes/workspaces.ts`)
 confirms success by re-reading that same column — a DB-writing actuator would
 confirm against its own write and always return `ok`, turning the one check that
 catches a failed press into a check that can never fail. Hence the AX path
-(`setWorkspaceStatus` in `writes.ts`), at 5-8s, stays.
+(`setWorkspaceStatus` in `src/writes/workspaces.ts`), at 5-8s, stays.
 
 ### △ Frontend workspace service — the missing half of the raw DB write
 Conductor 0.83.1's production frontend answers the ghost-write mystery exactly.
@@ -395,7 +395,7 @@ It's opt-in rather than default because (a) it speaks a private, versioned
 agent-spawn params (`cwd`, `model`, `permissionMode`, `resume`, …); a live send
 was not auto-validated to avoid injecting a prompt into a running agent. The
 socket + auth + protocol *were* validated with the safe read RPCs. Implemented in
-`src/sidecar.ts`; wired as `SidecarActuator` in `src/writes.ts`.
+`src/writes/sidecar.ts`; wired as `SidecarActuator` in `src/writes/actuator.ts`.
 
 Also on this socket: the `app_actions` HTTP server above is unlocked by the
 `internal_settings_enabled` DB flag but will not hold a webview connection (see
@@ -416,7 +416,7 @@ survives UI-bundle updates.
   (`CFBundleURLSchemes = [conductor]`, `tauri-plugin-deep-link`); what was
   missing was a route that focuses rather than creates.
   - The near misses fail *badly*, so build the URL in one place
-    (`writes.ts` ▸ `workspaceLink`): `workspace` must be the **host** and the
+    (`src/writes/targeting.ts` ▸ `workspaceLink`): `workspace` must be the **host** and the
     parameters sit behind a real `?` (unlike the flat create-workspace links).
     `conductor:///workspace/<id>` — id in the path, empty host — falls through
     to the flat-parameter parser and **creates a new workspace in the first

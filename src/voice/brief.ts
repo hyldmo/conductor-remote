@@ -1,7 +1,8 @@
 /** Deterministic, speech-bounded fleet briefing built only from Conductor's read side. */
 import type { Prefs, PrefsPatch } from '../prefs.ts'
-import type { SessionState, Workspace } from '../reads.ts'
-import { clipExact, oneLine, speechText } from '../speech.ts'
+import type { SessionState, Workspace } from '../reads/types.ts'
+import { parseVoiceDate } from './dates.ts'
+import { clipExact, oneLine, speechText } from './speech.ts'
 
 const DORMANT_MS = 7 * 24 * 60 * 60 * 1000
 const DORMANT_LABELS = new Set(['backlog', 'done', 'canceled', 'cancelled'])
@@ -186,43 +187,6 @@ function isMerged(workspace: Workspace): boolean {
 	return workspace.pr_status === 'merged'
 }
 
-function parseOverviewDate(value: string, now: number, field: string): number {
-	const normalized = value.trim().toLowerCase()
-	if (
-		normalized === 'today' ||
-		normalized === 'yesterday' ||
-		normalized === 'this-week' ||
-		normalized === 'this-month'
-	) {
-		const current = new Date(now)
-		const boundary = new Date(current.getFullYear(), current.getMonth(), current.getDate())
-		if (normalized === 'yesterday') boundary.setDate(boundary.getDate() - 1)
-		if (normalized === 'this-week') {
-			const daysSinceMonday = (boundary.getDay() + 6) % 7
-			boundary.setDate(boundary.getDate() - daysSinceMonday)
-		}
-		if (normalized === 'this-month') boundary.setDate(1)
-		return boundary.getTime()
-	}
-	const relative = /^(\d+)(h|d|w)$/.exec(normalized)
-	if (relative) {
-		const amount = Number(relative[1])
-		const unit = relative[2]
-		const multiplier = unit === 'h' ? 60 * 60 * 1000 : unit === 'd' ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000
-		if (amount > 0 && amount <= 10_000) return now - amount * multiplier
-	}
-	if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-		const [year, month, day] = normalized.split('-').map(Number)
-		const date = new Date(year, month - 1, day)
-		if (date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day) return date.getTime()
-	}
-	const parsed = Date.parse(value)
-	if (Number.isFinite(parsed)) return parsed
-	throw new Error(
-		`${field} must be today, yesterday, this-week, this-month, a duration like 24h or 7d, or an ISO date/time`
-	)
-}
-
 function agentStatus(state: SessionState): WorkspaceOverviewFilters['agentStatus'] {
 	if (state.status === 'needs_user_input' || state.status === 'needs_plan_response') return 'needs-you'
 	if (state.status === 'working' || state.status === 'error') return state.status
@@ -315,7 +279,8 @@ export class VoiceBriefBoard {
 		const queue: VoiceQueueItem[] = []
 		for (const state of this.deps.reads.listSessionStates()) {
 			const workspace = workspaces.get(state.workspaceId)
-			if (!workspace) continue
+			// Completion applies to every chat signal, including working and waiting for input.
+			if (!workspace || isDone(workspace) || isMerged(workspace)) continue
 			if (state.status === 'working') {
 				working++
 				continue
@@ -364,8 +329,8 @@ export class VoiceBriefBoard {
 		if (filters.agentStatus && !OVERVIEW_AGENT_STATUSES.has(filters.agentStatus))
 			throw new Error('agent_status must be working, idle, error, or needs-you')
 		const now = this.now()
-		const updatedSince = filters.updatedSince ? parseOverviewDate(filters.updatedSince, now, 'updated_since') : null
-		const updatedBefore = filters.updatedBefore ? parseOverviewDate(filters.updatedBefore, now, 'updated_before') : null
+		const updatedSince = filters.updatedSince ? parseVoiceDate(filters.updatedSince, now, 'updated_since') : null
+		const updatedBefore = filters.updatedBefore ? parseVoiceDate(filters.updatedBefore, now, 'updated_before') : null
 		if (updatedSince !== null && updatedBefore !== null && updatedSince >= updatedBefore)
 			throw new Error('updated_since must be earlier than updated_before')
 		const wantedWorkspaceStatus = filters.workspaceStatus ? normalizedStatus(filters.workspaceStatus) : null
@@ -490,14 +455,21 @@ export class VoiceBriefBoard {
 	}
 
 	async nextDecision(cursor = 0): Promise<NextDecision | null> {
-		const item = this.items()[Math.max(0, Math.floor(cursor))]
-		if (!item) return null
-		return {
-			spoken: spokenDecision(item),
-			cursor: Math.max(0, Math.floor(cursor)) + 1,
-			workspaceId: item.workspaceId,
-			sessionId: item.sessionId
+		const items = this.items()
+		const workspaces = new Map(this.deps.reads.listWorkspaces().map(workspace => [workspace.id, workspace]))
+		// Keep snapshot positions stable while skipping work completed since the roll call.
+		for (let index = Math.max(0, Math.floor(cursor)); index < items.length; index++) {
+			const item = items[index]
+			const workspace = workspaces.get(item.workspaceId)
+			if (!workspace || isDone(workspace) || isMerged(workspace)) continue
+			return {
+				spoken: spokenDecision(item),
+				cursor: index + 1,
+				workspaceId: item.workspaceId,
+				sessionId: item.sessionId
+			}
 		}
+		return null
 	}
 
 	/** A dispatch or an explicit spoken skip is handled; merely hearing the item is not. */

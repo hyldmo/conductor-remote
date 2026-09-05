@@ -26,7 +26,7 @@
 //    screen it was left on — `openWindow`'s path is ignored, and a `postMessage` to a
 //    frozen page is dropped (WebKit, reported from iOS 17.1 through 18.x and still
 //    open). The cache outlives both, so the app reads its target when it comes back to
-//    the front; see `usePushRouting` in web/src/hooks.ts.
+//    the front; see `usePushRouting` in web/src/hooks/push.ts.
 
 /** One entry, overwritten per tap: only the newest tap can still be waiting to land. */
 const ROUTE_CACHE = 'push-route'
@@ -116,7 +116,7 @@ self.addEventListener('notificationclick', event => {
 			const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
 			for (const client of clients) {
 				if (!sameOrigin(client.url)) continue
-				// Handled in web/src/hooks.ts (usePushRouting) — an in-app route change, so the
+				// Handled in web/src/hooks/push.ts (usePushRouting) — an in-app route change, so the
 				// token gate and React state survive the tap. Posted before the focus, since a
 				// refused focus is no reason to skip a message the page may well receive.
 				client.postMessage({ type: 'push-navigate', url })

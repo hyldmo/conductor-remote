@@ -14,7 +14,7 @@ export default defineConfig({
 				test: {
 					name: 'unit',
 					include: ['tests/**/*.test.{ts,tsx}'],
-					exclude: ['tests/voice-corpus.test.ts'],
+					exclude: ['tests/voice/voice-corpus.test.ts'],
 					testTimeout: 20_000,
 					sequence: { groupOrder: 0 }
 				}
@@ -22,7 +22,7 @@ export default defineConfig({
 			{
 				test: {
 					name: 'live corpus',
-					include: ['tests/voice-corpus.test.ts'],
+					include: ['tests/voice/voice-corpus.test.ts'],
 					fileParallelism: false,
 					testTimeout: 20_000,
 					sequence: { groupOrder: 1 }

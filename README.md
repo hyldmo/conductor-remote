@@ -106,7 +106,7 @@ locked-screen/PSTN use. See
   and Codex CLIs for structured rolling limits only while the sheet is open, then
   caches the result for a minute. Cursor/OpenCode say why no plan quota is available.
 - **Writes are the one fragile nerve** and are isolated behind a swappable
-  `Actuator` (`src/writes.ts`).
+  `Actuator` (`src/writes/types.ts`, implemented in `src/writes/actuator.ts`).
 - **Workflow orchestration is relay-owned.** A separate WAL SQLite database
   records frozen roles, jobs, capabilities, UI effects, receipts, and recovery;
   a cross-process lease prevents two compatible relays from driving the shared
@@ -522,15 +522,17 @@ thing.
 ## Layout
 
 ```
-src/       the Node relay: HTTP router, read-only SQLite reads, git diffs, the
-           AppleScript/sidecar write path, both delivery queues, search, push,
-           the MCP tools, and the keep-awake helper
-web/       the React PWA (Vite root): app shell, components, hooks, api client
+src/       the Node relay: stable server.ts/mcp.ts entries; http/ startup services
+           and route groups; reads/, writes/, orchestration/, delivery/, agents/,
+           dev-server/, files/, git/, host/, usage/, search/, transcript/,
+           notifications/ and voice/ domains
+web/       the React PWA (Vite root): app shell, feature component folders,
+           grouped hooks and client helpers
 public/    icon.svg + PWA PNGs, at the repo root so Conductor's icon lookup
            finds them, plus the push and self-heal service-worker halves
-scripts/   icon generation, the macOS LaunchAgent installer, the keep-awake
-           setup, and the repository source validators
-tests/     Vitest unit, contract, concurrency and integration tests
+scripts/   stable service.ts CLI plus service/ helpers, icon/keep-awake setup,
+           AppleScript manifest copying and repository validators
+tests/     Vitest unit, contract, concurrency and integration suites by domain
 dist/      built PWA (gitignored) — what the relay serves
 ```
 

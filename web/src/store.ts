@@ -1,14 +1,6 @@
 import { create } from 'zustand'
-import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
+import { bootstrapToken, clearToken, setStoredToken } from './lib/auth-token.ts'
 import { offlineDelay } from './lib/online.ts'
-import {
-	loadPending,
-	loadWorkflowClientAttempts,
-	type PendingMessage,
-	type WorkflowClientAttempt,
-	writePending,
-	writeWorkflowClientAttempts
-} from './lib/pending.ts'
 import {
 	type LocalPrefsProjection,
 	loadLocalPrefs,
@@ -19,6 +11,14 @@ import {
 	setLocalDraftContent,
 	setLocalReadMark
 } from './lib/prefs.ts'
+import {
+	loadPending,
+	loadWorkflowClientAttempts,
+	type PendingMessage,
+	type WorkflowClientAttempt,
+	writePending,
+	writeWorkflowClientAttempts
+} from './lib/prompts/pending.ts'
 import type { ReadMarks } from './lib/read.ts'
 import type { AgentPatch, DraftAttachment, UpdateStatus } from './lib/types.ts'
 import { ALL_REPOS, parseRepoSelection, type RepoSelection } from './lib/workspace-filter.ts'
@@ -117,7 +117,7 @@ interface AppState {
 	/** Epoch ms of the last successful relay call — the banner's "last synced". */
 	lastSyncAt: number | null
 	/**
-	 * Last self-update snapshot the relay reported (src/autoupdate.ts). Held across the offline blip an
+	 * Last self-update snapshot the relay reported (src/host/autoupdate.ts). Held across the offline blip an
 	 * auto-update restart causes — while it reads `mode:auto, available:true` the banner shows a calm
 	 * "Updating…" instead of the alarming red "Offline". Null until the first successful state poll.
 	 */
@@ -129,22 +129,22 @@ interface AppState {
 	workingHints: Record<string, number>
 	/**
 	 * Prompts awaiting confirmation, rendered as optimistic in-chat bubbles and
-	 * mirrored to localStorage (see lib/pending.ts) — between the composer clearing
+	 * mirrored to localStorage (see lib/prompts/pending.ts) — between the composer clearing
 	 * its draft and the relay confirming, this is the only copy of the text.
 	 */
 	pending: PendingMessage[]
 	/** Stable PWA idempotency identities for Workflow mutations whose outcome is still uncertain. */
 	workflowClientAttempts: Record<string, WorkflowClientAttempt>
-	/** Unsent composer text per chat, mirrored to localStorage (see lib/draft.ts). */
+	/** Unsent composer text per chat, mirrored to localStorage (see lib/prompts/draft.ts). */
 	drafts: Record<string, string>
 	/** Ready host-side files carried atomically with each composer draft. */
 	draftAttachments: Record<string, DraftAttachment[]>
 	/**
 	 * Agent settings chosen on the phone but not yet pushed into Conductor, per
-	 * session id (mirrored to localStorage — see lib/agentDraft.ts). A model or
+	 * session id (mirrored to localStorage — see lib/prompts/agent-draft.ts). A model or
 	 * effort change costs a slow, focus-stealing AppleScript round trip and only
 	 * matters for the *next* prompt, so the phone holds it here and the send
-	 * applies it (hooks.ts ▸ `useSendPrompt`) — exactly like the desktop composer,
+	 * applies it (hooks/send.ts ▸ `useSendPrompt`) — exactly like the desktop composer,
 	 * where the picker changes what the next message runs on.
 	 */
 	agentDrafts: Record<string, AgentPatch>

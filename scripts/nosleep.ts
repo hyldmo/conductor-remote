@@ -14,12 +14,12 @@
 // The helper also owns a process-scoped `caffeinate -d` assertion by default.
 // ScreenSaverDaemon checks that assertion before starting the idle screen saver
 // that locks the session. An explicit lock or lid close can still lock macOS;
-// those sends park in `src/parked.ts` until the next unlock. Strip-clean
+// those sends park in `src/delivery/parked.ts` until the next unlock. Strip-clean
 // (plain-node type-stripping), stdlib-only — see CLAUDE.md.
 
 import { spawn } from 'node:child_process'
 import { installedServiceEnvironment, preventScreenLockEnabled } from '../src/config.ts'
-import { HELPER_PATH, helperFile, helperReady, installedHelper, NOSLEEP_BODY } from '../src/nosleep-helper.ts'
+import { HELPER_PATH, helperFile, helperReady, installedHelper, NOSLEEP_BODY } from '../src/host/nosleep-helper.ts'
 import { parseDurationSeconds } from '../src/shared.ts'
 import { setup, status } from './nosleep-setup.ts'
 
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
 	const preventScreenLock = preventScreenLockEnabled(configuredMode)
 	// The shared body reads its window from an argument (0 = until killed) rather than
 	// having one interpolated in, because the installed helper is a fixed file the
-	// sudoers rule names — see nosleep-helper.ts. `label` is only echoed back, and the
+	// sudoers rule names — see src/host/nosleep-helper.ts. `label` is only echoed back, and the
 	// script re-validates it, so the two paths print the same confirmation.
 	const args = [String(seconds ?? 0), arg ?? '', preventScreenLock ? '1' : '0']
 

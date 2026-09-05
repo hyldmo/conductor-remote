@@ -1,7 +1,7 @@
 /** Chat context for a workspace call, read through the same parser as the phone. */
-import type { Reads } from '../reads.ts'
+import type { Reads } from '../reads/repository.ts'
 import { workspaceTitle } from '../shared.ts'
-import { clipExact, oneLine } from '../speech.ts'
+import { clipExact, oneLine } from './speech.ts'
 
 export interface VoiceCallTarget {
 	workspaceId: string

@@ -15,7 +15,7 @@ export interface ConductorDbOptions {
  *
  * The desktop app holds the same file open in WAL mode; a second read-only
  * connection sees every committed write without blocking the app. We never
- * write through this handle — writes go through the actuator (see writes.ts).
+ * write through this handle — writes go through the actuator (see src/writes/actuator.ts).
  */
 export class ConductorDb {
 	private readonly dbPath: string

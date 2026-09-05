@@ -43,7 +43,7 @@
 		"dev": "numux",
 		"dev:web": "vite",
 		"build": "vite build",
-		"build:node": "tsc -p tsconfig.build.json && cp src/*.applescript dist-node/src/",
+		"build:node": "tsc -p tsconfig.build.json && node scripts/copy-applescript.ts",
 		"preview": "yarn build && yarn start",
 		"gen:icons": "node scripts/gen-icons.ts",
 		"db:schema": "node --experimental-transform-types scripts/generate-orchestration-schema.ts",

@@ -123,7 +123,7 @@ export function statusDot(w: Workspace): { color: string; spinning: boolean } {
 
 /**
  * Has this workspace's PR landed? Read off `pr_status`, which the relay resolves
- * from `gh pr list` per repo (src/pr.ts) — **not** off Conductor's own status,
+ * from `gh pr list` per repo (src/git/pr.ts) — **not** off Conductor's own status,
  * and the two genuinely disagree:
  *  - Conductor derives its status from a PR it sometimes never links (one opened
  *    and merged inside its poll window is invisible to it afterwards), so merged
@@ -240,7 +240,7 @@ export const STATUS_COLORS: Record<string, string> = {
 }
 
 /**
- * One flat line of a prompt, for the jump sheet's rows (components/MessageNav.tsx).
+ * One flat line of a prompt, for the jump sheet's rows (components/transcript/MessageNav.tsx).
  * The first line that has anything in it — a prompt often opens with a heading or a
  * bullet, and the marker is noise at this size — collapsed and cut to a little past
  * the two lines the row clamps to, so the ellipsis lands where the row does.

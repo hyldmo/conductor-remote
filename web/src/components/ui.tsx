@@ -1,14 +1,14 @@
 import { Check, CloudOff, Copy, Play, RefreshCw, WifiOff, X } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useState } from 'react'
-import { useRepoIcon } from '../hooks.ts'
+import { useRepoIcon } from '../hooks/workspaces.ts'
 import { ApiError } from '../lib/api.ts'
 import { copyText } from '../lib/clipboard.ts'
 import { cn } from '../lib/cn.ts'
 import { statusDot } from '../lib/format.ts'
 import { unlockUrl } from '../lib/lock.ts'
 import { LUCIDE_ICONS } from '../lib/lucideIcons.ts'
-import type { PromptIndicatorState } from '../lib/pending.ts'
+import type { PromptIndicatorState } from '../lib/prompts/pending.ts'
 import type { RepoIcon, Workspace } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 
@@ -41,7 +41,7 @@ export function PromptStatusDot({
 }
 
 /**
- * Workspace dot: coloured by PR state (src/pr.ts). While a prompt is queued or the
+ * Workspace dot: coloured by PR state (src/git/pr.ts). While a prompt is queued or the
  * agent or CI works it becomes a spinner in that same colour; a send failure leaves
  * the ring behind with an X. `background` must go to the ring or dot, never both, or
  * the spinner fills in and its motion disappears.
@@ -66,7 +66,7 @@ export function StatusDot({
  * A live Conductor Run task in this workspace. Sits at the avatar's top-left, mirroring
  * the bottom-right StatusDot's clearance and ring, so a Run marker and PR/agent activity
  * never overlap. Presence only — the flag comes from a cached ps snapshot
- * (src/run-activity.ts), so nothing here times or animates it.
+ * (src/dev-server/run-activity.ts), so nothing here times or animates it.
  */
 export function RunBadge({ className }: { className?: string }) {
 	return (
@@ -129,7 +129,7 @@ export function OfflineBanner() {
 /**
  * What the phone offers beside a refusal only a person at the Mac can clear: the lock
  * screen accepts no relay write, so every locked-Mac failure ends here rather than in a
- * Retry that would fail the same way (see src/parked.ts for why the relay won't unlock).
+ * Retry that would fail the same way (see src/delivery/parked.ts for why the relay won't unlock).
  * Renders nothing when there is no host to hand off to — a dev checkout on loopback.
  */
 export function UnlockLink({ className }: { className?: string }) {
@@ -210,7 +210,7 @@ export function Badge({ children }: { children: ReactNode }) {
  * the dead ingress IPs while MagicDNS answered with the node.
  *
  * A token problem cannot reach here — a 401 clears the token and raises the gate instead
- * (hooks.ts ▸ useOnline) — so it is deliberately not in the list.
+ * (hooks/browser.ts ▸ useOnline) — so it is deliberately not in the list.
  */
 export function RelayUnreachable({ error }: { error: unknown }) {
 	// `navigator.onLine` is only trustworthy in the negative: false means the OS has no

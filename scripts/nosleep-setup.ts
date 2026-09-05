@@ -1,5 +1,5 @@
 // `conductor-remote nosleep setup` — pay the sudo password once, so `nosleep`
-// never asks again. Called from nosleep.ts; not an entrypoint of its own.
+// never asks again. Called from scripts/nosleep.ts; not an entrypoint of its own.
 //
 // Why this exists: `pmset disablesleep` is the only lever that keeps a Mac awake
 // with the lid shut, it needs root, and the login LaunchAgent has no TTY to prompt
@@ -38,7 +38,7 @@ import {
 	installedHelper,
 	SUDOERS_PATH,
 	sudoersFile
-} from '../src/nosleep-helper.ts'
+} from '../src/host/nosleep-helper.ts'
 
 const LIBEXEC_DIR = path.dirname(HELPER_PATH)
 
