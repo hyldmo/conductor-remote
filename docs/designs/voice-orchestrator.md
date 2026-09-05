@@ -7,6 +7,10 @@ Repo: hyldmo/conductor-remote
 Status: APPROVED
 Mode: Builder
 
+Implemented file references below follow the 2026-09-05 domain layout. The deleted
+probe and unchecked future tasks retain their historical or proposed paths; the
+current architecture revision below takes precedence over the original plan.
+
 ## 2026-09-04 architecture revision: one orchestrator, two transports
 
 The PWA carries the fleet orchestrator over WebRTC. Its fleet phone control sits in the
@@ -66,7 +70,7 @@ Dial a number from a locked phone in a pocket. Hear "two working, five need you,
 - User is in Oslo: no international-call cost in any variant (direct SIP bypasses PSTN; optional local number makes it a domestic call).
 - Wrong-target writes are the worst failure (same as the repo's existing send philosophy): every dispatch is read back and structurally confirmed.
 - **Public ingress is required only for the two SIP URLs OpenAI's servers must reach**: the call webhook and the voice MCP endpoint (OpenAI's docs: "The Realtime API calls the remote MCP server"). The PWA WebRTC call creates its session through the authenticated relay and runs function tools over the relay's outbound sideband, so it stays on the tailnet. The relay itself has run tailnet-only since PR #54 and keeps doing so (D2: a dedicated voice listener on Funnel `443`; `:8443` was the original choice and probe 0a killed it).
-- **The Mac must be unlocked and awake for a dispatch to land.** A locked Mac parks every send (`src/parked.ts`, the `lockBlocked → park` branch of the send route). `keep_awake` plus `PREVENT_SCREEN_LOCK` is what makes an unattended Mac dispatchable; the roll call states the lock state first, and the tally counts parked sends apart from landed ones.
+- **The Mac must be unlocked and awake for a dispatch to land.** A locked Mac parks every send (`src/delivery/parked.ts`, the `lockBlocked → park` branch of the send route). `keep_awake` plus `PREVENT_SCREEN_LOCK` is what makes an unattended Mac dispatchable; the roll call states the lock state first, and the tally counts parked sends apart from landed ones.
 - **The phone number and the SIP URI are credentials.** A caller is gated before OpenAI is bridged; a session that reaches the voice tools can dispatch prompts, so "someone burning API credits" was never the worst case. The gate keeps strangers out; it does not, and cannot, limit what an authenticated caller asks for.
 - **The relay token never leaves the Mac.** The voice session gets its own endpoint and its own scoped token (D4). That bounds what the credential can do when it is not the user holding it (it sits in OpenAI's session store), and what the model can do when a chat's last message tells it to: no direct send exists on that endpoint, so a read-back is the only way a prompt leaves.
 
@@ -93,7 +97,7 @@ Codex again, as the eng review's outside voice (2026-09-02, cold read of this do
 
 ## Recommended Approach: B — the standup product
 
-Everything rides the existing relay: the MCP tool machinery (`createTools`'s `Tool` interface and injected `call`), `send_prompt` with its retry/parked/confirm machinery and the `sendOnce` memo, `notify.ts`'s `chatRoute` and `notifyAll`, read marks in `prefs.json`, `set_workspace_status`, the token-file pattern for secrets, and `dev-server.ts`'s second-port `tailscale serve` pattern with an ownership receipt.
+Everything rides the existing relay: the MCP registry and `Tool` interface (`src/mcp/registry.ts`, `src/mcp/types.ts`), `send_prompt` with its retry/parked/confirm machinery and the `sendOnce` memo, `src/notifications/notify.ts`'s `chatRoute` and `notifyAll`, read marks in `prefs.json`, `set_workspace_status`, the token-file pattern for secrets, and `src/dev-server/controller.ts`/`ports.ts`'s second-port `tailscale serve` pattern with an ownership receipt.
 
 New pieces, as revised by the eng review:
 
@@ -103,12 +107,12 @@ New pieces, as revised by the eng review:
 4. **Session broker** (`src/voice/broker.ts`). Accepts with the narrow system prompt, voice, and `tools: [{type:'mcp', server_url: <voice mcp>, headers: {authorization: Bearer <voice token>}, require_approval: 'never'}]`, then opens the outbound regional `wss://…/v1/realtime?call_id=…` socket (Node global `WebSocket`). Global SIP ingress pairs with `api.openai.com`; EU-resident ingress pairs with `eu.api.openai.com`, so the accept request and observer can see the same pending call. The socket is where `response.done.usage` arrives for the cost log, where `mcp_call` events give per-tool latency, and where the broker injects items (`conversation.item.create` + `response.create`). Active call ids persist to `stateDir()/voice-calls.json` so a self-update restart re-attaches on boot.
 5. **`voice_send_preview` → one-use record → async `voice_send`** (D3). The preview names the target chat and the exact text and returns a token; the record is persisted, one-use, with a two-minute TTL. `voice_send(token)` re-checks the chat is still idle (a `working` chat is a spoken steering refusal), then returns `queued` in under a second and runs `deliverPrompt` with the token as `sendOnce`'s `clientId`, so a model retry or a redial cannot type the prompt twice. **The call assumes a queued send lands** (user-pinned): a landed send stays silent and the conversation moves on; the broker injects a line only when it did not land, "parked until the Mac unlocks" or the failure text. Expired, foreign-session and text-mismatch tokens each have their own spoken sentence, pinned by test.
 6. **Call cursor, dropped-call semantics only** (user-pinned): survives a redial within ~10 min ("picking up where we left off"); past TTL, fresh roll-call. The queue itself is never stored — recomputed live, so desk work at the Mac self-heals it (answered questions and cleared unreads simply stop appearing). Only the cursor marks what this call already handled.
-7. **Forward-to-owner deep dives with mid-call nudges.** "Ask berlin why CI failed" → `send_prompt`; the call moves on; the broker keeps a per-call watch list (session id plus the rowid at forward time) and polls `lastAssistantText` on its own 2s timer only while a call is live, then injects the answer. It does not ride `notify.ts`'s tick, which resets itself whenever no push device is subscribed and carries push-only rules. Idle chats only by default; working chats get the steering warning.
+7. **Forward-to-owner deep dives with mid-call nudges.** "Ask berlin why CI failed" → `send_prompt`; the call moves on; the broker keeps a per-call watch list (session id plus the rowid at forward time) and polls `lastAssistantText` on its own 2s timer only while a call is live, then injects the answer. The original design avoided the notifier's push-dependent tick; the later shared `src/reads/session-poller.ts` remains independent of push configuration, while voice watches still belong to the live call. Idle chats only by default; working chats get the steering warning.
 8. **Artifact hand-off to the lock screen.** A relay hook the voice agent calls: fires the existing push pipeline (`notifyAll`) with the existing chat deep link (`chatRoute`), "screenshot's on your lock screen". Phase-2 follow-the-call (PWA tracks an orchestrator cursor) deferred.
 9. **Voice grooming.** "Push zigbee to backlog" → `set_workspace_status`. "Snooze the lamp thing until Thursday" → relay-side snooze store (own state file, never Conductor's DB), which also holds the end-of-call "needs a screen later" list, surfaced in the PWA.
 10. **End-of-call tally**: "Three decisions made, four agents unblocked, one parked until the Mac unlocks, two need a screen later."
 11. **Per-call cost log**: call id, tool calls with latency, token counts from `response.done.usage`, estimated cost, in the relay log.
-12. **Secrets and config.** OpenAI key, webhook secret, Twilio auth token, caller allowlist and PIN live in `stateDir()/voice.json` (0600), following the token file, never `settings.json` (it is served by `/api/settings`) and never the LaunchAgent plist (user-readable; `scripts/service.ts` keeps the token out of it on purpose). `redactSecrets` learns `sk-` and `whsec_` so `relay_logs` cannot echo either. Speech bounding helpers (`oneLine`, `clipExact`) move to one `src/speech.ts` shared with `notify.ts`.
+12. **Secrets and config.** OpenAI key, webhook secret, Twilio auth token, caller allowlist and PIN live in `stateDir()/voice.json` (0600), following the token file, never `settings.json` (it is served by `/api/settings`) and never the LaunchAgent plist (user-readable; `scripts/service/launch-agent.ts` keeps the token out of it on purpose). `redactSecrets` learns `sk-` and `whsec_` so `relay_logs` cannot echo either. Speech bounding helpers (`oneLine`, `clipExact`) live in `src/voice/speech.ts`, shared with `src/notifications/notify.ts`.
 
 ### Call flow
 
@@ -173,11 +177,11 @@ Ships inside the existing `conductor-remote` npm package (trusted publishing pip
 - **D4 — Voice endpoint: A.** `/voice/mcp` with its own scoped token and only the voice tools. Discussed and recorded: this does not limit what an authenticated caller may ask for (the PIN gate does that); it limits what the credential can do at rest in OpenAI's store and what an injected model can do, since no direct send exists on that endpoint.
 - **D5 — Deferred work is tracked as GitHub issues, never a TODOS file** (user convention). Opened: #189 (file the Linphone lowercasing bug upstream, with the repro) and #190 (recheck Claude voice for custom connectors on 2026-12-01).
 
-Fold-ins (accepted): F1 caller gate · F2 prose-brief parser with fallbacks, behind the transient question statuses · F3 recency without `turn_started_at` · F4 broker-owned watch list · F5 secrets file and redaction · F6 lock state in the roll call and parked sends in the tally · F7 persisted call record and re-attach · F8 one `src/speech.ts` · F9 `src/voice/tools.ts` and a prompt under snapshot test · F10 named preview refusals · F11 delete the probe after mining it · F12 board cached per call · F13 `clipExact` caps on every tool result · F14 the call writes read marks for handled items · F15 the socket attach is the first probe, before briefing code · F16 custom-header pass-through added to probe 0 with a named fallback.
+Fold-ins (accepted): F1 caller gate · F2 prose-brief parser with fallbacks, behind the transient question statuses · F3 recency without `turn_started_at` · F4 broker-owned watch list · F5 secrets file and redaction · F6 lock state in the roll call and parked sends in the tally · F7 persisted call record and re-attach · F8 one `src/voice/speech.ts` · F9 `src/voice/tools.ts` and a prompt under snapshot test · F10 named preview refusals · F11 delete the probe after mining it · F12 board cached per call · F13 `clipExact` caps on every tool result · F14 the call writes read marks for handled items · F15 the socket attach is the first probe, before briefing code · F16 custom-header pass-through added to probe 0 with a named fallback.
 
 ## What already exists
 
-Reused, not rebuilt: `POST /mcp`'s token gate, Origin refusal and body cap (`server.ts:779-822`) become the template for `/voice/mcp`; `createTools`'s `Tool` shape and injected `call` (`mcp-tools.ts:140-160`); the send route with retry, parked queue and `sendOnce` (`server.ts:1482-1580`); `deliverPrompt`'s transcript confirm; `chatRoute` and `notifyAll` (`notify.ts:252, 279`); `turnEnded` and the two question statuses (`notify.ts:310`, issue #102); `listSessionStates`, `listWorkspaces`, `lastAssistantText`, `parseMessage`; `readPrefs`/`writePrefs` for read marks; `resolveToken`'s 0600 file pattern (`config.ts:89-108`); `dev-server.ts`'s `serve --https=<port>` plus `dev-forwards.json` receipt; `redactSecrets`; the probe's accept body and TwiML (`.context/sip-probe/server.ts`). Nothing in the plan duplicates any of these.
+Reused, not rebuilt: `POST /mcp`'s token gate, Origin refusal and body cap (`src/http/services/mcp.ts`) provide the template for `/voice/mcp`; `createTools` and its injected `call` (`src/mcp/registry.ts`) share the `Tool` contract (`src/mcp/types.ts`); the send route (`src/http/routes/prompts.ts`) uses retry/confirmation in `src/http/services/delivery.ts`, the parked queue and `sendOnce`; `chatRoute`, `notifyAll` and `turnEnded` remain in `src/notifications/notify.ts` (the two question statuses are described in issue #102); `listSessionStates`, `listWorkspaces`, `lastAssistantText` and `parseMessage` retain their read/parser owners; `readPrefs`/`writePrefs` keep read marks; `resolveToken` in `src/config.ts` keeps the 0600 file pattern; `src/dev-server/ports.ts` and `src/dev-server/controller.ts` keep Serve allocation and `dev-forwards.json` ownership; `redactSecrets` keeps logs bounded to public data. The accept body and TwiML originally came from the now-deleted `.context/sip-probe/server.ts`.
 
 ## NOT in scope
 
@@ -209,7 +213,7 @@ Critical gaps before the fold-ins: the open number (silent success for a strange
 ## Delivery plan: one PR, commit by commit, QA before merge
 
 0. **Probes, thirty minutes each, zero relay code, from the existing probe server:** Funnel `:8443` webhook delivery (else 10000); whether a custom `X-` SIP header set in the TwiML `<Sip>` URI arrives in the webhook's `sip_headers`; `accept` with `tools:[{type:'mcp'}]` pointing at a throwaway MCP; attach `wss://…?call_id` and inject one item that the voice speaks. Each answer is recorded here before the next commit group starts.
-1. **Commit group 1 (milestone 1 + pull-forwards):** `src/speech.ts`; `src/voice/brief.ts` with both parsers and tests; `src/voice/preview.ts` with the persisted one-use record; `src/voice/server.ts` listener with the Funnel receipt; `src/voice/twiml.ts` and `src/voice/webhook.ts` with the gate; `src/voice/broker.ts` with accept, socket, cost line and the parked/failed send outcome; `src/voice/tools.ts`, `src/voice/prompt.ts`; `/voice/mcp` wiring and the scoped token; `voice.json` secrets and `redactSecrets`; Twilio number setup; delete the probe. Demo call at the end of this group.
+1. **Commit group 1 (milestone 1 + pull-forwards):** `src/voice/speech.ts`; `src/voice/brief.ts` with both parsers and tests; `src/voice/preview.ts` with the persisted one-use record; `src/voice/server.ts` listener with the Funnel receipt; `src/voice/twiml.ts` and `src/voice/webhook.ts` with the gate; `src/voice/broker.ts` with accept, socket, cost line and the parked/failed send outcome; `src/voice/tools.ts`, `src/voice/prompt.ts`; `/voice/mcp` wiring and the scoped token; `voice.json` secrets and `redactSecrets`; Twilio number setup; delete the probe. Demo call at the end of this group.
 2. **Commit group 2 (milestone 2):** persisted call record, cursor TTL and redial resume; forward-to-owner with the per-call watch list; artifact push tool.
 3. **Commit group 3 (milestone 3):** grooming, snooze store, the "needs a screen" list in the PWA (touches `web/`, `wire.ts`, `routes.ts`); end-of-call tally with parked counted apart; setup docs and the measured cost table.
 4. **QA gate:** `/qa` against the dev relay using the test plan artifact (`~/.gstack/projects/hyldmo-conductor-remote/*eng-review-test-plan*.md`), five real commute calls, the measured cost in the README, then the merge decision.
@@ -218,11 +222,11 @@ Critical gaps before the fold-ins: the open number (silent success for a strange
 
 | Step | Modules touched | Depends on |
 |------|----------------|------------|
-| Brief builder, parsers, `speech.ts`, tests | `src/voice/brief.ts`, `src/speech.ts`, `tests/` | — |
+| Brief builder, parsers, `speech.ts`, tests | `src/voice/brief.ts`, `src/voice/speech.ts`, `tests/` | — |
 | Preview gate, tests | `src/voice/preview.ts`, `tests/` | — |
-| Listener, webhook, TwiML, secrets, Funnel receipt | `src/voice/server.ts`, `src/voice/twiml.ts`, `src/voice/webhook.ts`, `src/config.ts`, `scripts/service.ts`, `tests/` | probe 0 |
+| Listener, webhook, TwiML, secrets, Funnel receipt | `src/voice/server.ts`, `src/voice/twiml.ts`, `src/voice/webhook.ts`, `src/voice/config.ts`, `scripts/service/voice.ts`, `tests/voice/` | probe 0 |
 | Broker socket, cost log, injection | `src/voice/broker.ts`, `tests/` | listener, probes 1–2 |
-| Voice tools, prompt, `/voice/mcp` wiring | `src/voice/tools.ts`, `src/voice/prompt.ts`, `src/server.ts`, `src/routes.ts` | brief, preview, broker |
+| Voice tools, prompt, `/voice/mcp` wiring | `src/voice/tools.ts`, `src/voice/prompt.ts`, `src/http/services/voice.ts`, `src/routes.ts` | brief, preview, broker |
 | Milestone 2 and 3 pieces | `src/voice/*`, `web/`, `src/wire.ts` | group 1 |
 | Docs and cost table | `README`, `docs/` | everything |
 
@@ -237,43 +241,43 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Verify: four log lines; answers recorded in this doc
 - [x] **T2 (P1, implemented 2026-09-02; credentialed off-tailnet smoke remains T15)** — voice listener — Second loopback port serving the listener's own `/webhook`, `/twiml` and `/mcp`, fronted by Funnel **443** with `--set-path=/voice` and an ownership receipt. The relay moves to its own tailnet-only serve port, which `service status` discovers rather than assuming 443.
   - Surfaced by: Architecture — "Voice needs public ingress" (D2)
-  - Files: `src/voice/server.ts`, `scripts/service.ts`, `src/config.ts`, `tests/voice-listener.test.ts`
+  - Files: `src/voice/server.ts`, `scripts/service/voice.ts`, `src/voice/config.ts`, `tests/voice/voice-listener.test.ts`
   - Verify: `curl` from off-tailnet reaches `https://<magicdns>/voice/webhook` only; `https://<magicdns>/` answers 404 at the Tailscale layer; the relay stays reachable on its own tailnet port and `yarn service status` still prints a QR
 - [x] **T3 (P1, implemented 2026-09-02; live allowlist rejection remains T15)** — caller gate — TwiML signature + `From` allowlist + `<Gather>` PIN; webhook Standard-Webhooks signature, replay guard, trunk marker, 603 otherwise.
   - Surfaced by: Architecture — "The phone number is a credential" (F1); Codex; F16
-  - Files: `src/voice/twiml.ts`, `src/voice/webhook.ts`, `tests/voice-twiml.test.ts`, `tests/voice-webhook.test.ts`
+  - Files: `src/voice/twiml.ts`, `src/voice/webhook.ts`, `tests/voice/voice-gate.test.ts`
   - Verify: known-vector tests; a call from an unlisted number is rejected live
 - [x] **T4 (P1, implemented 2026-09-02)** — voice endpoint — `/voice/mcp` serving `createVoiceTools` only, scoped 0600 token, `x-relay-client: voice` → interactive priority.
   - Surfaced by: Architecture — "background priority and the whole surface" (D4); Codex
-  - Files: `src/voice/tools.ts`, `src/server.ts`, `src/routes.ts`, `src/config.ts`, `tests/routes.test.ts`
+  - Files: `src/voice/tools.ts`, `src/http/services/voice.ts`, `src/routes.ts`, `src/voice/config.ts`, `tests/voice/voice-listener.test.ts`
   - Verify: `tools/list` on `/voice/mcp` returns the voice set only; the relay token is refused there
 - [x] **T5 (P1, implemented 2026-09-02; live corpus 64 ms)** — brief builder — Roll call and next decision with the measured signals (question statuses first), both question parsers and the paragraph fallback, `clipExact` on every field, lock state first, read mark on handled.
   - Surfaced by: Architecture — prose-brief and `turn_started_at` findings (F2, F3, F6, F14); Code quality — clip helpers (F8); issue #102
-  - Files: `src/voice/brief.ts`, `src/speech.ts`, `src/notify.ts`, `tests/voice-brief.test.ts`, `tests/voice-corpus.test.ts`
+  - Files: `src/voice/brief.ts`, `src/voice/speech.ts`, `src/notifications/notify.ts`, `tests/voice/voice-brief.test.ts`, `tests/voice/voice-corpus.test.ts`
   - Verify: `yarn test`; corpus test green over the live DB
 - [x] **T6 (P1, implemented 2026-09-02)** — preview gate — Persisted one-use record, TTL, token as `sendOnce` `clientId`, named expired/foreign/text-mismatch/reuse refusals.
   - Surfaced by: Architecture — async send (D3); Code quality — named error paths (F10); Codex idempotency
-  - Files: `src/voice/preview.ts`, `tests/voice-preview.test.ts`
+  - Files: `src/voice/preview.ts`, `tests/voice/voice-preview.test.ts`
   - Verify: `yarn test`
 - [x] **T7 (P1, implemented 2026-09-02; live demo remains T15)** — broker — Accept, outbound socket, cost line from `usage`, parked/failed send outcome injected (landed stays silent), persisted call ids and re-attach. The MCP continuation is gated on both `response.done` and all calls finishing, in either event order.
   - Surfaced by: Architecture — "A send blocks for 5 to 55 seconds" (D3); restart finding (F7)
-  - Files: `src/voice/broker.ts`, `tests/voice-broker.test.ts`
+  - Files: `src/voice/broker.ts`, `tests/voice/voice-broker.test.ts`
   - Verify: fake-socket tests; live demo call keeps talking after "yes"
 - [x] **T8 (P1, implemented 2026-09-02; live log inspection remains T15)** — secrets — `voice.json` 0600 via `conductor-remote config`; `redactSecrets` masks `sk-` and `whsec_`.
   - Surfaced by: Architecture — "Secrets need the token-file pattern" (F5); Distribution check
-  - Files: `src/config.ts`, `src/logbuf.ts`, `scripts/service.ts`, `tests/config.test.ts`
+  - Files: `src/voice/config.ts`, `src/host/logbuf.ts`, `scripts/service/configuration.ts`, `tests/voice/voice-config.test.ts`
   - Verify: `relay_logs` after a call shows no key material
 - [x] **T9 (P2, implemented 2026-09-02)** — prompt — `src/voice/prompt.ts` under a contract and budget test.
   - Surfaced by: Code quality — tool organisation (F9); Test review [→EVAL]
-  - Files: `src/voice/prompt.ts`, `tests/voice-prompt.test.ts`
+  - Files: `src/voice/prompt.ts`, `tests/voice/voice-prompt.test.ts`
   - Verify: `yarn test`
 - [ ] **T10 (P2, human: ~2d / CC: ~1 evening)** — forward-to-owner — Per-call watch list, 2s poll only while live, steering warning on `working`.
   - Surfaced by: Architecture — "Nudges cannot ride the notifier's tick" (F4)
-  - Files: `src/voice/broker.ts`, `src/voice/tools.ts`, `tests/voice-broker.test.ts`
+  - Files: `src/voice/broker.ts`, `src/voice/tools.ts`, `tests/voice/voice-broker.test.ts`
   - Verify: fake-socket test; live forward heard back
 - [ ] **T11 (P2, human: ~1d / CC: ~1 evening)** — cursor resume — Redial within 10 min resumes from the persisted call record.
   - Surfaced by: Recommended Approach piece 6; F7
-  - Files: `src/voice/calls.ts`, `tests/voice-calls.test.ts`
+  - Proposed files: `src/voice/calls.ts`, `tests/voice/voice-calls.test.ts`
   - Verify: `yarn test`; drop and redial live
 - [ ] **T12 (P2, human: ~half day / CC: ~1h)** — artifact push — One tool over `notifyAll` + `chatRoute`.
   - Surfaced by: Recommended Approach piece 8
@@ -281,7 +285,7 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Verify: lock-screen notification opens the chat
 - [ ] **T13 (P3, human: ~3d / CC: ~2 evenings)** — grooming and snooze — `set_workspace_status` from voice; snooze store; "needs a screen" list in the PWA; tally with parked counted apart.
   - Surfaced by: Recommended Approach pieces 9–10; F6
-  - Files: `src/voice/snooze.ts`, `src/voice/tools.ts`, `src/wire.ts`, `src/routes.ts`, `web/src/`, `tests/voice-snooze.test.ts`
+  - Proposed files: `src/voice/snooze.ts`, `tests/voice/voice-snooze.test.ts`; extend `src/voice/tools.ts`, `src/wire.ts`, `src/routes.ts` and `web/src/`.
   - Verify: `yarn verify`; list visible on the phone
 - [ ] **T14 (P2, human: ~1d / CC: ~1 evening)** — docs — Setup page (ingress, Twilio, webhook, allowlist, PIN), measured cost table, delete the probe.
   - Surfaced by: Distribution check; F11

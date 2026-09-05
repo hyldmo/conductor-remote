@@ -1,20 +1,16 @@
 import { useRef } from 'react'
 import { Navigate, Outlet, Route, Routes, useMatch } from 'react-router'
-import { UiQuarantineBanner, WorkflowWarningBanner } from './components/DelegationPipeline.tsx'
+import { UiQuarantineBanner, WorkflowWarningBanner } from './components/orchestration/WorkflowWarnings.tsx'
 import { ReloadPrompt } from './components/ReloadPrompt.tsx'
-import { SessionView } from './components/SessionView.tsx'
-import { TokenGate } from './components/TokenGate.tsx'
-import { VoiceCallSheet } from './components/VoiceCallSheet.tsx'
-import { VoiceCallProvider } from './components/VoiceProvider.tsx'
-import { WorkspaceList } from './components/WorkspaceList.tsx'
-import {
-	useEdgeSwipeDrawer,
-	usePrefsSync,
-	usePushRouting,
-	usePushSync,
-	useVisualViewportHeight,
-	useWorkspaces
-} from './hooks.ts'
+import { SessionView } from './components/session/SessionView.tsx'
+import { TokenGate } from './components/settings/TokenGate.tsx'
+import { VoiceCallSheet } from './components/voice/VoiceCallSheet.tsx'
+import { VoiceCallProvider } from './components/voice/VoiceProvider.tsx'
+import { WorkspaceList } from './components/workspaces/WorkspaceList.tsx'
+import { useEdgeSwipeDrawer, useVisualViewportHeight } from './hooks/browser.ts'
+import { usePrefsSync } from './hooks/preferences.ts'
+import { usePushRouting, usePushSync } from './hooks/push.ts'
+import { useWorkspaces } from './hooks/workspaces.ts'
 import { cn } from './lib/cn.ts'
 import { useCommandShortcuts } from './lib/commands.ts'
 import { useApp } from './store.ts'

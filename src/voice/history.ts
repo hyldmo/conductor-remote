@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { matchQuery } from '../search.ts'
+import { matchQuery } from '../search/coordinator.ts'
 import { HIT_CLOSE, HIT_OPEN } from '../shared.ts'
 import type { VoiceHistoryCall, VoiceHistoryEntry, VoiceHistorySearchResponse, VoiceHistorySummary } from '../wire.ts'
 

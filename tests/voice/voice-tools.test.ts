@@ -1,0 +1,282 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Tool } from '../../src/mcp/types.ts'
+import type { SessionState } from '../../src/reads/types.ts'
+import { VoiceBriefBoard } from '../../src/voice/brief.ts'
+import type { VoiceCallTarget, VoiceChatContext } from '../../src/voice/context.ts'
+import type { SendPreview, WorkspacePreview } from '../../src/voice/preview.ts'
+import { PreviewStore } from '../../src/voice/preview.ts'
+import { createVoiceTools, type VoiceDispatchResult, type VoiceWorkspaceCreateResult } from '../../src/voice/tools.ts'
+
+const dirs: string[] = []
+afterEach(() => {
+	for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
+})
+
+function tool(tools: Tool[], name: string): Tool {
+	const found = tools.find(candidate => candidate.name === name)
+	if (!found) throw new Error(`missing ${name}`)
+	return found
+}
+
+function harness(status = 'idle') {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-tools-'))
+	dirs.push(dir)
+	const state: SessionState = {
+		sessionId: 's1',
+		workspaceId: 'w1',
+		status,
+		updatedAt: '2026-09-02 12:00:00',
+		turnStartedAt: null,
+		lastUserMessageAt: '2026-09-02 11:59:00',
+		workspaceTitle: 'Berlin relay',
+		repoName: 'conductor-remote',
+		sessionTitle: null
+	}
+	const board = new VoiceBriefBoard({
+		reads: {
+			listWorkspaces: () => [],
+			listSessionStates: () => [],
+			lastAssistantText: () => null,
+			lastQuestionInput: () => null
+		},
+		locked: async () => false,
+		readPrefs: () => ({ readMarks: {}, drafts: {} }),
+		writePrefs: patch => ({ readMarks: patch.readMarks ?? {}, drafts: {} })
+	})
+	const dispatch = vi.fn<(preview: SendPreview) => Promise<VoiceDispatchResult>>(async () => ({ ok: true }))
+	const createWorkspace = vi.fn<(preview: WorkspacePreview) => Promise<VoiceWorkspaceCreateResult>>(async () => ({
+		ok: true,
+		workspaceId: 'w-new'
+	}))
+	const announce = vi.fn()
+	const readChatContext = vi.fn(
+		(target: VoiceCallTarget): VoiceChatContext => ({
+			...target,
+			workspaceTitle: state.workspaceTitle,
+			chatTitle: 'Active chat',
+			repo: state.repoName,
+			branch: null,
+			status: state.status,
+			updatedAt: state.updatedAt,
+			waitingForTasks: false,
+			messages: [{ role: 'assistant', text: 'Latest progress' }],
+			truncated: false
+		})
+	)
+	const tools = createVoiceTools({
+		callId: 'call-a',
+		board,
+		previews: new PreviewStore(path.join(dir, 'previews.json')),
+		findSession: id => (id === 's1' ? state : null),
+		listRepos: () => [
+			{ name: 'conductor-remote', defaultBranch: 'main' },
+			{ name: 'website', defaultBranch: 'main' }
+		],
+		createWorkspace,
+		readChatContext,
+		dispatch,
+		announce
+	})
+	return { tools, state, board, dispatch, createWorkspace, announce, readChatContext }
+}
+
+describe('createVoiceTools', () => {
+	it('exposes chat context, fleet reads, creation, and the guarded decision tools', () => {
+		expect(harness().tools.map(candidate => candidate.name)).toEqual([
+			'voice_roll_call',
+			'voice_workspace_overview',
+			'voice_chat_context',
+			'voice_next_decision',
+			'voice_list_repos',
+			'voice_create_workspace_preview',
+			'voice_create_workspace',
+			'voice_send_preview',
+			'voice_send'
+		])
+	})
+
+	it('passes date, repo, status, and completion filters into a fresh overview', async () => {
+		const { tools, board } = harness()
+		const overview = vi.spyOn(board, 'workspaceOverview').mockResolvedValue({
+			spoken: 'Filtered overview.',
+			asOf: '2026-09-02T12:00:00.000Z',
+			current: 0,
+			dormant: 0,
+			completed: 0,
+			filtered: 0,
+			cursor: null,
+			workspaces: []
+		})
+		await tool(tools, 'voice_workspace_overview').run({
+			cursor: 3,
+			repo: 'conductor-remote',
+			agent_status: 'working',
+			workspace_status: 'in-review',
+			updated_since: 'today',
+			updated_before: '2026-09-03',
+			include_done: true,
+			include_merged: true
+		})
+		expect(overview).toHaveBeenCalledWith(3, {
+			repo: 'conductor-remote',
+			agentStatus: 'working',
+			workspaceStatus: 'in-review',
+			updatedSince: 'today',
+			updatedBefore: '2026-09-03',
+			includeDone: true,
+			includeMerged: true
+		})
+	})
+
+	it('lists repos, previews an exact workspace creation, and consumes approval once', async () => {
+		const { tools, createWorkspace, announce } = harness()
+		const repos = JSON.parse(await tool(tools, 'voice_list_repos').run({})) as {
+			spoken: string
+			repos: Array<{ name: string }>
+		}
+		expect(repos.repos.map(repo => repo.name)).toEqual(['conductor-remote', 'website'])
+		expect(repos.spoken).toContain('conductor-remote')
+
+		const preview = JSON.parse(
+			await tool(tools, 'voice_create_workspace_preview').run({
+				repo: 'conductor-remote',
+				prompt: 'Implement the overview filters.'
+			})
+		) as { token: string; spoken: string }
+		expect(preview.spoken).toBe(
+			'Create a new workspace in conductor-remote with this first prompt: “Implement the overview filters.” Say yes to create it.'
+		)
+
+		const approved = JSON.parse(
+			await tool(tools, 'voice_create_workspace').run({
+				token: preview.token,
+				repo: 'conductor-remote',
+				prompt: 'Implement the overview filters.'
+			})
+		) as { status: string; spoken: string }
+		expect(approved).toEqual({
+			status: 'queued',
+			spoken: 'Creating a new workspace in conductor-remote. I will say when it is ready.'
+		})
+		await vi.waitFor(() => expect(createWorkspace).toHaveBeenCalledTimes(1))
+		expect(createWorkspace.mock.calls[0]?.[0]).toMatchObject({
+			kind: 'create_workspace',
+			repo: 'conductor-remote',
+			prompt: 'Implement the overview filters.'
+		})
+		await vi.waitFor(() =>
+			expect(announce).toHaveBeenCalledWith('Created a new conductor-remote workspace and queued its first prompt.')
+		)
+
+		await expect(
+			tool(tools, 'voice_create_workspace').run({
+				token: preview.token,
+				repo: 'conductor-remote',
+				prompt: 'Implement the overview filters.'
+			})
+		).resolves.toMatch(/already used/i)
+	})
+
+	it('refuses to preview creation in a repo the relay does not know', async () => {
+		const { tools, createWorkspace } = harness()
+		await expect(
+			tool(tools, 'voice_create_workspace_preview').run({ repo: 'unknown', prompt: 'Do the work.' })
+		).resolves.toMatch(/could not find.*unknown/i)
+		expect(createWorkspace).not.toHaveBeenCalled()
+	})
+
+	it('announces a failed workspace creation', async () => {
+		const { tools, createWorkspace, announce } = harness()
+		createWorkspace.mockResolvedValue({ ok: false, error: 'Conductor did not open the workspace.' })
+		const preview = JSON.parse(
+			await tool(tools, 'voice_create_workspace_preview').run({ repo: 'website', prompt: 'Fix the header.' })
+		) as { token: string }
+		await tool(tools, 'voice_create_workspace').run({
+			token: preview.token,
+			repo: 'website',
+			prompt: 'Fix the header.'
+		})
+		await vi.waitFor(() =>
+			expect(announce).toHaveBeenCalledWith(
+				'The new website workspace was not created. Conductor did not open the workspace.'
+			)
+		)
+	})
+
+	it('refreshes the exact named chat without dispatching or marking a decision handled', async () => {
+		const { tools, readChatContext, dispatch, state } = harness()
+		const contextTool = tool(tools, 'voice_chat_context')
+		const args = { workspace_id: 'w1', session_id: 's1' }
+		expect(JSON.parse(await contextTool.run(args)).status).toBe('idle')
+		state.status = 'working'
+		expect(JSON.parse(await contextTool.run(args)).status).toBe('working')
+		expect(readChatContext).toHaveBeenCalledTimes(2)
+		expect(readChatContext).toHaveBeenLastCalledWith({ workspaceId: 'w1', sessionId: 's1' })
+		expect(dispatch).not.toHaveBeenCalled()
+	})
+
+	it('reads back the exact target and text, then queues only that preview', async () => {
+		const { tools, dispatch } = harness()
+		const preview = JSON.parse(
+			await tool(tools, 'voice_send_preview').run({
+				workspace_id: 'w1',
+				session_id: 's1',
+				text: 'Implement option B exactly.'
+			})
+		) as { token: string; spoken: string }
+		expect(preview.spoken).toBe(
+			'Preview for Berlin relay: “Implement option B exactly.” Say yes to send this exact text.'
+		)
+
+		const answer = JSON.parse(
+			await tool(tools, 'voice_send').run({
+				token: preview.token,
+				session_id: 's1',
+				text: 'Implement option B exactly.'
+			})
+		) as { status: string; spoken: string }
+		expect(answer).toEqual({ status: 'queued', spoken: 'Queued for Berlin relay.' })
+		expect(dispatch).not.toHaveBeenCalled()
+		await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1))
+		expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+			callId: 'call-a',
+			workspaceId: 'w1',
+			sessionId: 's1',
+			text: 'Implement option B exactly.',
+			token: preview.token
+		})
+	})
+
+	it('does not claim or steer a chat that became working', async () => {
+		const { tools, state, dispatch } = harness()
+		const preview = JSON.parse(
+			await tool(tools, 'voice_send_preview').run({ workspace_id: 'w1', session_id: 's1', text: 'Go.' })
+		) as { token: string }
+		state.status = 'working'
+		await expect(
+			tool(tools, 'voice_send').run({ token: preview.token, session_id: 's1', text: 'Go.' })
+		).resolves.toMatch(/running.*steer/i)
+		expect(dispatch).not.toHaveBeenCalled()
+	})
+
+	it('announces a parked or failed async delivery, while a success stays silent', async () => {
+		const parked = harness()
+		parked.dispatch.mockResolvedValue({ ok: false, parked: true, error: 'Mac locked' })
+		const preview = JSON.parse(
+			await tool(parked.tools, 'voice_send_preview').run({ workspace_id: 'w1', session_id: 's1', text: 'Go.' })
+		) as { token: string }
+		await tool(parked.tools, 'voice_send').run({ token: preview.token, session_id: 's1', text: 'Go.' })
+		await vi.waitFor(() => expect(parked.announce).toHaveBeenCalledWith('The prompt is parked until the Mac unlocks.'))
+
+		const landed = harness()
+		const landedPreview = JSON.parse(
+			await tool(landed.tools, 'voice_send_preview').run({ workspace_id: 'w1', session_id: 's1', text: 'Go.' })
+		) as { token: string }
+		await tool(landed.tools, 'voice_send').run({ token: landedPreview.token, session_id: 's1', text: 'Go.' })
+		await vi.waitFor(() => expect(landed.dispatch).toHaveBeenCalled())
+		expect(landed.announce).not.toHaveBeenCalled()
+	})
+})

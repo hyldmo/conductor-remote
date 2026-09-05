@@ -2,14 +2,17 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
 import { stateDir } from './config.ts'
-import { type CallOptions, createTools, handleRpc, READ_TIMEOUT_MS, type RpcRequest } from './mcp-tools.ts'
+import { handleRpc } from './mcp/dispatcher.ts'
+import { READ_TIMEOUT_MS } from './mcp/protocol.ts'
+import { createTools } from './mcp/registry.ts'
+import type { CallOptions, RpcRequest } from './mcp/types.ts'
 
 /**
  * MCP over stdio: `conductor-remote mcp`.
  *
  * The transport a local agent gets — the client spawns this as a child process and
  * talks newline-delimited JSON-RPC 2.0 over its stdin and stdout. The tools
- * themselves live in `mcp-tools.ts`, shared with the relay's own `POST /mcp` so the
+ * themselves live in `src/mcp/tools/`, shared with the relay's own `POST /mcp` so the
  * two transports cannot drift.
  *
  * Nothing here authenticates the *stdio* channel, and nothing needs to: whatever can
@@ -60,10 +63,10 @@ async function call<T>(route: string, opts: CallOptions = {}): Promise<T> {
 				authorization: `Bearer ${relayToken()}`,
 				'content-type': 'application/json',
 				// Marks this caller as an agent: the relay drops it to background priority on
-				// the UI lock, behind anyone using the phone (server.ts ▸ withUiPriority).
+				// the UI lock, behind anyone using the phone (src/http/router.ts ▸ withUiPriority).
 				'x-relay-client': 'mcp',
 				// The relay retries a failed send inside this budget and never past it, so
-				// stating it here is what stops it outliving us — see server.ts ▸ sendBudget.
+				// stating it here is what stops it outliving us — see src/http/services/delivery.ts ▸ sendBudget.
 				'x-client-timeout-ms': String(timeoutMs)
 			},
 			body: opts.body === undefined ? undefined : JSON.stringify(opts.body)
