@@ -62,7 +62,7 @@ type Mark = {
 	preview: string
 	/** ISO timestamp, or null for a prompt that hasn't landed in the transcript yet. */
 	ts: string | null
-	/** `sending` / `queued` for the optimistic and relay-held prompts. */
+	/** `sending` / `queueing` for optimistic prompts, `queued` after acceptance. */
 	state: string | null
 	node: HTMLElement
 }
@@ -84,7 +84,8 @@ const readAnchor = (el: HTMLElement) =>
 	el.scrollHeight - el.clientHeight - el.scrollTop <= END_SLACK ? el.scrollTop + el.clientHeight : el.scrollTop + AT_TOP
 
 const sameMarks = (a: Mark[], b: Mark[]) =>
-	a.length === b.length && a.every((m, i) => m.top === b[i].top && m.preview === b[i].preview)
+	a.length === b.length &&
+	a.every((m, i) => m.top === b[i].top && m.preview === b[i].preview && m.state === b[i].state && m.ts === b[i].ts)
 
 /**
  * Glide to `to`, and call `onArrive` when we get there.
@@ -355,7 +356,13 @@ export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | 
 function RowMeta({ mark }: { mark: Mark }) {
 	if (mark.state === 'failed') return <span className="shrink-0 text-[11px] text-del">didn’t send</span>
 	const label =
-		mark.state === 'sending' ? 'sending…' : mark.state === 'queued' ? 'queued' : mark.ts && relativeTime(mark.ts)
+		mark.state === 'sending'
+			? 'sending…'
+			: mark.state === 'queueing'
+				? 'queueing…'
+				: mark.state === 'queued'
+					? 'queued'
+					: mark.ts && relativeTime(mark.ts)
 	if (!label) return null
 	return <span className="shrink-0 text-[11px] text-muted tabular-nums">{label}</span>
 }
