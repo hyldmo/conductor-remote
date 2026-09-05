@@ -517,9 +517,6 @@ export function AgentSubtabStrip({
 			aria-label={label}
 			className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border-soft bg-bg px-3 py-2"
 		>
-			{label.startsWith('Legacy') ? (
-				<span className="shrink-0 text-[10px] font-medium uppercase text-faint">Legacy</span>
-			) : null}
 			{tabs.map((tab, index) => {
 				const failed = tab.state === 'failed'
 				const contents = (
@@ -594,8 +591,8 @@ export function DelegationPipeline({
 }) {
 	const workflowTabs = workflow ? pipelineTabs(jobs, sessions, roles, workflow.id) : []
 	const bootstrapJob = workflow ? jobs.find(job => job.workflowId === workflow.id && job.bootstrap) : undefined
-	const legacyTabs = pipelineTabs(jobs, sessions, roles, null)
-	if (!workflow && !legacyTabs.length) return null
+	const delegatedTabs = pipelineTabs(jobs, sessions, roles, null)
+	if (!workflow && !delegatedTabs.length) return null
 	return (
 		<>
 			{workflow ? <WorkflowSummary workflow={workflow} bootstrapJob={bootstrapJob} /> : null}
@@ -606,8 +603,8 @@ export function DelegationPipeline({
 				onSelectSession={onSelectSession}
 			/>
 			<PipelineTabs
-				tabs={legacyTabs}
-				label="Legacy delegated work"
+				tabs={delegatedTabs}
+				label="Delegated agents"
 				activeSessionId={activeSessionId}
 				onSelectSession={onSelectSession}
 			/>
@@ -619,7 +616,7 @@ export function delegationStatusLabel(status: DelegationProjection['status']): s
 	return STATUS_LABELS[status]
 }
 
-/** Parent/child transcript cards for upgrade-era legacy jobs only. */
+/** Parent/child transcript cards for ad hoc jobs. Workflows have their own projection. */
 export function DelegationBubbles({
 	jobs,
 	sessionId,
@@ -655,7 +652,7 @@ export function DelegationBubbles({
 						key={job.id}
 						state={failed ? 'failed' : 'pending'}
 						align="wide"
-						label={`Legacy delegation · ${parent ? 'Delegated' : 'Assigned'} · ${job.role} · ${job.resolvedRole.model}${job.resolvedRole.effort ? ` · ${job.resolvedRole.effort}` : ''}`}
+						label={`${parent ? 'Delegated' : 'Assigned'} · ${job.role} · ${job.resolvedRole.model}${job.resolvedRole.effort ? ` · ${job.resolvedRole.effort}` : ''}`}
 						meta={
 							failed
 								? `${job.failure?.code ?? 'failed'}: ${job.failure?.message ?? 'The delegated job failed.'}`

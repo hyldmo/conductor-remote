@@ -36,6 +36,8 @@ import type {
 	CloseChatResult,
 	CreateWorkspaceResult,
 	DefaultModelResult,
+	DelegateTaskRequest,
+	DelegateTaskResult,
 	DelegationsResponse,
 	DevServerResult,
 	DevServerState,
@@ -79,7 +81,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 export const SERVER_INFO = { name: 'conductor-remote', version: '1' }
 
 export const INSTRUCTIONS =
-	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. list_voice_calls, search_voice_calls and read_voice_call read saved fleet-call transcripts without driving the UI. delegate_task operates only inside a Workflow already authorized from the phone: the current root envelope supplies its workflow id and phase capability, and the relay later drives the real Mac UI to launch the tracked child. MCP cannot start a Workflow, edit its frozen roles, or perform recovery actions. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. plan_usage, dev_server status, dismiss_prompt, keep_awake and relay_logs touch no UI. Use dev_server instead of launching a long-lived development server from a shell: its start/stop actions use Conductor’s configured Run task, drive the real Mac UI and steal focus for a few seconds. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace also drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat or workspace they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
+	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. list_voice_calls, search_voice_calls and read_voice_call read saved fleet-call transcripts without driving the UI. Use delegate_task for lightweight codebase agents in tracked sibling subtabs: list_roles shows the configured roles and their current models, then an ordinary chat supplies session_id, role, and a focused prompt. Choose a configured role whose instructions fit the task, usually exploration for independent code searches, investigation, and verification, including helper work requested by skills such as gstack. Use the configured role settings even when a skill names a model. Each task returns its result to its parent; several independent explorers can run concurrently without starting a planning/exploration/implementation Workflow. Continue useful local work while they run; use return_mode=steer if their result is needed during the current turn, since the default queue delivers behind it. Inside an active Workflow, only its root may delegate, using the workflow_id and current phase_capability from its private envelope. Never bypass that path through ordinary delegation or untracked splits. MCP cannot start a Workflow, edit its frozen roles, or perform recovery actions. delegate_task returns immediately; the relay later drives the real Mac UI to open, configure, and send the child. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. plan_usage, dev_server status, dismiss_prompt, keep_awake and relay_logs touch no UI. Use dev_server instead of launching a long-lived development server from a shell: its start/stop actions use Conductor’s configured Run task, drive the real Mac UI and steal focus for a few seconds. send_prompt, split_chat, stop_turn, close_chat, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace also drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat or workspace they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
 
 /** Reads are quick; a UI write is measured in tens of seconds (writes.ts ▸ SEND_ATTEMPT_MS). */
 export const READ_TIMEOUT_MS = 10_000
@@ -592,15 +594,22 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'list_roles',
 			description:
-				'List the relay’s picker-backed cross-provider roles. A role marked invalid cannot be used by a new Workflow until its exact model is selected. Active Workflows keep their frozen snapshot when this configuration changes.',
+				'List configured models, effort, Fast mode, instructions, and validation issues before lightweight delegation. Choose a role whose current configuration fits the task. Invalid roles cannot start a child or new Workflow. Active Workflows use the frozen roles from their root envelope.',
 			inputSchema: { type: 'object', properties: {} },
 			run: async () => {
 				const data = await call<RolesResponse>(routes.roles.path())
 				const issueByRole = new Map(data.issues.map(issue => [issue.role, issue.error]))
 				const lines = Object.entries(data.roles).map(([name, role]) => {
-					const settings = [role.model, role.effort, role.fast ? 'fast' : null].filter(Boolean).join(' · ')
+					const settings = [
+						role.model,
+						role.effort,
+						role.fast === undefined ? null : role.fast ? 'fast on' : 'fast off'
+					]
+						.filter(Boolean)
+						.join(' · ')
 					const issue = issueByRole.get(name)
-					return `${issue ? '!' : '·'} ${name}: ${settings}${issue ? ` — ${issue.code}: ${issue.message}` : ''}`
+					const instructions = role.preamble?.trim()
+					return `${issue ? '!' : '·'} ${name}: ${settings}${issue ? ` — ${issue.code}: ${issue.message}` : ''}${instructions ? `\n    Instructions: ${instructions.replaceAll('\n', '\n    ')}` : ''}`
 				})
 				if (data.warning) lines.unshift(`! ${data.warning}`)
 				return lines.join('\n') || 'no delegated roles are configured'
@@ -609,23 +618,65 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'delegate_task',
 			description:
-				'Queue a tracked child in the Workflow this root already belongs to. Use only the workflow id and current phase capability delivered in the root’s private orchestration envelope. The relay owns the frozen child settings, transcript boundary, Baton routing, and later Mac UI work. Returns immediately with a delegation id; use list_delegations to observe it. This tool cannot start or recover a Workflow.',
+				'Spawn one lightweight tracked sibling chat in a subtab. From an ordinary chat, pass session_id, a valid role from list_roles, and a focused prompt. Choose a configured role whose instructions fit the task; repeat for independent questions so children can run concurrently. This does not start a Workflow or turn the parent into a planner. The role must use a different provider than the parent. The child follows the configured preamble and assignment, receives a transcript attachment, and returns its result. Queue mode delivers behind the current turn by default; use steer if the result is needed during this turn. Keep working and integrate the result. For an active Workflow, only its root may call with workflow_id and current phase_capability from the private envelope; its frozen settings, role restrictions, transcript boundary, and Baton routing apply. Returns immediately with a delegation id; list_delegations observes progress. The relay later opens/configures/sends the child through the Mac UI. This tool cannot start or recover a Workflow.',
 			inputSchema: {
 				type: 'object',
 				properties: {
-					workflow_id: { type: 'string', description: 'Workflow id from the private root envelope.' },
+					workflow_id: { type: 'string', description: 'Active Workflow only: id from the private root envelope.' },
 					phase_capability: {
 						type: 'string',
 						description: 'Opaque current-phase capability from that same envelope; never copy it elsewhere.'
 					},
-					session_id: { type: 'string', description: 'The persisted Workflow root session.' },
-					role: { type: 'string', enum: ['exploration', 'implementation'] },
-					prompt: { type: 'string', description: 'The independent question or implementation brief.' }
+					session_id: { type: 'string', description: 'Parent chat id; an active Workflow requires its root session.' },
+					role: { type: 'string', description: 'Configured role name. Workflows allow exploration or implementation.' },
+					prompt: {
+						type: 'string',
+						description: 'The independent question or implementation brief, including file ownership for edits.'
+					},
+					return_mode: {
+						type: 'string',
+						enum: ['queue', 'steer'],
+						description:
+							'Ordinary chats only. Queue the Baton behind this turn (default), or steer it into a running turn.'
+					},
+					through: {
+						type: 'string',
+						description: 'Ordinary chats only. Optional read_chat cursor bounding the transcript handoff.'
+					},
+					include_thinking: {
+						type: 'boolean',
+						description: 'Ordinary chats only. Include parent reasoning in the handoff (default false).'
+					}
 				},
-				required: ['workflow_id', 'phase_capability', 'session_id', 'role', 'prompt'],
+				required: ['session_id', 'role', 'prompt'],
 				additionalProperties: false
 			},
 			run: async args => {
+				if (!Object.hasOwn(args, 'workflow_id') && !Object.hasOwn(args, 'phase_capability')) {
+					rejectUnknown(args, ['session_id', 'role', 'prompt', 'return_mode', 'through', 'include_thinking'])
+					const sessionId = need(args, 'session_id')
+					if (args.return_mode !== undefined && args.return_mode !== 'queue' && args.return_mode !== 'steer') {
+						throw new Error('return_mode must be queue or steer')
+					}
+					if (args.include_thinking !== undefined && typeof args.include_thinking !== 'boolean') {
+						throw new Error('include_thinking must be a boolean')
+					}
+					const through = args.through === undefined ? undefined : parseChatCursor(need(args, 'through'))
+					if (through === null) throw new Error('through must be a read_chat cursor')
+					const body = {
+						role: need(args, 'role'),
+						prompt: need(args, 'prompt'),
+						...(args.return_mode === undefined ? {} : { returnMode: args.return_mode }),
+						...(through === undefined ? {} : { throughRowid: through }),
+						...(args.include_thinking === undefined ? {} : { includeThinking: args.include_thinking })
+					} satisfies DelegateTaskRequest
+					const result = await call<DelegateTaskResult>(routes.delegateTask.path(sessionId), {
+						method: routes.delegateTask.method,
+						body
+					})
+					if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+					return `delegation ${result.delegationId} queued · ${result.role} · ${result.model}`
+				}
 				rejectUnknown(args, ['workflow_id', 'phase_capability', 'session_id', 'role', 'prompt'])
 				const workflowId = need(args, 'workflow_id')
 				const sessionId = need(args, 'session_id')

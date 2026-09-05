@@ -337,8 +337,8 @@ Two transports, same tools.
 | `dev_server` | inspect, start, forward or stop a workspace's configured Conductor Run task; use this instead of launching a long-lived server from an agent shell |
 | `send_prompt` · `stop_turn` · `close_chat` | talk to a running agent, cancel its turn, or hide a chat tab |
 | `split_chat` | move a tangent into a fresh tab, or set `new_workspace` to carry the transcript and current code into a separate worktree |
-| `list_roles` | inspect exact-picker Workflow role definitions and validation issues; role editing remains a phone UI action |
-| `delegate_task` · `list_delegations` | from an already-authorized Workflow root, request a capability-scoped tracked child or observe active/failed jobs; neither tool can start or recover a Workflow |
+| `list_roles` | inspect configured roles and validation issues for lightweight delegation or future Workflows; role editing remains a phone UI action |
+| `delegate_task` · `list_delegations` | spawn a lightweight tracked child from an ordinary chat, or a capability-scoped child from a Workflow root; observe active/failed jobs |
 | `list_models` · `set_agent_options` · `set_default_model` | cached model labels (including the starred default), model, effort, plan, fast; starring a default also selects it for the target chat, matching Conductor |
 | `set_workspace_status` | move a workspace between the sidebar's status groups |
 | `archive_workspace` | put a finished workspace away (Conductor's ⌘⇧A) — deletes the worktree, keeps the chat |
@@ -397,7 +397,7 @@ of the time.
 | `list_workspaces` | what is running right now, with status and model |
 | `list_chats` | the chat tabs in a workspace |
 | `list_roles` | picker-backed cross-provider role definitions and validation issues |
-| `delegate_task` | enqueue a tracked child only for the caller's existing Workflow id/current phase capability, then return its job id |
+| `delegate_task` | enqueue a tracked sibling subtab from an ordinary chat with `session_id`, `role`, and `prompt`; active Workflows require their root's id/current phase capability |
 | `list_delegations` | active and failed delegated jobs |
 | `workspace_diff` | a workspace's diff against its target branch |
 | `list_repos` | repos a workspace can be created in |
@@ -416,9 +416,9 @@ Conductor deep link, so creation itself needs no Accessibility and steals no foc
 requested model, effort, plan, and fast settings are applied later before the first
 prompt. Neither `create_workspace` nor `send_prompt` can start or join a Workflow.
 Workflow Start is deliberately PWA-only: the relay first accepts `POST /api/workflows`,
-then its durable coordinator performs the workspace/root effects. `delegate_task`
-requires the Workflow id, root session, role, and opaque capability delivered for the
-current phase; it persists and returns immediately while the coordinator later
+then its durable coordinator performs the workspace/root effects. For an active Workflow,
+`delegate_task` requires the Workflow id, root session, role, and opaque capability delivered
+for the current phase; it persists and returns immediately while the coordinator later
 opens/configures/sends the child. MCP cannot start, retry, adopt, replay, cancel,
 complete, edit roles, or dismiss a managed failure. Generic Plan remains independent
 on the ordinary agent-option routes and is not part of Workflow's frozen tuple.
@@ -426,6 +426,29 @@ Agents are explicitly told to use `dev_server` instead of starting a long-lived 
 from their shell. Its start and stop actions go through Conductor's Run controls, which
 preserves the workspace's allocated ports, run-mode policy and process-group cleanup;
 the MCP tool cannot forbid shell commands, but removes the reason to use one here.
+
+**Lightweight codebase agents need no Workflow.** In an ordinary chat, call `list_roles`,
+then `delegate_task` with `session_id`, a configured `role`, and a focused `prompt`.
+Choose a role whose instructions fit the task, usually `exploration` for investigation.
+Its model, effort, Fast mode, and preamble come from the role configuration. Repeat the call
+for independent questions: children run concurrently after their serialized UI setup,
+each appears under its parent in **Delegated agents**, and each returns its result.
+The parent keeps its own model and role. A completed child stays under the correct
+parent even after its successful job is removed. No planning or implementation phase
+is scheduled, and a Baton's suggested next role is only advice.
+
+Ordinary calls can set `return_mode` (`queue` behind the current turn by default;
+use `steer` to receive the result during the current turn), `through`
+(a `read_chat` cursor), and `include_thinking` (false by default). These options are
+refused on Workflow calls, where the coordinator owns the handoff and return path.
+Both active Workflow roots and their children are refused by ordinary-chat intake;
+only the root can delegate through its current phase capability. Each accepted ad hoc
+job freezes the configured role, which must use a different provider than its parent.
+
+Skills such as gstack can use the same routing through a user instruction override.
+See [Conductor agent routing](docs/conductor-agent-routing.md) for a prompt block that
+preserves skill steps and routes helper work through tracked chats without changing
+gstack source.
 
 The HTTP transport is deliberately minimal: the server never initiates a message, so
 there is no SSE stream and `GET /mcp` answers 405, which the spec allows. It keeps no
@@ -452,8 +475,8 @@ surface each of those choices.
 The workflow icon in either workspace header opens **Roles**. Models there are
 choices previously read from Conductor's real picker; a missing or ambiguous label
 stays red and Start is refused before the relay opens a tab. The shipped
-`exploration` placeholder is intentionally invalid when several Spark rows exist,
-so choose the exact one once. Start freezes all three roles for that run; editing a
+role placeholders stay invalid until an exact model is selected for each role.
+Start freezes all three roles for that run; editing a
 definition later affects only the next run. The root receives those frozen model labels
 and responsibilities in its first prompt; it does not need to call `list_roles`, whose
 output describes mutable defaults for later runs. In the sidebar, a Workflow workspace

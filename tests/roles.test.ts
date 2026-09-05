@@ -191,9 +191,9 @@ describe('delegated role store', () => {
 
 	test('uses only the newest non-empty whole-picker snapshot', () => {
 		const groups = [
-			{ agentType: 'claude', models: ['Fable 5', '5.6 Sol'], updatedAt: 10 },
+			{ agentType: 'claude', models: ['Fable 5', '5.6 Sol'], snapshotAt: 10, updatedAt: 10 },
 			{ agentType: 'codex', models: ['5.6 Sol'], snapshotAt: null, updatedAt: 30 },
-			{ agentType: 'codex', models: ['Fable 5.1', '5.6 Sol'], updatedAt: 20 }
+			{ agentType: 'codex', models: ['Fable 5.1', '5.6 Sol'], snapshotAt: 20, updatedAt: 20 }
 		]
 		expect(newestModelSnapshot(groups)?.updatedAt).toBe(20)
 		expect(resolveRole({ version: 1, roles: { planning: { model: 'Fable 5' } } }, 'planning', groups)).toMatchObject({
@@ -202,6 +202,32 @@ describe('delegated role store', () => {
 		})
 		expect(resolveRole({ version: 1, roles: { planning: { model: 'Fable 5.1' } } }, 'planning', groups)).toMatchObject({
 			ok: true
+		})
+	})
+
+	test('a newer Spark menu cannot invalidate other providers, but a provider rename still does', () => {
+		const spark = 'opencode-go/muse-spark-1.3-contributor'
+		const config = {
+			version: 1 as const,
+			roles: {
+				planning: { model: 'Fable 5.1' },
+				exploration: { model: spark },
+				implementation: { model: '5.6 Sol' }
+			}
+		}
+		const groups = [
+			{ agentType: 'claude', models: ['Fable 5', '5.6 Sol', spark], snapshotAt: 1, updatedAt: 1 },
+			{ agentType: 'codex', models: ['Fable 5.1', '5.6 Sol', spark], snapshotAt: 2, updatedAt: 2 },
+			// v1.107.0 learned this row without recording snapshotAt.
+			{ agentType: 'acp', models: [spark], updatedAt: 3 },
+			// A selection older than the confirmed rename cannot restore the retired label.
+			{ agentType: 'claude', models: ['Fable 5'], snapshotAt: null, updatedAt: 1 }
+		]
+		expect(roleModelIssues(config, groups)).toEqual([])
+		for (const role of Object.keys(config.roles)) expect(resolveRole(config, role, groups)).toMatchObject({ ok: true })
+		expect(resolveRole({ version: 1, roles: { planning: { model: 'Fable 5' } } }, 'planning', groups)).toMatchObject({
+			ok: false,
+			error: { code: 'model_missing' }
 		})
 	})
 

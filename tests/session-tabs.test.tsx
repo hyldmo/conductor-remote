@@ -150,6 +150,36 @@ describe('phone chat tabs', () => {
 		expect(delegationPipelineForParentSession([workflow], [childJob], roles, 'ordinary-chat')).toBeUndefined()
 	})
 
+	test('a delegated parent does not appear as its own child when it has a nested delegation', () => {
+		const roles = {
+			parent: { role: 'exploration', delegationId: 'first-job', parentSessionId: 'root', assignedAt: 1 },
+			child: { role: 'review', delegationId: 'nested-job', parentSessionId: 'parent', assignedAt: 2 }
+		}
+		expect(delegationPipelineForParentSession([], [], roles, 'parent')?.roles).toEqual({ child: roles.child })
+		expect(delegationPipelineForParentSession([], [], roles, 'root')?.roles).toEqual({ parent: roles.parent })
+	})
+
+	test('keeps completed ad hoc children under their exact parent without a planning role', () => {
+		const roles = {
+			'child-1': { role: 'exploration', delegationId: 'job-1', parentSessionId: 'ordinary-1', assignedAt: 1 },
+			'child-2': { role: 'exploration', delegationId: 'job-2', parentSessionId: 'ordinary-2', assignedAt: 2 },
+			'old-planner': { role: 'planning', assignedAt: 0 },
+			'old-child': { role: 'exploration', delegationId: 'old-job', assignedAt: 0 }
+		}
+		expect(delegationPipelineForParentSession([], [], roles, 'ordinary-1')?.roles).toEqual({
+			'child-1': roles['child-1']
+		})
+		expect(delegationPipelineForParentSession([], [], roles, 'ordinary-2')?.roles).toEqual({
+			'child-2': roles['child-2']
+		})
+		expect(delegationPipelineForParentSession([], [], roles, 'unrelated')).toBeUndefined()
+		expect(delegationPipelineForParentSession([], [], roles, 'child-1')).toBeUndefined()
+		expect(delegationPipelineForParentSession([], [], roles, 'old-planner')?.roles).toEqual({
+			'old-planner': roles['old-planner'],
+			'old-child': roles['old-child']
+		})
+	})
+
 	test('hides the close control when there is only one tab', () => {
 		const html = renderToStaticMarkup(
 			<SessionTabs

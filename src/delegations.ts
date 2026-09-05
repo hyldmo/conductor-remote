@@ -244,6 +244,9 @@ function decodeSessionRoles(raw: unknown): Record<string, SessionRoleAssignment>
 		decoded[sessionId] = {
 			role: text(assignment.role, `session ${sessionId} role`, 64),
 			...(delegationId === undefined ? {} : { delegationId }),
+			...(assignment.parentSessionId === undefined
+				? {}
+				: { parentSessionId: text(assignment.parentSessionId, `session ${sessionId} parentSessionId`) }),
 			assignedAt: integer(assignment.assignedAt, `session ${sessionId} assignedAt`)
 		}
 	}
@@ -477,9 +480,6 @@ export class DelegationQueue {
 	enqueue(store: DelegationStore, raw: PersistedDelegation): PersistedDelegation {
 		const roles = store.sessionRoles()
 		if (roles.warning) throw new Error(`cannot enqueue beside malformed sessions.json: ${roles.warning}`)
-		if (!roles.sessions[raw.parentSessionId]) {
-			store.assign(raw.parentSessionId, { role: 'planning', assignedAt: raw.createdAt })
-		}
 		const job = store.put(raw)
 		this.stores.add(store)
 		void this.wake()
@@ -556,6 +556,7 @@ export class DelegationQueue {
 				store.assign(result.childSessionId, {
 					role: job.role,
 					delegationId: job.id,
+					parentSessionId: job.parentSessionId,
 					assignedAt: this.now()
 				})
 				store.put(

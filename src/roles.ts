@@ -9,7 +9,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from './config.ts'
-import { modelAgentType, modelCatalogIncludes, modelPickerLabel, newestModelSnapshot } from './shared.ts'
+import { currentModelCatalog, modelAgentType, modelPickerLabel } from './shared.ts'
 
 export { newestModelSnapshot } from './shared.ts'
 
@@ -160,14 +160,14 @@ export function roleModelIssues(
 	groups: CachedModelGroup[]
 ): Array<{ role: string; error: DelegationError }> {
 	const issues: Array<{ role: string; error: DelegationError }> = []
-	const snapshot = newestModelSnapshot(groups)
+	const models = currentModelCatalog(groups)
 	for (const [name, role] of Object.entries(config.roles)) {
-		if (!snapshot || !modelCatalogIncludes(role.model, [snapshot])) {
+		if (!models.includes(modelPickerLabel(role.model))) {
 			issues.push({
 				role: name,
 				error: issue(
 					'model_missing',
-					`Role ${name} needs an exact model from Conductor's newest picker snapshot; update it in the role editor.`
+					`Role ${name} needs an exact model from Conductor's current picker catalog; update it in the role editor.`
 				)
 			})
 			continue
@@ -190,15 +190,16 @@ export type ResolveRoleResult = { ok: true; role: ResolvedDelegatedRole } | { ok
 
 /** Resolve and freeze the provider encoded by an exact cached picker label. */
 export function resolveRole(config: RolesConfig, name: string, groups: CachedModelGroup[]): ResolveRoleResult {
+	if (!Object.hasOwn(config.roles, name)) {
+		return { ok: false, error: issue('role_not_found', `Unknown delegated role ${name}.`) }
+	}
 	const role = config.roles[name]
-	if (!role) return { ok: false, error: issue('role_not_found', `Unknown delegated role ${name}.`) }
-	const snapshot = newestModelSnapshot(groups)
-	if (!snapshot || !modelCatalogIncludes(role.model, [snapshot])) {
+	if (!currentModelCatalog(groups).includes(modelPickerLabel(role.model))) {
 		return {
 			ok: false,
 			error: issue(
 				'model_missing',
-				`Role ${name} needs an exact model from Conductor's newest picker snapshot; update it in the role editor.`
+				`Role ${name} needs an exact model from Conductor's current picker catalog; update it in the role editor.`
 			)
 		}
 	}

@@ -4,6 +4,7 @@ import { responseErrorMessage } from '../src/shared.ts'
 import type {
 	ConfirmUiStableRequest,
 	DelegatedRole,
+	DelegateTaskRequest,
 	DelegationOutcome,
 	DelegationReturnMode,
 	DelegationStatus,
@@ -27,6 +28,9 @@ describe('delegation wire contract', () => {
 	})
 	test('keeps Plan mode out of delegated role configuration', () => {
 		expectTypeOf<keyof DelegatedRole>().toEqualTypeOf<'model' | 'effort' | 'fast' | 'preamble'>()
+		expectTypeOf<keyof DelegateTaskRequest>().toEqualTypeOf<
+			'role' | 'prompt' | 'returnMode' | 'throughRowid' | 'includeThinking'
+		>()
 	})
 
 	test('has only measured completion outcomes', () => {
@@ -93,7 +97,7 @@ describe('delegation wire contract', () => {
 		expect(routes.workflowComplete.path('run/id')).toBe('/api/workflows/run%2Fid/complete')
 		expect(routes.workflow.path('run/id')).toBe('/api/workflows/run%2Fid')
 		expect(routes.confirmUiStable).toMatchObject({ method: 'POST', pattern: '/api/ui-quarantine/confirm' })
-		// Kept only so upgraded relays can reject old ordinary-chat intake explicitly.
+		// Ordinary chats use their own intake without a Workflow capability.
 		expect(routes.delegateTask.path('parent/chat')).toBe('/api/sessions/parent%2Fchat/delegate')
 		expect(routes.dismissDelegation.path('job/id')).toBe('/api/delegations/job%2Fid')
 	})

@@ -179,6 +179,8 @@ export type DelegationOutcome =
 export interface SessionRoleAssignment {
 	role: string
 	delegationId?: string
+	/** Durable parent for an ad hoc child, including after its successful job is removed. */
+	parentSessionId?: string
 	workflowId?: string
 	assignedAt: number
 }
@@ -186,7 +188,7 @@ export interface SessionRoleAssignment {
 /** Active/failed job shape projected into `/api/state` and list responses. */
 export interface DelegationProjection {
 	id: string
-	/** Present for coordinator-owned jobs; absent on legacy JSON delegation jobs. */
+	/** Present for coordinator-owned jobs; absent on ad hoc JSON delegation jobs. */
 	workflowId?: string
 	/** Stable identity across retries of one logical Workflow job. */
 	logicalKey?: string
@@ -319,9 +321,18 @@ export type WorkflowDelegateResult =
 			error: DelegationError
 	  }
 
-/** Transitional names retained for shared callers while legacy JSON jobs drain. */
-export type DelegateTaskRequest = WorkflowDelegateRequest
-export type DelegateTaskResult = WorkflowDelegateResult
+/** Lightweight delegation from an ordinary chat; settings come from the named role. */
+export interface DelegateTaskRequest {
+	role: string
+	prompt: string
+	returnMode?: DelegationReturnMode
+	throughRowid?: number
+	includeThinking?: boolean
+}
+
+export type DelegateTaskResult =
+	| { ok: true; delegationId: string; role: string; model: string }
+	| { ok: false; error: DelegationError }
 
 export interface WorkflowRetryRequest {
 	clientId: string

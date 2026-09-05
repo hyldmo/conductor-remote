@@ -40,13 +40,18 @@ describe('worktree delegation store', () => {
 		const { store, worktree } = testStore()
 		store.put(job())
 		store.assign('parent-1', { role: 'planning', assignedAt: 90 })
-		store.assign('child-1', { role: 'exploration', delegationId: 'job-1', assignedAt: 110 })
+		store.assign('child-1', {
+			role: 'exploration',
+			delegationId: 'job-1',
+			parentSessionId: 'parent-1',
+			assignedAt: 110
+		})
 
 		expect(store.list()).toEqual({ jobs: [job()], warnings: [] })
 		expect(store.sessionRoles()).toEqual({
 			sessions: {
 				'parent-1': { role: 'planning', assignedAt: 90 },
-				'child-1': { role: 'exploration', delegationId: 'job-1', assignedAt: 110 }
+				'child-1': { role: 'exploration', delegationId: 'job-1', parentSessionId: 'parent-1', assignedAt: 110 }
 			}
 		})
 		const directory = path.join(worktree, '.context', 'delegations')
