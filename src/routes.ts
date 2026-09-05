@@ -126,7 +126,12 @@ export const routes = {
 	pushSubscribe: flat('POST', '/api/push/subscribe'),
 	pushUnsubscribe: flat('POST', '/api/push/unsubscribe'),
 	pushTest: flat('POST', '/api/push/test'),
-	/** Global picker-backed delegated-role definitions. */
+	/** Canonical Markdown definitions and routing globals. */
+	agents: flat('GET', '/api/agents'),
+	updateAgents: flat('PATCH', '/api/agents'),
+	routing: flat('GET', '/api/routing'),
+	updateRouting: flat('PATCH', '/api/routing'),
+	/** Compatibility views for cached PWAs and MCP. */
 	roles: flat('GET', '/api/roles'),
 	autoModelConfig: flat('GET', '/api/auto-model'),
 	updateAutoModelConfig: flat('PATCH', '/api/auto-model'),

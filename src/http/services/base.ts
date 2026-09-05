@@ -1,8 +1,8 @@
 import crypto from 'node:crypto'
 
 import path from 'node:path'
+import { AgentStore } from '../../agents/agent-store.ts'
 import { ModelCache } from '../../agents/model-cache.ts'
-import { RoleStore } from '../../agents/roles.ts'
 import { loadConfig, stateDir } from '../../config.ts'
 import { ConductorDb } from '../../db.ts'
 import { DevServerController } from '../../dev-server/controller.ts'
@@ -85,7 +85,9 @@ export function createBaseServices() {
 
 	const toolUsage = new ToolUsageService(cfg.dbPath)
 
-	const roleStore = new RoleStore(path.join(stateDir(), 'roles.json'))
+	const agentStore = new AgentStore(path.join(stateDir(), 'agents'))
+	const roleStore = agentStore.roles
+	const routingConfig = agentStore.routing
 
 	const orchestration = new OrchestrationDb(path.join(stateDir(), 'orchestration.db'), {
 		processProbe: processIdentityAlive
@@ -295,7 +297,9 @@ export function createBaseServices() {
 		search,
 		planUsage,
 		toolUsage,
+		agentStore,
 		roleStore,
+		routingConfig,
 		devServers,
 		recoverUiLease,
 		liveDelegationStores

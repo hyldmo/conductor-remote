@@ -5,7 +5,8 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { AutoModelConfigStore, DEFAULT_AUTO_MODEL_CONFIG } from '../../src/agents/auto-model/config.ts'
+import { AgentStore } from '../../src/agents/agent-store.ts'
+import { DEFAULT_AUTO_MODEL_CONFIG } from '../../src/agents/auto-model/config.ts'
 import { AutoModelQueue } from '../../src/agents/auto-model/queue.ts'
 import type { Config } from '../../src/config.ts'
 import { SendOnce } from '../../src/delivery/sendonce.ts'
@@ -133,7 +134,11 @@ async function autoFixture() {
 	const f = fixture()
 	const directory = await mkdtemp(path.join(os.tmpdir(), 'auto-http-test-'))
 	temporaryDirectories.push(directory)
-	f.services.autoModelConfig = new AutoModelConfigStore(path.join(directory, 'config.json'))
+	const agents = new AgentStore(path.join(directory, 'agents'))
+	f.services.agentStore = agents
+	f.services.roleStore = agents.roles
+	f.services.routingConfig = agents.routing
+	f.services.autoModelConfig = agents.autoModel
 	f.services.modelCache = {
 		list: () => [{ agentType: 'codex', updatedAt: 1, models: DEFAULT_AUTO_MODEL_CONFIG.profiles.map(p => p.model) }]
 	} as RelayServices['modelCache']

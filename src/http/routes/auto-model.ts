@@ -17,8 +17,8 @@ export function createAutoModelRoutes(
 				const config = decodeAutoModelConfig(JSON.parse(await readBody(req)))
 				const issues = autoModelIssues(config, modelCache.list())
 				if (issues.length) return json(req, res, 400, { error: issues.join(' ') })
-				autoModelConfig.write(config)
-				return json(req, res, 200, { config, issues: [] })
+				const saved = autoModelConfig.write(config)
+				return json(req, res, 200, { config: saved, issues: [] })
 			} catch {
 				return json(req, res, 400, { error: 'Invalid Auto settings. Check the profiles, fallback, and router.' })
 			}

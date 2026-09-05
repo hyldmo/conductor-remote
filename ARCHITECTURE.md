@@ -32,7 +32,8 @@ src/                     Node relay; source runs as .ts, npm ships emitted dist-
     router-types.ts      handler contract and NOT_HANDLED sentinel
     input.ts             JSON body decoding with a caller error for malformed JSON
     services/
-      base.ts            own DBs, Reads, SessionPoller, actuator, caches, role store, shared UI lease
+      base.ts            own DBs, Reads, SessionPoller, actuator, caches, agent store, shared UI lease
+      auto-model.ts      assembled routing config and durable Auto selection/delivery queue
       delivery.ts        prompt budgets/receipts, chat opening, first-prompt and parked queues
       delegations.ts     ordinary-child UI adapters, completion observation, DelegationQueue
       workflow.ts        coordinator adapters and managed effect dispatch
@@ -43,7 +44,7 @@ src/                     Node relay; source runs as .ts, npm ships emitted dist-
       files.ts           static PWA, attachment and tool-image responses
       responses.ts       authentication, body limits, conditional JSON, redaction/compression
     routes/              state, system, workspaces, create-workspace, sessions, prompts,
-                         files, workflows, voice; injected services, no startup side effects
+                         agents, auto-model, files, workflows, voice; injected services, no startup side effects
   reads/
     repository.ts        Reads facade over the same read-only ConductorDb
     workspaces.ts        workspace/repo reads, search targets, archive metadata
@@ -104,9 +105,16 @@ src/                     Node relay; source runs as .ts, npm ships emitted dist-
       prompt.ts          child assignment with the frozen parent chat reference
       return.ts          saved final-answer report and completion notice
       types.ts           queue adapter contracts
-  agents/                agent-config.ts: model receipt before effort/Fast; model-cache.ts:
-                         observed picker labels; roles.ts: strict global roles.json;
-                         conductor-settings.ts: surgical new-chat defaults in settings.toml
+  agents/
+    agent-config.ts      model receipt before effort/Fast; model-cache.ts: observed picker labels
+    agent-file.ts        flat frontmatter parse/patch, preserving unknown blocks and Markdown verbatim
+    agent-store.ts       cached agents/*.md roster, legacy role/Auto facades and write-through semantics
+    agent-migration.ts   copy-only roles.json + auto-model.json merge, publishing a complete directory
+    roles.ts            role decoding/resolution and legacy JSON reader for migration
+    routing.ts          routing.json globals, derived profiles and fallback validation
+    conductor-settings.ts surgical new-chat defaults in settings.toml
+    auto-model/         config.ts/types.ts: assembled v1 contract, validation and frozen job config;
+                         decision.ts/provider.ts: isolated router; queue.ts: durable Auto ownership
   delivery/              firstprompt.ts, parked.ts, sendonce.ts: durable ordinary prompt queues
                          and the in-process repeated-client-id send memo
   dev-server/            controller.ts owns preview/forward state; proxy.ts tunnels requests;

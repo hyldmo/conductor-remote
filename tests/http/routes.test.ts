@@ -6,6 +6,20 @@ const isParam = (route: Route0 | Route1): route is Route1 => 're' in route
 const samples = ['9008e4f4-9d58-4dbf-8c8e-6df0b618c2d0', 'conductor-remote', 'my repo', 'a/b', 'Ünicode name']
 
 describe('route table', () => {
+	test('pins canonical agent/routing and legacy configuration endpoints', () => {
+		for (const [name, method, pattern] of [
+			['agents', 'GET', '/api/agents'],
+			['updateAgents', 'PATCH', '/api/agents'],
+			['routing', 'GET', '/api/routing'],
+			['updateRouting', 'PATCH', '/api/routing'],
+			['roles', 'GET', '/api/roles'],
+			['updateRoles', 'PATCH', '/api/roles'],
+			['autoModelConfig', 'GET', '/api/auto-model'],
+			['updateAutoModelConfig', 'PATCH', '/api/auto-model']
+		] as const)
+			expect(routes[name]).toMatchObject({ method, pattern })
+	})
+
 	test('is populated entirely by API paths', () => {
 		expect(entries.length).toBeGreaterThan(20)
 		expect(entries.every(([, route]) => route.pattern.startsWith('/api/'))).toBe(true)

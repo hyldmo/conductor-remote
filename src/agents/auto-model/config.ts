@@ -68,7 +68,7 @@ const tuple = z
 		fast: z.boolean().optional()
 	})
 	.strict()
-const configSchema = z
+export const autoModelConfigSchema = z
 	.object({
 		version: z.literal(1),
 		defaultAuto: z.boolean(),
@@ -80,7 +80,8 @@ const configSchema = z
 					.strict()
 			)
 			.min(1)
-			.max(16),
+			// The canonical agent directory can contribute every one of its 32 files.
+			.max(32),
 		fallback: z.string(),
 		rules: z.string().max(12_000),
 		timeoutMs: z.number().int().min(2000).max(30_000)
@@ -88,7 +89,7 @@ const configSchema = z
 	.strict()
 
 export function decodeAutoModelConfig(raw: unknown): AutoModelConfig {
-	const config = configSchema.parse(raw)
+	const config = autoModelConfigSchema.parse(raw)
 	if (new Set(config.profiles.map(p => p.id)).size !== config.profiles.length)
 		throw new Error('Profile names must be unique.')
 	if (!config.profiles.some(p => p.id === config.fallback)) throw new Error('Choose an existing fallback profile.')
@@ -140,6 +141,7 @@ export function atomicJson(file: string, value: unknown): void {
 	}
 }
 
+/** Legacy JSON store retained for migration. Runtime consumers use AgentStore.autoModel. */
 export class AutoModelConfigStore {
 	private readonly file: string
 	constructor(file: string) {
