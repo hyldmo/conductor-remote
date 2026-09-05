@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSendPrompt } from '../../hooks/send.ts'
 import { useTranscript } from '../../hooks/transcript.ts'
 import { client } from '../../lib/api.ts'
@@ -87,6 +87,7 @@ export function Transcript({
 	const pending = useApp(s => s.pending)
 	const removePending = useApp(s => s.removePending)
 	const sendPrompt = useSendPrompt()
+	const [dismissError, setDismissError] = useState<{ createdAt: number; message: string }>()
 	const cannotCompact =
 		compactUnavailable ?? (entries.some(e => e.queued) ? 'Send or dismiss queued prompts before compacting' : undefined)
 	const queryClient = useQueryClient()
@@ -139,8 +140,17 @@ export function Transcript({
 	// The relay owns the entry, so dropping it is a request, not a local edit. A
 	// parked prompt (lock screen) belongs to its chat, a first prompt to its workspace.
 	const dismiss = async (q: PendingPrompt) => {
-		await (q.sessionId ? client.dismissParked(q.sessionId) : client.dismissPrompt(q.workspaceId)).catch(() => undefined)
+		setDismissError(undefined)
+		try {
+			await (q.sessionId ? client.dismissParked(q.sessionId) : client.dismissPrompt(q.workspaceId))
+		} catch (error) {
+			setDismissError({
+				createdAt: q.createdAt,
+				message: error instanceof Error ? error.message : 'Could not dismiss the prompt.'
+			})
+		}
 		queryClient.invalidateQueries({ queryKey: ['state'] })
+		queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
 	}
 
 	// This session's optimistic prompts, hiding any still-unconfirmed one whose text
@@ -310,7 +320,8 @@ export function Transcript({
 													workspaceId: p.workspaceId,
 													text: p.text,
 													queue: p.queue,
-													workflow: p.workflow
+													workflow: p.workflow,
+													auto: p.auto
 												})
 											}
 											onDismiss={() => removePending(p.id)}
@@ -320,6 +331,7 @@ export function Transcript({
 							{!showingSubagent && showQueued ? (
 								<QueuedEntry
 									queued={showQueued}
+									dismissError={dismissError?.createdAt === showQueued.createdAt ? dismissError.message : undefined}
 									// Keyed on the entry being retried, not re-rolled per tap, so a Retry whose
 									// answer goes missing can be tapped again without sending twice — the same
 									// identity a failed bubble gets from its own id (web/src/lib/api.ts).
@@ -330,7 +342,8 @@ export function Transcript({
 														id: `queued:${showQueued.sessionId ?? showQueued.workspaceId}:${showQueued.createdAt}`,
 														sessionId,
 														workspaceId,
-														text: showQueued.text
+														text: showQueued.text,
+														auto: showQueued.autoModel
 													})
 											: undefined
 									}

@@ -105,6 +105,8 @@ export function createListReposTool(call: RelayCall): Tool {
 
 const createWorkspaceInputSchema = createWorkspaceSchema
 	.omit({
+		// Auto is selected in the PWA; keep this tool's explicit agent settings contract.
+		auto: true,
 		send: true,
 		sendImmediately: true,
 		attachmentIds: true

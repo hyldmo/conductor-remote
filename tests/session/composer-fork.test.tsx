@@ -171,7 +171,15 @@ describe('the first message after a fork', () => {
 		expect(composer.html).not.toContain(context.name)
 		clickSend()
 		const payload = `${context.token}\n${file.token}\nExplore this idea`
-		expect(send).toHaveBeenCalledExactlyOnceWith('fork', payload, 'workspace', undefined, expect.any(String), false)
+		expect(send).toHaveBeenCalledExactlyOnceWith(
+			'fork',
+			payload,
+			'workspace',
+			undefined,
+			expect.any(String),
+			false,
+			false
+		)
 		expect(useApp.getState().draftAttachments.fork).toBeUndefined()
 		expect(loadPending()).toMatchObject([{ sessionId: 'fork', text: payload }])
 		response.resolve(result)
@@ -323,7 +331,8 @@ describe('Compact before sending', () => {
 			'workspace',
 			{ model: 'Chosen model', effort: 'high' },
 			expect.any(String),
-			queue
+			queue,
+			false
 		)
 		expect(loadCompactDrafts()).toEqual({})
 		expect(useApp.getState().draftAttachments.replacement).toBeUndefined()

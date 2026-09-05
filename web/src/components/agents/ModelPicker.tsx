@@ -1,4 +1,4 @@
-import { Check, ChevronDown, LoaderCircle, RefreshCw, Star } from 'lucide-react'
+import { Check, ChevronDown, LoaderCircle, RefreshCw, Settings2, Sparkles, Star } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { displayedModelPickerLabel, groupModelPickerLabels } from '../../../../src/shared.ts'
 import { cn } from '../../lib/cn.ts'
@@ -28,6 +28,9 @@ export function ModelPicker({
 	placement = 'above',
 	className,
 	beforeOptions,
+	autoSelected,
+	onSelectAuto,
+	onAutoSettings,
 	renderTrigger
 }: {
 	value?: string
@@ -49,6 +52,9 @@ export function ModelPicker({
 	className?: string
 	/** Controls shown above the model choices, such as an existing chat's agent settings. */
 	beforeOptions?: ReactNode
+	autoSelected?: boolean
+	onSelectAuto?: () => void
+	onAutoSettings?: () => void
 	renderTrigger?: (trigger: ModelPickerTrigger) => ReactNode
 }) {
 	const [internalOpen, setInternalOpen] = useState(false)
@@ -91,6 +97,35 @@ export function ModelPicker({
 						)}
 					>
 						{beforeOptions}
+						{onSelectAuto ? (
+							<div className="flex items-stretch border-b border-border-soft">
+								<button
+									type="button"
+									className="flex flex-1 items-center gap-2 px-3 py-2 text-left text-sm"
+									onClick={() => {
+										setPicking(false)
+										onSelectAuto()
+									}}
+								>
+									<Sparkles size={14} />
+									<span className="flex-1">Auto</span>
+									{autoSelected ? <Check size={13} className="text-accent" /> : null}
+								</button>
+								{onAutoSettings ? (
+									<button
+										type="button"
+										aria-label="Auto model settings"
+										className="px-3 text-muted"
+										onClick={() => {
+											setPicking(false)
+											onAutoSettings()
+										}}
+									>
+										<Settings2 size={15} />
+									</button>
+								) : null}
+							</div>
+						) : null}
 						{isFetching ? <RefreshCw size={10} className="mx-3 my-1.5 animate-spin text-faint" /> : null}
 						{groups.length ? (
 							groups.map(group => (

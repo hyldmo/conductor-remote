@@ -45,6 +45,7 @@ const TTL_MS = 24 * 60 * 60 * 1000
  * the in-chat Retry can re-send without the Composer.
  */
 export interface PendingMessage {
+	auto?: boolean
 	id: string
 	sessionId: string
 	workspaceId: string
@@ -177,6 +178,7 @@ function isPending(value: unknown): value is PendingMessage {
 		typeof p.text === 'string' &&
 		typeof p.createdAt === 'number' &&
 		(p.workflow === undefined || typeof p.workflow === 'boolean') &&
+		(p.auto === undefined || typeof p.auto === 'boolean') &&
 		(p.status === 'sending' || p.status === 'error')
 	)
 }

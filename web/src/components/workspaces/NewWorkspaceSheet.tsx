@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { modelAgentType } from '../../../../src/shared.ts'
-import { useModelCatalog, useModelDefaults, useWorkflowRoleReadiness } from '../../hooks/agents.ts'
+import { useAutoModelConfig, useModelCatalog, useModelDefaults, useWorkflowRoleReadiness } from '../../hooks/agents.ts'
 import { useStartWorkflow } from '../../hooks/workflows.ts'
 import { useRepos } from '../../hooks/workspaces.ts'
 import {
@@ -35,6 +35,7 @@ import { RepoAvatar } from '../ui.tsx'
 
 /** The "Send immediately" choice, remembered for next time — a preference, not state. */
 const SEND_NOW_KEY = 'conductor-remote-send-immediately'
+const NO_AGENT: AgentPatch = {}
 
 function loadSendNow(): boolean {
 	try {
@@ -79,6 +80,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const reposQuery = useRepos()
 	const { data } = reposQuery
 	const modelCatalog = useModelCatalog()
+	const autoConfig = useAutoModelConfig()
 	const modelDefaults = useModelDefaults()
 	const { roles, planningRole, problem: workflowProblem, ready: workflowReady } = useWorkflowRoleReadiness()
 	const lastNewWorkspaceRepo = useApp(s => s.lastNewWorkspaceRepo)
@@ -105,8 +107,9 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const finishWorkflowAttempt = useApp(s => s.finishWorkflowAttempt)
 	const setFocusedDraft = useApp(s => s.setFocusedDraft)
 	const setPrompt = (text: string) => setDraft(NEW_WORKSPACE_DRAFT, text)
-	const [agent, setAgent] = useState<AgentPatch>({})
+	const agent = useApp(s => s.agentDrafts[NEW_WORKSPACE_DRAFT]) ?? NO_AGENT
 	const [workflowMode, setWorkflowMode] = useState(false)
+	const autoMode = !workflowMode && (agent.auto ?? autoConfig.data?.config.defaultAuto ?? false)
 	const [pickerOpen, setPickerOpen] = useState(false)
 	const [sendNow, setSendNow] = useState(loadSendNow)
 	const [busy, setBusy] = useState(false)
@@ -179,14 +182,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const inheritedEffort = defaultEffortForModel(ordinaryModel, modelDefaults.data?.defaultEfforts)
 	const displayedEffort = workflowMode ? planningRole?.effort : (agent.effort ?? inheritedEffort)
 	const anyAgentChoice = Object.keys(agent).length > 0
-	const stageAgent = useCallback(
-		(patch: AgentPatch) =>
-			setAgent(current => {
-				const next = { ...current, ...patch }
-				return Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined)) as AgentPatch
-			}),
-		[]
-	)
+	const stageAgent = useCallback((patch: AgentPatch) => useApp.getState().stageAgent(NEW_WORKSPACE_DRAFT, patch), [])
 
 	// A user can enable Plan on Claude and then pick another provider. Remove the
 	// now-hidden choice so workspace creation never carries an option Conductor
@@ -234,7 +230,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				prompt: text,
 				sendImmediately: sendNow,
 				attachmentIds: readyAttachments.flatMap(attachment => (attachment.stageId ? [attachment.stageId] : [])),
-				...agent
+				...(autoMode ? { auto: true } : { ...agent, auto: false })
 			})
 			if (!r.ok || !r.workspaceId) {
 				setError(r.error ?? 'could not create the workspace')
@@ -246,6 +242,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 			// The relay owns the prompt now (src/delivery/firstprompt.ts) and the new chat shows it,
 			// so this is the one exit that drops the draft. Closing keeps it.
 			clearDraftContent(NEW_WORKSPACE_DRAFT)
+			useApp.getState().clearAgentDraft(NEW_WORKSPACE_DRAFT, agent)
 			onClose()
 			navigate(`/w/${r.workspaceId}`)
 		} catch (e) {
@@ -355,6 +352,8 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 					/>
 					<div className="mt-1 flex items-start gap-1 px-1">
 						<AgentControls
+							auto={autoMode}
+							onAutoChange={!workflowMode ? active => stageAgent({ auto: active }) : undefined}
 							model={selectedModel ?? 'Model'}
 							providerModel={workflowMode ? (planningRole?.model ?? null) : selectedModel}
 							agentType={workflowMode && planningRole ? (modelAgentType(planningRole.model) ?? null) : null}
@@ -372,7 +371,10 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							effortStaged={!workflowMode && agent.effort !== undefined}
 							planStaged={agent.plan !== undefined}
 							onModelChange={model =>
-								stageAgent({ model: model === (agent.model ?? defaultModel) ? undefined : model })
+								stageAgent({
+									model: autoMode ? model : model === (agent.model ?? defaultModel) ? undefined : model,
+									auto: false
+								})
 							}
 							onFastChange={() =>
 								stageAgent({ fast: agent.fast === undefined ? true : agent.fast ? false : undefined })
@@ -387,6 +389,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 									active={workflowMode}
 									onChange={active => {
 										setWorkflowMode(active)
+										if (active) stageAgent({ auto: false })
 										setError(null)
 									}}
 								/>
@@ -398,9 +401,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 										: roles.isLoading
 											? 'Loading Workflow roles…'
 											: undefined
-									: anyAgentChoice
-										? 'Applies when the workspace opens'
-										: undefined
+									: autoMode
+										? 'Chooses a model from your first message'
+										: anyAgentChoice
+											? 'Applies when the workspace opens'
+											: undefined
 							}
 						/>
 						<AttachmentPickerButton uploads={attachmentUploads} disabled={!online} />
