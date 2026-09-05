@@ -10,6 +10,15 @@ import type {
 	SessionRoleAssignment
 } from '../../wire.ts'
 
+/** Saved before sending; an accepted id is followed through outbox promotion without another send. */
+export interface DelegationDelivery {
+	rowid: number
+	outboxIds: string[]
+	messageId?: string
+	/** Older Conductor builds can consume a queued draft before exposing any DB receipt. */
+	accepted?: true
+}
+
 export interface PersistedDelegation {
 	version: 1
 	id: string
@@ -27,12 +36,14 @@ export interface PersistedDelegation {
 	createdAt: number
 	updatedAt: number
 	handoff?: Attachment
+	sendDelivery?: DelegationDelivery
 	sentRowid?: number
 	completionRowid?: number
-	/** Parent transcript cursor captured before a queued Baton was accepted. */
+	/** Parent transcript baseline, also retained for returns saved by older relays. */
 	returnCursor?: number
 	returnAttachment?: Attachment
 	returnText?: string
+	returnDelivery?: DelegationDelivery
 	returnRowid?: number
 	outcome?: DelegationOutcome
 	failure?: DelegationError
@@ -82,11 +93,21 @@ export type OpenDelegationResult = { ok: true; childSessionId: string; handoff: 
 
 export type ConfigureDelegationResult = { ok: true } | DelegationActionError
 
-export type SendDelegationResult = { ok: true; sentRowid: number } | DelegationActionError
+export type SendDelegationResult =
+	| { ok: true; sentRowid: number }
+	| { ok: true; pending: true; sendDelivery: DelegationDelivery }
+	| DelegationActionError
 
 export type ReturnDelegationResult =
 	| { ok: true; returnRowid: number }
-	| { ok: true; pending: true; returnCursor: number; returnAttachment: Attachment; returnText: string }
+	| {
+			ok: true
+			pending: true
+			returnCursor: number
+			returnAttachment: Attachment
+			returnText: string
+			returnDelivery?: DelegationDelivery
+	  }
 	| DelegationActionError
 
 export interface DelegationCompletion {

@@ -12,7 +12,7 @@ import type {
 	ResolvedDelegatedRole,
 	SessionRoleAssignment
 } from '../../wire.ts'
-import type { PersistedDelegation } from './types.ts'
+import type { DelegationDelivery, PersistedDelegation } from './types.ts'
 
 export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
@@ -116,6 +116,18 @@ function decodeResolvedRole(raw: unknown): ResolvedDelegatedRole {
 	return { ...role, agentType }
 }
 
+function decodeDelivery(raw: unknown, field: string): DelegationDelivery {
+	const value = object(raw)
+	if (!value || !Array.isArray(value.outboxIds)) throw new Error(`${field} is invalid`)
+	if (value.accepted !== undefined && value.accepted !== true) throw new Error(`${field}.accepted is invalid`)
+	return {
+		rowid: integer(value.rowid, `${field}.rowid`),
+		outboxIds: value.outboxIds.map(id => text(id, `${field}.outboxIds`)),
+		...(value.messageId === undefined ? {} : { messageId: text(value.messageId, `${field}.messageId`) }),
+		...(value.accepted === true ? { accepted: true } : {})
+	}
+}
+
 function requireStageFields(job: PersistedDelegation): void {
 	if (['configuring', 'sending', 'running', 'returning', 'returned'].includes(job.status) && !job.childSessionId) {
 		throw new Error(`${job.status} requires childSessionId`)
@@ -129,6 +141,9 @@ function requireStageFields(job: PersistedDelegation): void {
 	}
 	if (job.returnCursor !== undefined && (!job.returnAttachment || !job.returnText)) {
 		throw new Error('a dispatched return requires returnAttachment and returnText')
+	}
+	if (job.returnDelivery && job.returnCursor !== job.returnDelivery.rowid) {
+		throw new Error('returnDelivery requires its original returnCursor')
 	}
 	if (job.status === 'returned' && job.returnRowid === undefined) throw new Error('returned requires returnRowid')
 	if (job.status === 'failed' && !job.failure) throw new Error('failed requires failure')
@@ -163,6 +178,7 @@ export function decodeDelegation(raw: unknown): PersistedDelegation {
 		createdAt: integer(value.createdAt, 'createdAt'),
 		updatedAt: integer(value.updatedAt, 'updatedAt'),
 		...(value.handoff === undefined ? {} : { handoff: decodeAttachment(value.handoff) }),
+		...(value.sendDelivery === undefined ? {} : { sendDelivery: decodeDelivery(value.sendDelivery, 'sendDelivery') }),
 		...(value.sentRowid === undefined ? {} : { sentRowid: integer(value.sentRowid, 'sentRowid', 1) }),
 		...(value.completionRowid === undefined
 			? {}
@@ -170,6 +186,9 @@ export function decodeDelegation(raw: unknown): PersistedDelegation {
 		...(value.returnCursor === undefined ? {} : { returnCursor: integer(value.returnCursor, 'returnCursor') }),
 		...(value.returnAttachment === undefined ? {} : { returnAttachment: decodeAttachment(value.returnAttachment) }),
 		...(value.returnText === undefined ? {} : { returnText: text(value.returnText, 'returnText', MAX_TEXT) }),
+		...(value.returnDelivery === undefined
+			? {}
+			: { returnDelivery: decodeDelivery(value.returnDelivery, 'returnDelivery') }),
 		...(value.returnRowid === undefined ? {} : { returnRowid: integer(value.returnRowid, 'returnRowid', 1) }),
 		...(value.outcome === undefined ? {} : { outcome: decodeOutcome(value.outcome) }),
 		...(value.failure === undefined ? {} : { failure: decodeError(value.failure, 'failure') }),

@@ -2,7 +2,11 @@ import { writeAttachment } from '../../files/attachments.ts'
 
 import { delegatedPrompt } from '../../orchestration/delegation/prompt.ts'
 import { DelegationQueue } from '../../orchestration/delegation/queue.ts'
-import type { DelegationActionError, PersistedDelegation } from '../../orchestration/delegation/types.ts'
+import type {
+	DelegationActionError,
+	DelegationDelivery,
+	PersistedDelegation
+} from '../../orchestration/delegation/types.ts'
 
 import type { Workspace } from '../../reads/types.ts'
 
@@ -27,7 +31,7 @@ export function createDelegationsServices(
 			| 'deliveredRowSince'
 			| 'SEND_BUDGET_MS'
 			| 'locateChat'
-			| 'confirmDeliveryRow'
+			| 'confirmDelivery'
 			| 'CONFIRM_WINDOW_MS'
 		>
 ) {
@@ -42,7 +46,7 @@ export function createDelegationsServices(
 		deliveredRowSince,
 		SEND_BUDGET_MS,
 		locateChat,
-		confirmDeliveryRow,
+		confirmDelivery,
 		CONFIRM_WINDOW_MS
 	} = services
 
@@ -138,6 +142,63 @@ export function createDelegationsServices(
 		return { ok: true as const }
 	}
 
+	/** Prepare durably before sending, then follow the accepted id without spending retries. */
+	async function trackedPrompt(
+		ws: Workspace,
+		sessionId: string,
+		text: string,
+		delivery: DelegationDelivery | undefined,
+		code: 'send_failed' | 'return_failed',
+		queue = false
+	): Promise<
+		DelegationActionError | { ok: true; rowid: number } | { ok: true; pending: true; delivery: DelegationDelivery }
+	> {
+		if (!delivery) {
+			const cursor = reads.deliveryCursor(sessionId)
+			return {
+				ok: true as const,
+				pending: true as const,
+				delivery: { rowid: cursor.rowid, outboxIds: [...cursor.outboxIds] }
+			}
+		}
+		const cursor = { rowid: delivery.rowid, outboxIds: new Set(delivery.outboxIds) }
+		let receipt = delivery.messageId
+			? reads.deliveryReceiptForId(sessionId, delivery.messageId)
+			: reads.deliveryReceiptSince(sessionId, text, cursor)
+		if (!receipt && delivery.messageId) {
+			return delegationError(code, 'the accepted delegated message was removed from Conductor before dispatch', false)
+		}
+		if (!receipt && delivery.accepted) return { ok: true as const, pending: true as const, delivery }
+		if (!receipt && queue) {
+			const located = locateChat(ws, sessionId)
+			if ('error' in located) return delegationError(code, located.error, false)
+			const result = await withUiPriority('background', () =>
+				actuator.send({ workspace: ws, sessionId, tab: located.tab }, text, {
+					deadline: Date.now() + SEND_BUDGET_MS,
+					queue: true
+				})
+			)
+			receipt = result.ok
+				? reads.deliveryReceiptSince(sessionId, text, cursor)
+				: await confirmDelivery(sessionId, text, cursor, Date.now() + CONFIRM_WINDOW_MS)
+			if (!receipt) {
+				return result.ok
+					? { ok: true as const, pending: true as const, delivery: { ...delivery, accepted: true as const } }
+					: delegationError(code, result.error ?? 'Conductor did not accept the queued result')
+			}
+		}
+		if (!receipt) {
+			const result = await withUiPriority('background', () =>
+				deliverPrompt(ws, sessionId, text, SEND_BUDGET_MS, false, cursor)
+			)
+			if (!result.ok) return delegationError(code, result.error ?? 'the delegated message did not land')
+			receipt = result.receipt
+		}
+		return receipt.kind === 'message'
+			? { ok: true as const, rowid: receipt.rowid }
+			: { ok: true as const, pending: true as const, delivery: { ...delivery, messageId: receipt.id } }
+	}
+
 	async function sendDelegation(job: PersistedDelegation) {
 		const ws = reads.getWorkspace(job.workspaceId)
 		if (!ws) return delegationError('workspace_not_found', 'the delegated workspace is gone', false)
@@ -148,12 +209,11 @@ export function createDelegationsServices(
 		} catch (err) {
 			return delegationError('state_invalid', err instanceof Error ? err.message : String(err), false)
 		}
-		const cursor = reads.getMessages(job.childSessionId).cursor
-		const result = await withUiPriority('background', () => deliverPrompt(ws, job.childSessionId as string, text))
-		if (!result.ok) return delegationError('send_failed', result.error ?? 'the delegated prompt did not land')
-		const sentRowid = deliveredRowSince(job.childSessionId, text, cursor)
-		if (sentRowid === null) return delegationError('send_failed', 'the delegated prompt has no transcript receipt')
-		return { ok: true as const, sentRowid }
+		const result = await trackedPrompt(ws, job.childSessionId, text, job.sendDelivery, 'send_failed')
+		if (!result.ok) return result
+		return 'pending' in result
+			? { ok: true as const, pending: true as const, sendDelivery: result.delivery }
+			: { ok: true as const, sentRowid: result.rowid }
 	}
 
 	function delegationCompletion(job: PersistedDelegation) {
@@ -228,7 +288,7 @@ export function createDelegationsServices(
 		if (!reads.getSession(job.parentSessionId)) {
 			return delegationError('session_not_found', 'the parent chat is gone', false)
 		}
-		if (job.returnCursor !== undefined) {
+		if (job.returnCursor !== undefined && !job.returnDelivery) {
 			if (!job.returnAttachment || !job.returnText) {
 				return delegationError('state_invalid', 'the queued return receipt state is incomplete', false)
 			}
@@ -247,45 +307,30 @@ export function createDelegationsServices(
 		let attachment: Attachment
 		let text: string
 		try {
-			attachment = delegationReturnAttachment(job, ws)
-			text = delegationReturnText(job, attachment)
+			attachment = job.returnAttachment ?? delegationReturnAttachment(job, ws)
+			text = job.returnText ?? delegationReturnText(job, attachment)
 		} catch (err) {
 			return delegationError('return_failed', err instanceof Error ? err.message : String(err), false)
 		}
-		const cursor = reads.getMessages(job.parentSessionId).cursor
-		if (job.returnMode === 'steer') {
-			const result = await withUiPriority('background', () =>
-				deliverPrompt(ws, job.parentSessionId, text, SEND_BUDGET_MS, false)
-			)
-			if (!result.ok) return delegationError('return_failed', result.error ?? 'the delegated result did not return')
-			const rowid = deliveredRowSince(job.parentSessionId, text, cursor)
-			return rowid === null
-				? delegationError('return_failed', 'the delegated result has no transcript receipt')
-				: { ok: true as const, returnRowid: rowid }
-		}
-
-		const located = locateChat(ws, job.parentSessionId)
-		if ('error' in located) return delegationError('return_failed', located.error, false)
-		const result = await withUiPriority('background', () =>
-			actuator.send({ workspace: ws, sessionId: job.parentSessionId, tab: located.tab }, text, {
-				deadline: Date.now() + SEND_BUDGET_MS,
-				queue: true
-			})
+		const result = await trackedPrompt(
+			ws,
+			job.parentSessionId,
+			text,
+			job.returnDelivery,
+			'return_failed',
+			job.returnMode === 'queue'
 		)
-		const immediate = deliveredRowSince(job.parentSessionId, text, cursor)
-		if (immediate !== null) return { ok: true as const, returnRowid: immediate }
-		if (!result.ok) {
-			const late = await confirmDeliveryRow(job.parentSessionId, text, cursor, Date.now() + CONFIRM_WINDOW_MS)
-			if (late !== null) return { ok: true as const, returnRowid: late }
-			return delegationError('return_failed', result.error ?? 'Conductor did not accept the queued result')
-		}
-		return {
-			ok: true as const,
-			pending: true as const,
-			returnCursor: cursor,
-			returnAttachment: attachment,
-			returnText: text
-		}
+		if (!result.ok) return result
+		return 'pending' in result
+			? {
+					ok: true as const,
+					pending: true as const,
+					returnCursor: result.delivery.rowid,
+					returnDelivery: result.delivery,
+					returnAttachment: attachment,
+					returnText: text
+				}
+			: { ok: true as const, returnRowid: result.rowid }
 	}
 
 	const delegationQueue = new DelegationQueue(
