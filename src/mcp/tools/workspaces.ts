@@ -2,6 +2,7 @@ import { routes } from '../../routes.ts'
 import { workspaceTitle } from '../../shared.ts'
 import type {
 	ArchiveResult,
+	ContinueWorkspaceResult,
 	CreateWorkspaceResult,
 	DevServerResult,
 	DevServerState,
@@ -245,6 +246,36 @@ export function createDevServerTool(call: RelayCall): Tool {
 						? 'already stopped'
 						: 'stopped'
 			return formatDevServer(result, headline)
+		}
+	}
+}
+
+export function createContinueWorkspaceTool(call: RelayCall): Tool {
+	return {
+		name: 'continue_workspace',
+		description:
+			'Press Conductor’s own Continue action on a workspace whose PR merged — keeps the workspace id, worktree and chats, moves to a fresh branch and stages Branch continued.md in the selected chat. Drives the real UI: it focuses the workspace on the Mac first, so confirm with the user before continuing one they did not name. Only Conductor draws this action, after GitHub reports the PR merged; anything else is refused.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				workspace_id: { type: 'string' },
+				session_id: {
+					type: 'string',
+					description: 'The chat to continue from. Defaults to the workspace’s active chat.'
+				}
+			},
+			required: ['workspace_id']
+		},
+		run: async args => {
+			const id = need(args, 'workspace_id')
+			const data = await call<ContinueWorkspaceResult>(routes.continueWorkspace.path(id), {
+				method: routes.continueWorkspace.method,
+				body: { sessionId: str(args.session_id) },
+				timeoutMs: WRITE_TIMEOUT_MS
+			})
+			if (!data.ok) throw new Error(data.error ?? 'the continue did not land')
+			const branch = data.workspace?.branch
+			return branch ? `continued${data.previousBranch ? ` from ${data.previousBranch}` : ''} on ${branch}` : 'continued'
 		}
 	}
 }
