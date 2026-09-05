@@ -3,6 +3,7 @@ import { isRoute, routeParam, routes } from '../../routes.ts'
 import {
 	isOpenAIRealtimeVoice,
 	isVoiceLanguage,
+	isVoiceSpeed,
 	OPENAI_REALTIME_VOICES,
 	type OpenAIRealtimeVoice,
 	type VoiceLanguage
@@ -91,13 +92,21 @@ export function createVoiceRoutes(
 				return json(req, res, 503, { error: 'voice needs an OpenAI API key on this relay' })
 			const raw = await readBody(req)
 			if (raw.length > MAX_SDP_CHARS * 2) return json(req, res, 413, { error: 'WebRTC offer is too large' })
-			const body = JSON.parse(raw || '{}') as { sdp?: unknown; voice?: unknown; language?: unknown; target?: unknown }
+			const body = JSON.parse(raw || '{}') as {
+				sdp?: unknown
+				voice?: unknown
+				language?: unknown
+				target?: unknown
+				speed?: unknown
+			}
 			if (typeof body.sdp !== 'string' || !body.sdp.trim())
 				return json(req, res, 400, { error: 'WebRTC offer is required' })
 			if (body.sdp.length > MAX_SDP_CHARS) return json(req, res, 413, { error: 'WebRTC offer is too large' })
 			if (!isOpenAIRealtimeVoice(body.voice))
 				return json(req, res, 400, { error: `voice must be one of ${OPENAI_REALTIME_VOICES.join(', ')}` })
 			if (!isVoiceLanguage(body.language)) return json(req, res, 400, { error: 'unsupported voice language' })
+			if (body.speed !== undefined && !isVoiceSpeed(body.speed))
+				return json(req, res, 400, { error: 'speed must be a number from 0.25 to 1.5' })
 			try {
 				const target = parseVoiceCallTarget(body.target)
 				const context = target ? readVoiceChatContext(reads, target) : undefined
@@ -109,6 +118,7 @@ export function createVoiceRoutes(
 						model: voiceConfig.model,
 						reasoningEffort: voiceConfig.reasoningEffort,
 						voice: body.voice as OpenAIRealtimeVoice,
+						speed: body.speed ?? voiceConfig.speed,
 						language: body.language as VoiceLanguage,
 						context
 					},

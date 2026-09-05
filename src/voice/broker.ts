@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Tool } from '../mcp/types.ts'
 import type { VoiceLanguage } from '../shared.ts'
-import { type VoiceReasoningEffort, voiceReasoning } from './config.ts'
+import { DEFAULT_VOICE_SPEED, type VoiceReasoningEffort, voiceReasoning } from './config.ts'
 import type { VoiceHistory } from './history.ts'
 import { VOICE_INSTRUCTIONS } from './prompt.ts'
 import { VOICE_TOOL_NAMES } from './tools.ts'
@@ -24,6 +24,7 @@ interface AcceptBodyInput {
 	model: string
 	reasoningEffort?: VoiceReasoningEffort
 	voice: string
+	speed?: number
 	mcpUrl: string
 	mcpToken: string
 	instructions: string
@@ -38,7 +39,10 @@ export function buildAcceptBody(input: AcceptBodyInput): Record<string, unknown>
 		...voiceReasoning(input.model, input.reasoningEffort),
 		instructions: input.instructions,
 		max_output_tokens: 800,
-		audio: { input: { transcription: voiceTranscription(input.language) }, output: { voice: input.voice } },
+		audio: {
+			input: { transcription: voiceTranscription(input.language) },
+			output: { voice: input.voice, speed: input.speed ?? DEFAULT_VOICE_SPEED }
+		},
 		tools: [
 			{
 				type: 'mcp',
@@ -142,6 +146,7 @@ interface BrokerDeps {
 	model: string
 	reasoningEffort?: VoiceReasoningEffort
 	voice: string
+	speed?: number
 	mcpUrl?: string | null
 	mcpToken?: string | null
 	stateFile: string
@@ -245,6 +250,7 @@ export class VoiceBroker {
 					model: this.deps.model,
 					reasoningEffort: this.deps.reasoningEffort,
 					voice: options.voice ?? this.deps.voice,
+					speed: this.deps.speed,
 					language: options.language,
 					mcpUrl: this.deps.mcpUrl,
 					mcpToken: this.deps.mcpToken,

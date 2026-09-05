@@ -185,6 +185,7 @@ export function config(): void {
 		{ name: 'voice.model', value: voice.model, source: 'voice file' },
 		{ name: 'voice.reasoning-effort', value: voice.reasoningEffort, source: 'voice file' },
 		{ name: 'voice.voice', value: voice.voice, source: 'voice file' },
+		{ name: 'voice.speed', value: String(voice.speed), source: 'voice file' },
 		{ name: 'voice.sip-host', value: voice.sipHost, source: 'voice file' }
 	)
 	// The HTTPS port is a live Tailscale fact, not a plist knob: :443 by default, elsewhere once another

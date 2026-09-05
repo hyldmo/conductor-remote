@@ -13,10 +13,12 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from '../config.ts'
+import { isVoiceSpeed } from '../shared.ts'
 
 export const VOICE_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const
 export type VoiceReasoningEffort = (typeof VOICE_REASONING_EFFORTS)[number]
 export const DEFAULT_VOICE_REASONING_EFFORT: VoiceReasoningEffort = 'medium'
+export const DEFAULT_VOICE_SPEED = 1.25
 
 function isVoiceReasoningEffort(value: unknown): value is VoiceReasoningEffort {
 	return typeof value === 'string' && (VOICE_REASONING_EFFORTS as readonly string[]).includes(value)
@@ -55,6 +57,8 @@ export interface VoiceConfig {
 	model: string
 	reasoningEffort: VoiceReasoningEffort
 	voice: string
+	/** Realtime output multiplier; applied to both WebRTC and SIP calls. */
+	speed: number
 	sipHost: string
 }
 
@@ -73,6 +77,7 @@ const EMPTY: Omit<VoiceConfig, 'mcpToken' | 'trunkSecret'> = {
 	model: 'gpt-realtime-2.1',
 	reasoningEffort: DEFAULT_VOICE_REASONING_EFFORT,
 	voice: 'marin',
+	speed: DEFAULT_VOICE_SPEED,
 	sipHost: 'sip.api.openai.com'
 }
 
@@ -126,6 +131,7 @@ export function readVoiceConfig(file: string = voiceConfigPath()): VoiceConfig {
 		model: asStringOrNull(raw.model) ?? EMPTY.model,
 		reasoningEffort: isVoiceReasoningEffort(raw.reasoningEffort) ? raw.reasoningEffort : EMPTY.reasoningEffort,
 		voice: asStringOrNull(raw.voice) ?? EMPTY.voice,
+		speed: isVoiceSpeed(raw.speed) ? raw.speed : EMPTY.speed,
 		sipHost: asStringOrNull(raw.sipHost) ?? EMPTY.sipHost
 	}
 	if (asStringOrNull(raw.mcpToken) !== config.mcpToken || asStringOrNull(raw.trunkSecret) !== config.trunkSecret)
@@ -155,6 +161,7 @@ export const VOICE_SETTING_NAMES = [
 	'voice.model',
 	'voice.reasoning-effort',
 	'voice.voice',
+	'voice.speed',
 	'voice.sip-host'
 ] as const
 
@@ -207,6 +214,12 @@ export function setVoiceSetting(name: string, value: string, file: string = voic
 			if (!nullable) throw new Error('voice.voice cannot be unset')
 			config.voice = nullable
 			break
+		case 'voice.speed': {
+			const speed = value === 'unset' ? DEFAULT_VOICE_SPEED : Number(value)
+			if (!isVoiceSpeed(speed)) throw new Error('voice.speed must be a number from 0.25 to 1.5, or unset')
+			config.speed = speed
+			break
+		}
 		case 'voice.sip-host':
 			if (!nullable) throw new Error('voice.sip-host cannot be unset')
 			openAIOriginForSipHost(nullable)

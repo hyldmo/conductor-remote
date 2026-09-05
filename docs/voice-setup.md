@@ -297,6 +297,34 @@ assistant answers your questions and the delay before useful speech; a quick
 acknowledgement alone does not measure answer latency. See OpenAI's
 [reasoning guidance](https://developers.openai.com/api/docs/guides/realtime-models-prompting#set-reasoning-effort).
 
+### Speech speed and workspace summaries
+
+Calls default to **1.25× speech speed**, for both browser audio and SIP. The Call
+setup screen has a **Speech speed** picker beside Voice and Language. Choose a
+speed before starting a fleet or workspace call; the choice is saved on that
+device. **Default** uses the relay setting. To tune that default:
+
+```bash
+conductor-remote config set voice.speed 1.4
+```
+
+The supported range is 0.25–1.5; `unset` restores 1.25. Changing it restarts the
+relay, so begin a new call. This uses OpenAI's
+[audio output speed setting](https://developers.openai.com/api/reference/resources/realtime/subresources/calls/methods/create),
+which changes playback speed after generation. It does not change reasoning effort
+or the delay before the first audio arrives.
+
+Requested workspace summaries list the most recently updated work first and identify
+chats waiting for your answer, including a waiting sibling of a running chat. An unread
+completion alone is not a request for input. The decision queue halves relevance each
+day and gives questions and errors a modest boost; yesterday's error no longer always
+outranks fresh work. Inactive chats leave the default summary and queue after three
+days, including old errors and input waits. Running chats remain visible.
+
+Ask to include older work to use `include_dormant`, or request a date range. These are
+briefing filters; they do not archive workspaces or clear questions. Merged and Done
+workspaces still require their explicit completion filters.
+
 ### Disable or rotate
 
 This removes only the receipt-owned public voice mount and leaves the relay tailnet-only:

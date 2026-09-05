@@ -1,5 +1,5 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import type { OpenAIRealtimeVoice, VoiceLanguage } from '../../../../src/shared.ts'
+import { isVoiceSpeed, type OpenAIRealtimeVoice, type VoiceLanguage } from '../../../../src/shared.ts'
 import { client } from '../../lib/api.ts'
 import {
 	loadVoicePreferences,
@@ -42,6 +42,7 @@ interface VoiceContextValue {
 	enableAudio: () => void
 	setVoice: (voice: OpenAIRealtimeVoice) => void
 	setLanguage: (language: VoiceLanguage) => void
+	setSpeed: (speed: number | undefined) => void
 }
 
 const VoiceContext = createContext<VoiceContextValue | null>(null)
@@ -272,7 +273,8 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 				localSdp,
 				preferencesRef.current.voice,
 				preferencesRef.current.language,
-				selected ? { workspaceId: selected.workspaceId, sessionId: selected.sessionId } : undefined
+				selected ? { workspaceId: selected.workspaceId, sessionId: selected.sessionId } : undefined,
+				preferencesRef.current.speed
 			)
 			if (currentGeneration !== generation.current) {
 				void client.voiceCallEnd(answer.callId).catch(() => undefined)
@@ -384,6 +386,12 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 	const dismissError = useCallback(() => setError(null), [])
 	const setVoice = useCallback((voice: OpenAIRealtimeVoice) => updatePreferences({ voice }), [updatePreferences])
 	const setLanguage = useCallback((language: VoiceLanguage) => updatePreferences({ language }), [updatePreferences])
+	const setSpeed = useCallback(
+		(speed: number | undefined) => {
+			if (speed === undefined || isVoiceSpeed(speed)) updatePreferences({ speed })
+		},
+		[updatePreferences]
+	)
 
 	useEffect(
 		() => () => {
@@ -416,7 +424,8 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 			dismissError,
 			enableAudio,
 			setVoice,
-			setLanguage
+			setLanguage,
+			setSpeed
 		}),
 		[
 			panelOpen,
@@ -439,7 +448,8 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 			dismissError,
 			enableAudio,
 			setVoice,
-			setLanguage
+			setLanguage,
+			setSpeed
 		]
 	)
 

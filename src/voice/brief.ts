@@ -4,7 +4,8 @@ import type { SessionState, Workspace } from '../reads/types.ts'
 import { parseVoiceDate } from './dates.ts'
 import { clipExact, oneLine, speechText } from './speech.ts'
 
-const DORMANT_MS = 7 * 24 * 60 * 60 * 1000
+const ACTIVITY_HALF_LIFE_MS = 24 * 60 * 60 * 1000
+const MIN_ACTIVITY_RELEVANCE = 1 / 8
 const DORMANT_LABELS = new Set(['backlog', 'done', 'canceled', 'cancelled'])
 const OVERVIEW_PAGE_SIZE = 3
 const OVERVIEW_AGENT_STATUSES = new Set(['working', 'idle', 'error', 'needs-you'])
@@ -47,6 +48,13 @@ export interface NextDecision {
 	sessionId: string
 }
 
+export interface WaitingChat {
+	sessionId: string
+	chatTitle: string | null
+	updatedAt: string
+	question: string | null
+}
+
 export interface WorkspaceOverviewItem {
 	workspaceId: string
 	sessionId: string
@@ -54,6 +62,8 @@ export interface WorkspaceOverviewItem {
 	status: string
 	updatedAt: string
 	update: string
+	/** The newest waiting chat, which may differ from the workspace's latest activity. */
+	waitingForYou: WaitingChat | null
 }
 
 export interface WorkspaceOverview {
@@ -61,6 +71,10 @@ export interface WorkspaceOverview {
 	/** Relay time used for relative dates and filters. */
 	asOf: string
 	current: number
+	/** Matching workspaces with a chat waiting for input; unread alone is not a question. */
+	waitingForYou: number
+	/** Bounded waiting-work heads, even when the latest activity page is all running chats. */
+	waiting: (WaitingChat & { workspaceId: string; title: string })[]
 	dormant: number
 	completed: number
 	filtered: number
@@ -79,6 +93,7 @@ export interface WorkspaceOverviewFilters {
 	updatedBefore?: string
 	includeDone?: boolean
 	includeMerged?: boolean
+	includeDormant?: boolean
 }
 
 interface BriefDeps {
@@ -157,6 +172,26 @@ function parseDate(value: string | null): number {
 	return Number.isFinite(parsed) ? parsed : 0
 }
 
+/** Halve relevance each day; status can help a recent decision, never keep an old one on top forever. */
+function activityRelevance(updatedAt: string, now: number): number {
+	const at = parseDate(updatedAt)
+	return at ? 2 ** (-Math.max(0, now - at) / ACTIVITY_HALF_LIFE_MS) : 0
+}
+
+function newestFirst(a: { updatedAt: string; sessionId: string }, b: { updatedAt: string; sessionId: string }): number {
+	return parseDate(b.updatedAt) - parseDate(a.updatedAt) || a.sessionId.localeCompare(b.sessionId)
+}
+
+function waitingStatus(state: SessionState): boolean {
+	return state.status === 'needs_user_input' || state.status === 'needs_plan_response'
+}
+
+function trailingQuestion(text: string): string | null {
+	const paragraph = lastParagraph(text)
+	if (!/\?$/.test(paragraph)) return null
+	return paragraph.match(/[^.!?]*\?$/)?.[0].trim() || paragraph
+}
+
 function statusLabel(workspace: Workspace): string | null {
 	return workspace.manual_status ?? workspace.derived_status
 }
@@ -169,13 +204,18 @@ function isDormant(
 	state: SessionState,
 	workspace: Workspace,
 	now: number,
-	options: { ignoreAge?: boolean; includeDone?: boolean; includedWorkspaceStatus?: string } = {}
+	options: {
+		ignoreAge?: boolean
+		includeDone?: boolean
+		includeDormant?: boolean
+		includedWorkspaceStatus?: string
+	} = {}
 ): boolean {
-	if (state.status !== 'idle' && state.status) return false
-	const old = now - parseDate(state.updatedAt) > DORMANT_MS
+	if (state.status === 'working' || options.includeDormant) return false
+	const old = activityRelevance(state.updatedAt, now) < MIN_ACTIVITY_RELEVANCE
 	const label = normalizedStatus(statusLabel(workspace))
 	const explicitlyIncluded = options.includedWorkspaceStatus === label || (options.includeDone && label === 'done')
-	const labelled = DORMANT_LABELS.has(label) && !explicitlyIncluded
+	const labelled = (!state.status || state.status === 'idle') && DORMANT_LABELS.has(label) && !explicitlyIncluded
 	return (!options.ignoreAge && old) || labelled
 }
 
@@ -187,8 +227,8 @@ function isMerged(workspace: Workspace): boolean {
 	return workspace.pr_status === 'merged'
 }
 
-function agentStatus(state: SessionState): WorkspaceOverviewFilters['agentStatus'] {
-	if (state.status === 'needs_user_input' || state.status === 'needs_plan_response') return 'needs-you'
+function agentStatus(state: SessionState, waiting: boolean): WorkspaceOverviewFilters['agentStatus'] {
+	if (waiting) return 'needs-you'
 	if (state.status === 'working' || state.status === 'error') return state.status
 	return 'idle'
 }
@@ -223,16 +263,9 @@ function spokenUpdateAge(value: string, now: number): string {
 	return `Updated on ${month} ${date.getUTCDate()}, ${date.getUTCFullYear()}.`
 }
 
-function overviewRank(state: SessionState): number {
-	if (state.status === 'error') return 0
-	if (state.status === 'needs_user_input' || state.status === 'needs_plan_response') return 1
-	if (state.status === 'working') return 2
-	return 3
-}
-
-function overviewStatus(state: SessionState, workspace: Workspace): string {
+function overviewStatus(state: SessionState, workspace: Workspace, waiting: boolean): string {
 	if (state.status === 'error') return 'has an error'
-	if (state.status === 'needs_user_input' || state.status === 'needs_plan_response') return 'needs you'
+	if (waiting) return 'is waiting for you'
 	if (state.status === 'working') return 'is working'
 	if (workspace.unread_sessions.some(session => session.id === state.sessionId)) return 'has an unread update'
 	return 'is recently active'
@@ -271,7 +304,20 @@ export class VoiceBriefBoard {
 		this.now = deps.now ?? Date.now
 	}
 
+	private signal(state: SessionState) {
+		const said = this.deps.reads.lastAssistantText(state.sessionId) ?? ''
+		// Historical AskUserQuestion calls may already be answered. Only a live waiting
+		// status can make that history evidence of a current structured question.
+		const decision =
+			parseProseDecision(said) ??
+			(waitingStatus(state) ? parseStructuredQuestion(this.deps.reads.lastQuestionInput(state.sessionId)) : null)
+		const question = decision?.question ?? trailingQuestion(said)
+		const waiting = waitingStatus(state) || ((!state.status || state.status === 'idle') && question !== null)
+		return { said, decision, question, waiting }
+	}
+
 	private build(): { queue: VoiceQueueItem[]; working: number; dormant: number } {
+		const now = this.now()
 		const workspaces = new Map(this.deps.reads.listWorkspaces().map(ws => [ws.id, ws]))
 		const marks = this.deps.readPrefs().readMarks
 		let working = 0
@@ -285,37 +331,30 @@ export class VoiceBriefBoard {
 				working++
 				continue
 			}
-			if (isDormant(state, workspace, this.now())) {
+			if (isDormant(state, workspace, now)) {
 				dormant++
 				continue
 			}
 			if ((marks[state.sessionId] ?? '') >= state.updatedAt) continue
 
-			const said = this.deps.reads.lastAssistantText(state.sessionId) ?? ''
-			const prose = parseProseDecision(said)
-			const structured = prose ? null : parseStructuredQuestion(this.deps.reads.lastQuestionInput(state.sessionId))
-			const hasQuestion = Boolean(prose ?? structured) || /\?\s*$/.test(said.trim())
+			const signal = this.signal(state)
 			const unread = workspace.unread_sessions.some(s => s.id === state.sessionId)
-			const priority =
-				state.status === 'error'
-					? 0
-					: state.status === 'needs_user_input' || state.status === 'needs_plan_response'
-						? 1
-						: hasQuestion
-							? 2
-							: unread
-								? 3
-								: 4
+			const priority = state.status === 'error' ? 0 : waitingStatus(state) ? 1 : signal.waiting ? 2 : unread ? 3 : 4
 			queue.push({
 				workspaceId: state.workspaceId,
 				sessionId: state.sessionId,
 				title: state.sessionTitle ? `${state.workspaceTitle}, ${state.sessionTitle}` : state.workspaceTitle,
 				updatedAt: state.updatedAt,
 				priority,
-				decision: prose ?? structured ?? fallbackDecision(state, said)
+				decision: signal.decision ?? {
+					...fallbackDecision(state, signal.said),
+					...(signal.waiting && signal.question ? { question: signal.question } : {})
+				}
 			})
 		}
-		queue.sort((a, b) => a.priority - b.priority || b.updatedAt.localeCompare(a.updatedAt))
+		const score = (item: VoiceQueueItem) =>
+			activityRelevance(item.updatedAt, now) * (item.priority < 3 ? 2 : item.priority === 3 ? 1 : 0.5)
+		queue.sort((a, b) => score(b) - score(a) || newestFirst(a, b))
 		return { queue, working, dormant }
 	}
 
@@ -354,7 +393,7 @@ export class VoiceBriefBoard {
 		let dormant = 0
 		let completed = 0
 		let filtered = 0
-		const items: (WorkspaceOverviewItem & { rank: number })[] = []
+		const items: WorkspaceOverviewItem[] = []
 		for (const [workspaceId, workspace] of workspaces) {
 			if (filters.repo && workspace.repo_name?.toLowerCase() !== filters.repo.toLowerCase()) {
 				filtered++
@@ -377,6 +416,7 @@ export class VoiceBriefBoard {
 					!isDormant(state, workspace, now, {
 						ignoreAge: ignoreDormantAge,
 						includeDone,
+						includeDormant: filters.includeDormant,
 						includedWorkspaceStatus: wantedWorkspaceStatus ?? undefined
 					})
 			)
@@ -384,55 +424,72 @@ export class VoiceBriefBoard {
 				dormant++
 				continue
 			}
-			const current = live.filter(state => {
-				if (filters.agentStatus && agentStatus(state) !== filters.agentStatus) return false
-				const at = parseDate(state.updatedAt)
-				if (updatedSince !== null && at < updatedSince) return false
-				if (updatedBefore !== null && at >= updatedBefore) return false
-				return true
-			})
+			const current = live
+				.map(state => ({ state, signal: this.signal(state) }))
+				.filter(({ state, signal }) => {
+					if (filters.agentStatus && agentStatus(state, signal.waiting) !== filters.agentStatus) return false
+					const at = parseDate(state.updatedAt)
+					if (updatedSince !== null && at < updatedSince) return false
+					if (updatedBefore !== null && at >= updatedBefore) return false
+					return true
+				})
 			if (!current.length) {
 				filtered++
 				continue
 			}
-			current.sort((a, b) => overviewRank(a) - overviewRank(b) || parseDate(b.updatedAt) - parseDate(a.updatedAt))
-			const state = current[0]
-			const said = this.deps.reads.lastAssistantText(state.sessionId) ?? ''
+			current.sort((a, b) => newestFirst(a.state, b.state))
+			const { state, signal } = current[0]
+			const waiting = current.find(candidate => candidate.signal.waiting)
 			items.push({
 				workspaceId,
 				sessionId: state.sessionId,
-				title: oneLine(
-					state.sessionTitle ? `${state.workspaceTitle}, ${state.sessionTitle}` : state.workspaceTitle,
-					100
-				),
-				status: overviewStatus(state, workspace),
+				title: oneLine(state.workspaceTitle, 100),
+				status: overviewStatus(state, workspace, signal.waiting),
 				updatedAt: state.updatedAt,
-				update: oneLine(speechText(said, 150), 150),
-				rank: overviewRank(state)
+				update: oneLine(speechText(signal.said, 150), 150),
+				waitingForYou: waiting
+					? {
+							sessionId: waiting.state.sessionId,
+							chatTitle: waiting.state.sessionTitle,
+							updatedAt: waiting.state.updatedAt,
+							question: waiting.signal.question ? oneLine(speechText(waiting.signal.question, 180), 180) : null
+						}
+					: null
 			})
 		}
-		items.sort((a, b) => a.rank - b.rank || parseDate(b.updatedAt) - parseDate(a.updatedAt))
+		items.sort(newestFirst)
 
 		const offset = Number.isFinite(cursor) ? Math.max(0, Math.floor(cursor)) : 0
-		const rankedPage = items.slice(offset, offset + OVERVIEW_PAGE_SIZE)
-		const page = rankedPage.map(({ rank: _rank, ...item }) => item)
+		const page = items.slice(offset, offset + OVERVIEW_PAGE_SIZE)
 		const next = offset + page.length < items.length ? offset + page.length : null
 		const noun = items.length === 1 ? 'workspace' : 'workspaces'
-		const lines = page.map(
-			item =>
-				`${item.title} ${item.status}. ${spokenUpdateAge(item.updatedAt, now)}${item.update ? ` ${item.update}` : ' No agent update yet.'}`
-		)
+		const lines = page.map(item => {
+			const waiting = item.waitingForYou
+			const attention = waiting
+				? `${waiting.sessionId === item.sessionId ? '' : ` ${waiting.chatTitle ?? 'Another chat'} is waiting for you.`}${waiting.question ? ` ${waiting.question}` : ''}`
+				: item.update
+					? ` ${item.update}`
+					: ' No agent update yet.'
+			return `${item.title} ${item.status}. ${spokenUpdateAge(item.updatedAt, now)}${attention}`
+		})
+		const waiting = items
+			.flatMap(item =>
+				item.waitingForYou ? [{ ...item.waitingForYou, workspaceId: item.workspaceId, title: item.title }] : []
+			)
+			.sort(newestFirst)
 		const more = next === null ? '' : ` ${items.length - next} more current; ask me to continue.`
 		const none = items.length ? '' : filtered ? ' Nothing matches those filters.' : ' Nothing is active right now.'
 		const completedSummary = completed ? `, ${completed} completed hidden` : ''
 		const filteredSummary = filtered ? `, ${filtered} outside filters` : ''
 		return {
 			spoken: clipExact(
-				`Fresh overview: ${items.length} current ${noun}${completedSummary}${filteredSummary}, ${dormant} dormant. ${lines.join(' ')}${more}${none}`.trim(),
+				`Fresh overview: ${items.length} current ${noun}${completedSummary}${filteredSummary}, ${dormant} dormant. ${waiting.length} waiting for you. ${lines.join(' ')}${more}${none}`.trim(),
 				700
 			),
 			asOf: new Date(now).toISOString(),
 			current: items.length,
+			waitingForYou: waiting.length,
+			waiting: waiting.slice(0, OVERVIEW_PAGE_SIZE),
 			dormant,
 			completed,
 			filtered,
@@ -445,7 +502,7 @@ export class VoiceBriefBoard {
 		const built = this.build()
 		this.cached = built.queue
 		const locked = await this.deps.locked()
-		const needsYou = built.queue.filter(item => item.priority < 4).length
+		const needsYou = built.queue.filter(item => item.priority < 3).length
 		const heads = built.queue.slice(0, 3).map(item => item.title)
 		const spoken = clipExact(
 			`${locked ? 'Mac is locked; sends will park.' : 'Mac is unlocked; sends can land.'} ${built.working} working, ${needsYou} need you, ${built.dormant} dormant.${heads.length ? ` Queue starts with ${heads.join(', ')}.` : ''}`,

@@ -25,8 +25,27 @@ describe('voice config', () => {
 		expect(config.trunkSecret).not.toBe(config.mcpToken)
 		expect(config.model).toBe('gpt-realtime-2.1')
 		expect(config.reasoningEffort).toBe('medium')
+		expect(config.speed).toBe(1.25)
 		expect(config.sipHost).toBe('sip.api.openai.com')
 		expect(fs.statSync(target).mode & 0o777).toBe(0o600)
+	})
+
+	it('persists speech speed, rejects invalid settings without writes, and defaults older configs', () => {
+		const target = file()
+		const config = readVoiceConfig(target)
+		setVoiceSetting('voice.speed', '1.5', target)
+		expect(readVoiceConfig(target).speed).toBe(1.5)
+		const saved = fs.readFileSync(target, 'utf8')
+		for (const value of ['fast', '0', '0.24', '1.51', 'Infinity', '']) {
+			expect(() => setVoiceSetting('voice.speed', value, target)).toThrow(/voice.speed/)
+			expect(fs.readFileSync(target, 'utf8')).toBe(saved)
+		}
+		setVoiceSetting('voice.speed', 'unset', target)
+		expect(readVoiceConfig(target).speed).toBe(1.25)
+		for (const speed of [undefined, '1.5', null, 8]) {
+			fs.writeFileSync(target, JSON.stringify({ ...config, speed }))
+			expect(readVoiceConfig(target).speed).toBe(1.25)
+		}
 	})
 
 	it('persists effort independently of the model and refuses invalid effort without changing the file', () => {

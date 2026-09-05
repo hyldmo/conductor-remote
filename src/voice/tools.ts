@@ -94,7 +94,7 @@ export const VOICE_TOOL_DEFINITIONS: readonly VoiceToolDefinition[] = [
 	{
 		name: 'voice_workspace_overview',
 		description:
-			'Get a fresh, dated overview across current workspaces with filters and the relay as-of time. Merged and Done workspaces are excluded unless explicitly included. Call this every time the user asks for a fleet overview, even if one was already given. Pass the same filters with the returned cursor to continue.',
+			'Get a fresh overview in newest-activity-first order, with a waitingForYou count and waiting list of chats needing answers even beyond this page. Inactive work fades out after three days; running agents stay visible. Merged and Done are excluded unless requested. Call on every fleet overview request. Keep the same filters when continuing with its cursor.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -103,7 +103,8 @@ export const VOICE_TOOL_DEFINITIONS: readonly VoiceToolDefinition[] = [
 				agent_status: {
 					type: 'string',
 					enum: ['working', 'idle', 'error', 'needs-you'],
-					description: 'Only workspaces whose matching chat has this live agent status.'
+					description:
+						'Only matching chats. needs-you includes live input/plan waits and idle chats whose latest reply asks a question; unread alone does not qualify.'
 				},
 				workspace_status: {
 					type: 'string',
@@ -126,7 +127,12 @@ export const VOICE_TOOL_DEFINITIONS: readonly VoiceToolDefinition[] = [
 						'Only chat activity before this exclusive named boundary, relative duration, ISO date/time, or date. For yesterday alone, use updated_since yesterday and updated_before today.'
 				},
 				include_done: { type: 'boolean', description: 'Include Done workspaces; default false.' },
-				include_merged: { type: 'boolean', description: 'Include merged workspaces; default false.' }
+				include_merged: { type: 'boolean', description: 'Include merged workspaces; default false.' },
+				include_dormant: {
+					type: 'boolean',
+					description:
+						'Include older inactive and parked work when asked; default false. Completion filters still apply.'
+				}
 			}
 		}
 	},
@@ -356,6 +362,7 @@ export function createVoiceTools(context: VoiceToolContext): Tool[] {
 				if (updatedBefore) filters.updatedBefore = updatedBefore
 				if (typeof args.include_done === 'boolean') filters.includeDone = args.include_done
 				if (typeof args.include_merged === 'boolean') filters.includeMerged = args.include_merged
+				if (typeof args.include_dormant === 'boolean') filters.includeDormant = args.include_dormant
 				return answer(await context.board.workspaceOverview(cursor, filters))
 			}
 		},

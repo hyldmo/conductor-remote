@@ -1,6 +1,7 @@
 import {
 	isOpenAIRealtimeVoice,
 	isVoiceLanguage,
+	isVoiceSpeed,
 	type OpenAIRealtimeVoice,
 	type VoiceLanguage
 } from '../../../../src/shared.ts'
@@ -15,6 +16,8 @@ export interface WorkspaceVoiceTarget extends VoiceCallTarget {
 export interface VoicePreferences {
 	voice: OpenAIRealtimeVoice
 	language: VoiceLanguage
+	/** Omitted until chosen on this device, so the relay's configured default still applies. */
+	speed?: number
 }
 
 export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = { voice: 'marin', language: 'auto' }
@@ -22,10 +25,15 @@ const PREFS_KEY = 'conductor-remote-voice'
 
 export function loadVoicePreferences(storage: Pick<Storage, 'getItem'> = localStorage): VoicePreferences {
 	try {
-		const raw = JSON.parse(storage.getItem(PREFS_KEY) ?? '{}') as { voice?: unknown; language?: unknown }
+		const raw = JSON.parse(storage.getItem(PREFS_KEY) ?? '{}') as {
+			voice?: unknown
+			language?: unknown
+			speed?: unknown
+		}
 		return {
 			voice: isOpenAIRealtimeVoice(raw.voice) ? raw.voice : DEFAULT_VOICE_PREFERENCES.voice,
-			language: isVoiceLanguage(raw.language) ? raw.language : DEFAULT_VOICE_PREFERENCES.language
+			language: isVoiceLanguage(raw.language) ? raw.language : DEFAULT_VOICE_PREFERENCES.language,
+			...(isVoiceSpeed(raw.speed) ? { speed: raw.speed } : {})
 		}
 	} catch {
 		return DEFAULT_VOICE_PREFERENCES
