@@ -42,7 +42,7 @@ interface VoiceContextValue {
 	enableAudio: () => void
 	setVoice: (voice: OpenAIRealtimeVoice) => void
 	setLanguage: (language: VoiceLanguage) => void
-	setSpeed: (speed: number | undefined) => void
+	setSpeed: (speed: number) => void
 }
 
 const VoiceContext = createContext<VoiceContextValue | null>(null)
@@ -387,8 +387,8 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 	const setVoice = useCallback((voice: OpenAIRealtimeVoice) => updatePreferences({ voice }), [updatePreferences])
 	const setLanguage = useCallback((language: VoiceLanguage) => updatePreferences({ language }), [updatePreferences])
 	const setSpeed = useCallback(
-		(speed: number | undefined) => {
-			if (speed === undefined || isVoiceSpeed(speed)) updatePreferences({ speed })
+		(speed: number) => {
+			if (isVoiceSpeed(speed)) updatePreferences({ speed })
 		},
 		[updatePreferences]
 	)

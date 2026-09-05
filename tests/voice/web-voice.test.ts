@@ -73,7 +73,7 @@ describe('the browser voice seam', () => {
 		expect(loadVoicePreferences(storage)).toEqual(DEFAULT_VOICE_PREFERENCES)
 	})
 
-	it('remembers a device speed and can return to the relay default without losing voice or language', () => {
+	it('starts at 1.25 and remembers the last chosen speed without losing voice or language', () => {
 		let saved = JSON.stringify({ voice: 'cedar', language: 'no' })
 		const storage = {
 			getItem: () => saved,
@@ -82,17 +82,18 @@ describe('the browser voice seam', () => {
 			}
 		}
 		const prefs = loadVoicePreferences(storage)
-		expect(prefs).toEqual({ voice: 'cedar', language: 'no' })
+		expect(prefs).toEqual({ voice: 'cedar', language: 'no', speed: 1.25 })
 		saveVoicePreferences({ ...prefs, speed: 1.5 }, storage)
 		expect(loadVoicePreferences(storage)).toEqual({ voice: 'cedar', language: 'no', speed: 1.5 })
-		saveVoicePreferences({ ...prefs, speed: undefined }, storage)
-		expect(loadVoicePreferences(storage)).toEqual(prefs)
+		saveVoicePreferences({ ...prefs, speed: 1.4 }, storage)
+		expect(loadVoicePreferences(storage)).toEqual({ voice: 'cedar', language: 'no', speed: 1.4 })
 	})
 
 	it.each([null, '1.5', 0, 2])('ignores an invalid saved speed: %s', speed => {
 		expect(loadVoicePreferences({ getItem: () => JSON.stringify({ voice: 'cedar', language: 'en', speed }) })).toEqual({
 			voice: 'cedar',
-			language: 'en'
+			language: 'en',
+			speed: 1.25
 		})
 	})
 })

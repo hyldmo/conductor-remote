@@ -1,6 +1,8 @@
+import { hasAgentSettings, sessionIdSchema, setAgentOptionsSchema } from '../../contracts/agent-inputs.ts'
 import { routes } from '../../routes.ts'
 import type { AgentResult, DefaultModelResult, ModelCatalogResponse, ModelsResult } from '../../wire.ts'
 import { need, str } from '../arguments.ts'
+import { defineTool } from '../define-tool.ts'
 import { WRITE_TIMEOUT_MS } from '../protocol.ts'
 import type { RelayCall, Tool } from '../types.ts'
 
@@ -80,48 +82,27 @@ export function createSetDefaultModelTool(call: RelayCall): Tool {
 	}
 }
 
+const setAgentOptionsInputSchema = setAgentOptionsSchema
+	.omit({ workspaceId: true })
+	.extend({
+		session_id: sessionIdSchema,
+		workspace_id: setAgentOptionsSchema.shape.workspaceId
+	})
+	.strict()
+
 export function createSetAgentOptionsTool(call: RelayCall): Tool {
-	return {
+	return defineTool({
 		name: 'set_agent_options',
 		description:
 			'Change how a chat’s agent runs: model, reasoning effort, plan mode, fast mode. Conductor keeps these in its composer and nowhere else, so this is the only way to reach them — a prompt cannot. DRIVES THE REAL UI and steals focus for a few seconds. The change is confirmed against Conductor’s database before this answers. Applies to the NEXT turn, so set it before send_prompt, not during one. Ask the user before re-pointing a chat they did not name at a different model.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				session_id: { type: 'string' },
-				workspace_id: {
-					type: 'string',
-					description: 'Strongly recommended: it is what the relay asserts against before pressing anything.'
-				},
-				model: { type: 'string', description: 'A label from list_models. An unambiguous prefix is enough.' },
-				effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] },
-				plan: { type: 'boolean', description: 'Conductor’s Plan checkbox.' },
-				fast: {
-					type: 'boolean',
-					description: 'Fast mode. Only some models offer it; a missing button is reported, not ignored.'
-				}
-			},
-			required: ['session_id']
-		},
+		inputSchema: setAgentOptionsInputSchema,
 		run: async args => {
-			const sessionId = need(args, 'session_id')
-			const patch = {
-				model: str(args.model),
-				effort: str(args.effort),
-				plan: typeof args.plan === 'boolean' ? args.plan : undefined,
-				fast: typeof args.fast === 'boolean' ? args.fast : undefined,
-				workspaceId: str(args.workspace_id)
-			}
-			if (
-				patch.model === undefined &&
-				patch.effort === undefined &&
-				patch.plan === undefined &&
-				patch.fast === undefined
-			)
+			const { session_id: sessionId, workspace_id: workspaceId, ...patch } = args
+			if (!hasAgentSettings(patch))
 				throw new Error('nothing to change — pass at least one of model, effort, plan, fast')
 			const data = await call<AgentResult>(routes.agent.path(sessionId), {
 				method: routes.agent.method,
-				body: patch,
+				body: { ...patch, workspaceId },
 				timeoutMs: WRITE_TIMEOUT_MS
 			})
 			if (!data.ok) throw new Error(data.error ?? 'the change did not land')
@@ -131,5 +112,5 @@ export function createSetAgentOptionsTool(call: RelayCall): Tool {
 				? `now: ${[s.model, s.claude_effort_level, s.permission_mode, s.fast_mode ? 'fast' : null].filter(Boolean).join(' · ')}`
 				: 'applied'
 		}
-	}
+	})
 }

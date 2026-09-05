@@ -21,9 +21,8 @@ import type { CallOptions, RpcRequest } from './mcp/types.ts'
  *
  * Hand-rolled rather than built on `@modelcontextprotocol/sdk`, which measures 91
  * packages / 24 MB (express, hono, cors, jose) for a server that speaks neither HTTP
- * nor OAuth. The relay's tarball keeps its zero runtime dependencies, which matters
- * more than usual here: it auto-updates itself while holding a token that drives your
- * Mac.
+ * nor OAuth. The tool wrapper uses the relay's existing Zod dependency for shared
+ * input validation and JSON Schema export, without adding the SDK's HTTP/OAuth stack.
  */
 
 /**

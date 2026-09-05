@@ -299,10 +299,13 @@ acknowledgement alone does not measure answer latency. See OpenAI's
 
 ### Speech speed and workspace summaries
 
-Calls default to **1.25× speech speed**, for both browser audio and SIP. The Call
-setup screen has a **Speech speed** picker beside Voice and Language. Choose a
-speed before starting a fleet or workspace call; the choice is saved on that
-device. **Default** uses the relay setting. To tune that default:
+Browser calls start at **1.25× speech speed**. The Call
+setup screen has a **Speech speed** slider below Voice and Language. Drag or use
+the arrow keys to choose 0.25–1.5× in 0.05× steps before starting a fleet or
+workspace call; the last speed you choose is saved in localStorage on that device
+and used for your next call.
+
+SIP calls also default to 1.25×. To tune the SIP default:
 
 ```bash
 conductor-remote config set voice.speed 1.4

@@ -19,10 +19,18 @@ src/                     Node relay; source runs as .ts, npm ships emitted dist-
   wire.ts                shared API response/request shapes; types only
   shared.ts              browser-safe values: titles, query tokens, transcript rendering, lock phrase
   settings.ts, prefs.ts   relay settings and durable sync of PWA read marks/draft intent
+  contracts/
+    agent-inputs.ts      shared Zod inputs for prompts, workspace creation and agent settings; inferred wire types
+    validation.ts        parsed input or an InputError, rendered as HTTP 400 or an MCP tool error
+  mcp/
+    registry.ts         one tool set for stdio and HTTP, always calling the relay API
+    define-tool.ts      Zod inputSchema to JSON Schema, with typed validation before execution
+    tools/              explicit agent-facing fields, HTTP mappings and bounded text responses
   http/
     services.ts          composition root: construct each service once and inject shared dependencies
     router.ts            token gate, client priority, route dispatch, common error handling
     router-types.ts      handler contract and NOT_HANDLED sentinel
+    input.ts             JSON body decoding with a caller error for malformed JSON
     services/
       base.ts            own DBs, Reads, SessionPoller, actuator, caches, role store, shared UI lease
       delivery.ts        prompt budgets/receipts, chat opening, first-prompt and parked queues

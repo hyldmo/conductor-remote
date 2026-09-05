@@ -12,8 +12,8 @@
  * Before this, the phone kept a hand-written mirror of all of it and `mcp-tools.ts`
  * kept a third copy inline. Nothing enforced the copies — a field renamed in
  * `reads.ts` typechecked cleanly on both sides and surfaced as `undefined` on a
- * phone. So the rule is: **a shape that leaves the relay is declared here, and
- * nowhere else.**
+ * phone. Each shape has one owner and is exported here; validated request types
+ * are inferred from the Zod schemas in `src/contracts/agent-inputs.ts`.
  *
  * The web app may only `import type` from `src/` (see `scripts/check-imports.ts`).
  * `verbatimModuleSyntax` erases those imports, so nothing here reaches the bundle —
@@ -24,7 +24,7 @@
 import type { DefaultEfforts } from './agents/conductor-settings.ts'
 import type { CachedModelGroup } from './agents/model-cache.ts'
 import type { FirstPrompt } from './delivery/firstprompt.ts'
-import type { ParkedAgentPatch, ParkedPrompt } from './delivery/parked.ts'
+import type { ParkedPrompt } from './delivery/parked.ts'
 import type { DevRunConfig } from './dev-server/run-configs.ts'
 import type { DevServerForward, DevServerResult, DevServerState } from './dev-server/types.ts'
 import type { UpdateStatus } from './host/autoupdate.ts'
@@ -35,7 +35,7 @@ import type { DraftAttachment, Prefs, SyncedDraft } from './prefs.ts'
 import type { ClosedSession, Workspace as ReadWorkspace, RepoRow, SearchWorkspace, SessionRow } from './reads/types.ts'
 import type { IndexStatus, SearchResult as SearchEvidence } from './search/coordinator.ts'
 import type { Settings } from './settings.ts'
-import type { OpenAIRealtimeVoice, VoiceLanguage } from './shared.ts'
+import type { AGENT_EFFORTS, OpenAIRealtimeVoice, VoiceLanguage } from './shared.ts'
 import type { ContextBreakdown } from './transcript/context-breakdown.ts'
 import type { TranscriptEntry } from './transcript/parser.ts'
 import type {
@@ -72,8 +72,6 @@ export type {
 	LogFileInfo,
 	NoSleepState,
 	OpenAIRealtimeVoice,
-	/** What the phone can change about a chat's agent. */
-	ParkedAgentPatch as AgentPatch,
 	PlanUsageBucket,
 	PlanUsageProviderId,
 	PlanUsageSnapshot,
@@ -93,7 +91,7 @@ export type {
 // ── delegated roles ─────────────────────────────────────────────────────────────
 
 /** Stable effort keys accepted by the relay, independent of each provider's UI labels. */
-export type AgentEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode'
+export type AgentEffort = (typeof AGENT_EFFORTS)[number]
 
 /** One reusable cross-provider role. Plan mode is deliberately not part of this feature. */
 export interface DelegatedRole {
@@ -687,14 +685,8 @@ export interface DefaultModelResult {
 	error?: string
 }
 
-/** POST /api/workspaces — returns as soon as the row exists; the prompt is delivered later. */
-export interface CreateWorkspaceRequest extends ParkedAgentPatch {
-	repo?: string
-	prompt?: string
-	send?: boolean
-	sendImmediately?: boolean
-	attachmentIds?: string[]
-}
+/** Shared request inputs for staged agent settings and workspace creation. */
+export type { AgentPatch, CreateWorkspaceRequest, SetAgentOptionsRequest } from './contracts/agent-inputs.ts'
 
 export interface CreateWorkspaceResult {
 	ok: boolean
@@ -724,13 +716,7 @@ export interface StageAttachmentResult {
 }
 
 /** POST /api/sessions/:id/prompt — the relay retries inside the request, hence `attempts`. */
-export interface SendPromptRequest {
-	text: string
-	workspaceId?: string
-	agent?: ParkedAgentPatch
-	clientId?: string
-	queue?: boolean
-}
+export type { SendPromptRequest } from './contracts/agent-inputs.ts'
 
 export interface SendResult extends ActuatorSendResult {
 	/** Runs the relay needed to land the prompt (it retries a failed send itself). */
