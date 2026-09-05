@@ -141,6 +141,7 @@ describe('the call accept payload', () => {
 						'voice_search_calls',
 						'voice_read_call',
 						'voice_list_repos',
+						'voice_select_repo',
 						'voice_create_workspace_preview',
 						'voice_create_workspace',
 						'voice_send_preview',
@@ -247,7 +248,7 @@ describe('VoiceBroker', () => {
 		expect(broker.beginWebRtc('rtc_browser')).toBe(true)
 		expect(socket.sent.map(value => JSON.parse(value))).toEqual([{ type: 'response.create' }])
 		expect(JSON.parse(fs.readFileSync(broker.stateFile, 'utf8'))).toEqual([
-			{ callId: 'rtc_browser', acceptedAt: 1_000, mode: 'function', ready: true, greeted: false }
+			{ callId: 'rtc_browser', acceptedAt: 1_000, mode: 'function', ready: true, greeted: false, managedTurns: true }
 		])
 	})
 
@@ -479,4 +480,136 @@ describe('estimateRealtimeCost', () => {
 	it('leaves unpriced models unknown', () => {
 		expect(estimateRealtimeCost('unpriced-model', { input_token_details: { text_tokens: 1_000 } })).toBeNull()
 	})
+})
+
+it('preserves old tool results without speaking over the interrupting user or their newer response', async () => {
+	const { broker, sockets, functionToolRun } = setup()
+	let finish!: (value: string) => void
+	functionToolRun.mockImplementationOnce(
+		() =>
+			new Promise(resolve => {
+				finish = resolve
+			})
+	)
+	broker.registerWebRtc('rtc_interrupt')
+	const socket = sockets[0]
+	socket.emit('open')
+	broker.beginWebRtc('rtc_interrupt')
+	socket.event({ type: 'response.done', response: { status: 'completed' } })
+	socket.sent.splice(0)
+	const item = { type: 'function_call', call_id: 'slow-read', name: 'voice_roll_call', arguments: '{}' }
+	socket.event({ type: 'response.created', response: { id: 'old' } })
+	socket.event({ type: 'response.output_item.done', response_id: 'old', item })
+	socket.event({ type: 'input_audio_buffer.speech_started' })
+	socket.event({ type: 'response.done', response: { id: 'old', status: 'cancelled', output: [item] } })
+	broker.inject('rtc_interrupt', 'Workspace created.')
+	expect(socket.sent).toEqual([])
+	socket.event({ type: 'input_audio_buffer.speech_stopped' })
+	expect(socket.sent).toEqual([])
+	socket.event({ type: 'input_audio_buffer.committed', item_id: 'new-input' })
+	expect(socket.sent.map(raw => JSON.parse(raw).type)).toEqual(['response.create'])
+	socket.sent.splice(0)
+	socket.event({ type: 'response.created', response: { id: 'new' } })
+	finish('{"spoken":"Read completed"}')
+	await new Promise(resolve => setImmediate(resolve))
+	expect(socket.sent.map(raw => JSON.parse(raw).type)).toEqual(['conversation.item.create'])
+	socket.event({ type: 'response.done', response: { id: 'old', status: 'cancelled' } })
+	expect(socket.sent).toHaveLength(1)
+	socket.event({ type: 'output_audio_buffer.started', response_id: 'new' })
+	socket.event({ type: 'response.done', response: { id: 'new', status: 'completed' } })
+	expect(socket.sent).toHaveLength(1)
+	socket.event({ type: 'output_audio_buffer.stopped', response_id: 'new' })
+	expect(socket.sent.map(raw => JSON.parse(raw).type)).toEqual([
+		'conversation.item.create',
+		'conversation.item.create',
+		'response.create'
+	])
+})
+
+it('serializes typed interruption after cancellation and does not replay a pending tool', async () => {
+	const { broker, sockets } = setup()
+	broker.registerWebRtc('rtc_typed')
+	const socket = sockets[0]
+	socket.emit('open')
+	broker.beginWebRtc('rtc_typed')
+	socket.event({ type: 'response.created', response: { id: 'speaking' } })
+	socket.sent.splice(0)
+	expect(broker.sendText('rtc_typed', 'Actually use the other repo')).toBe(true)
+	expect(socket.sent.map(raw => JSON.parse(raw).type)).toEqual([
+		'input_audio_buffer.clear',
+		'response.cancel',
+		'output_audio_buffer.clear'
+	])
+	socket.event({ type: 'response.done', response: { id: 'speaking', status: 'cancelled' } })
+	expect(socket.sent.map(raw => JSON.parse(raw).type).slice(-2)).toEqual([
+		'conversation.item.create',
+		'response.create'
+	])
+	expect(JSON.parse(socket.sent.at(-2)!).item.content[0].text).toBe('Actually use the other repo')
+})
+
+it('retains terminal diagnostics for silent failures without storing raw provider messages', () => {
+	const { broker, sockets, history, logs } = setup()
+	broker.registerWebRtc('rtc_failed')
+	const socket = sockets[0]
+	socket.emit('open')
+	broker.beginWebRtc('rtc_failed')
+	socket.event({
+		type: 'response.done',
+		response: {
+			id: 'r-failed',
+			status: 'failed',
+			status_details: { error: { code: 'server_error', message: 'sensitive-provider-message' } },
+			usage: { total_tokens: 0 }
+		}
+	})
+	expect(history.read('rtc_failed')?.responseOutcomes).toEqual([
+		{ id: 'r-failed', status: 'failed', code: 'server_error' }
+	])
+	expect(logs.join(' ')).toContain('status=failed')
+	expect(logs.join(' ')).not.toContain('sensitive-provider-message')
+})
+
+it.each([
+	true,
+	false
+])('starts exactly one spoken turn after committed input (commit before cancel: %s)', commitFirst => {
+	const { broker, sockets } = setup()
+	broker.registerWebRtc('rtc_audio')
+	const socket = sockets[0]
+	socket.emit('open')
+	broker.beginWebRtc('rtc_audio')
+	socket.event({ type: 'response.created', response: { id: 'old-audio' } })
+	socket.event({ type: 'input_audio_buffer.speech_started' })
+	socket.sent.splice(0)
+	socket.event({ type: 'input_audio_buffer.speech_stopped' })
+	const committed = { type: 'input_audio_buffer.committed', item_id: 'new-input' }
+	const cancelled = { type: 'response.done', response: { id: 'old-audio', status: 'cancelled' } }
+	socket.event(commitFirst ? committed : cancelled)
+	expect(socket.sent).toHaveLength(0)
+	socket.event(commitFirst ? cancelled : committed)
+	expect(socket.sent.map(raw => JSON.parse(raw).type)).toEqual(['response.create'])
+	// A duplicated terminal event cannot release this newly requested response.
+	socket.event(cancelled)
+	broker.inject('rtc_audio', 'A workspace finished.')
+	expect(socket.sent).toHaveLength(1)
+})
+
+it('does not start a newly completed tool call from the response the user just interrupted', () => {
+	const { broker, sockets, functionToolRun } = setup()
+	broker.registerWebRtc('rtc_late')
+	const socket = sockets[0]
+	socket.emit('open')
+	broker.beginWebRtc('rtc_late')
+	socket.event({ type: 'response.created', response: { id: 'old' } })
+	socket.event({ type: 'input_audio_buffer.speech_started' })
+	socket.event({
+		type: 'response.function_call_arguments.done',
+		response_id: 'old',
+		call_id: 'late',
+		name: 'voice_roll_call',
+		arguments: '{}'
+	})
+	expect(functionToolRun).not.toHaveBeenCalled()
+	expect(JSON.parse(JSON.parse(socket.sent.at(-1)!).item.output).status).toBe('interrupted')
 })

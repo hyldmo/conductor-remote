@@ -120,12 +120,15 @@ interface StoredCall {
 	mode: 'mcp' | 'function'
 	ready: boolean
 	greeted: boolean
+	/** Older browser sessions still let provider VAD create responses. */
+	managedTurns?: boolean
 }
 
 interface Runtime {
 	callId: string
 	socket: BrokerSocket
 	mode: StoredCall['mode']
+	managedTurns: boolean
 	ready: boolean
 	open: boolean
 	toolsReady: boolean
@@ -134,6 +137,17 @@ interface Runtime {
 	responseActive: boolean
 	responseDone: boolean
 	responseHadTool: boolean
+	responseId: string | null
+	inputEpoch: number
+	userSpeaking: boolean
+	waitingForUserResponse: boolean
+	userTurnPending: boolean
+	finishedResponses: Set<string>
+	responseStartedAt: number
+	firstOutputAt: number | null
+	playing: boolean
+	typed: string[]
+	toolEpoch: Map<string, number>
 	pending: string[]
 	pendingTools: Set<string>
 	handledTools: Set<string>
@@ -224,7 +238,8 @@ export class VoiceBroker {
 						// Records written before WebRTC support were all SIP/MCP calls.
 						mode: call.mode === 'function' ? 'function' : 'mcp',
 						ready: call.ready ?? true,
-						greeted: call.greeted ?? false
+						greeted: call.greeted ?? false,
+						managedTurns: call.managedTurns === true
 					})
 				}
 			}
@@ -317,6 +332,7 @@ export class VoiceBroker {
 			callId,
 			socket,
 			mode: call.mode,
+			managedTurns: call.managedTurns === true,
 			ready: call.ready,
 			open: socket.readyState === 1,
 			toolsReady: call.mode === 'function',
@@ -325,6 +341,17 @@ export class VoiceBroker {
 			responseActive: false,
 			responseDone: false,
 			responseHadTool: false,
+			responseId: null,
+			inputEpoch: 0,
+			userSpeaking: false,
+			waitingForUserResponse: false,
+			userTurnPending: false,
+			finishedResponses: new Set(),
+			responseStartedAt: 0,
+			firstOutputAt: null,
+			playing: false,
+			typed: [],
+			toolEpoch: new Map(),
 			pending: [],
 			pendingTools: new Set(),
 			handledTools: new Set(),
@@ -362,7 +389,13 @@ export class VoiceBroker {
 	}
 
 	private createResponse(runtime: Runtime): boolean {
-		if (runtime.responseActive || runtime.socket.readyState !== 1) return false
+		if (
+			runtime.responseActive ||
+			runtime.userSpeaking ||
+			runtime.waitingForUserResponse ||
+			runtime.socket.readyState !== 1
+		)
+			return false
 		runtime.responseActive = true
 		runtime.responseDone = false
 		runtime.responseHadTool = false
@@ -376,7 +409,16 @@ export class VoiceBroker {
 	}
 
 	private flush(runtime: Runtime): void {
-		if (!runtime.toolsReady || !runtime.greeted || runtime.responseActive || runtime.socket.readyState !== 1) return
+		if (
+			!runtime.toolsReady ||
+			!runtime.greeted ||
+			runtime.responseActive ||
+			runtime.userSpeaking ||
+			runtime.waitingForUserResponse ||
+			runtime.playing ||
+			runtime.socket.readyState !== 1
+		)
+			return
 		const text = runtime.pending.shift()
 		if (!text) return
 		const itemId = `relay_${crypto.randomBytes(10).toString('hex')}`
@@ -390,7 +432,9 @@ export class VoiceBroker {
 
 	/** OpenAI may finish the response before or after its tool calls. Both are a barrier. */
 	private continueAfterTools(runtime: Runtime): void {
-		if (!runtime.responseDone || !runtime.responseHadTool || runtime.pendingTools.size) return
+		if (!runtime.responseDone || !runtime.responseHadTool || runtime.userSpeaking || runtime.waitingForUserResponse)
+			return
+		if ([...runtime.pendingTools].some(id => runtime.toolEpoch.get(id) === runtime.inputEpoch)) return
 		runtime.responseDone = false
 		runtime.responseHadTool = false
 		this.createResponse(runtime)
@@ -400,13 +444,16 @@ export class VoiceBroker {
 		const item = (event.item ?? {}) as Record<string, unknown>
 		const id = typeof event.item_id === 'string' ? event.item_id : typeof item.id === 'string' ? item.id : null
 		const started = id ? runtime.toolStarted.get(id) : undefined
+		const current = !id || runtime.toolEpoch.get(id) === runtime.inputEpoch
 		if (id) {
 			runtime.toolStarted.delete(id)
 			runtime.pendingTools.delete(id)
+			runtime.toolEpoch.delete(id)
 		}
 		const name = typeof item.name === 'string' ? item.name : (id ?? 'unknown tool')
 		const latency = started === undefined ? 'unknown latency' : `${this.now() - started}ms`
 		this.log(`[voice] ${callId} tool ${name}: ${latency}`)
+		if (!current) return
 		runtime.responseHadTool = true
 		// Remote MCP results do not automatically continue, but OpenAI requires the
 		// original response *and every MCP call in it* to finish before the next one.
@@ -423,8 +470,30 @@ export class VoiceBroker {
 			typeof event.arguments === 'string' ? event.arguments : typeof item.arguments === 'string' ? item.arguments : '{}'
 		if (!invocationId || !name || runtime.handledTools.has(invocationId)) return
 		runtime.handledTools.add(invocationId)
+		if (
+			runtime.userSpeaking ||
+			runtime.waitingForUserResponse ||
+			(typeof event.response_id === 'string' &&
+				(runtime.finishedResponses.has(event.response_id) ||
+					(runtime.responseId && event.response_id !== runtime.responseId)))
+		) {
+			this.send(runtime, {
+				type: 'conversation.item.create',
+				item: {
+					type: 'function_call_output',
+					call_id: invocationId,
+					output: JSON.stringify({
+						status: 'interrupted',
+						spoken: 'The call was interrupted before this tool started. No action was executed.'
+					})
+				}
+			})
+			return
+		}
 		runtime.pendingTools.add(invocationId)
 		runtime.toolStarted.set(invocationId, this.now())
+		const inputEpoch = runtime.inputEpoch
+		runtime.toolEpoch.set(invocationId, inputEpoch)
 		runtime.responseHadTool = true
 
 		void (async () => {
@@ -449,9 +518,10 @@ export class VoiceBroker {
 			const started = runtime.toolStarted.get(invocationId)
 			runtime.toolStarted.delete(invocationId)
 			runtime.pendingTools.delete(invocationId)
+			runtime.toolEpoch.delete(invocationId)
 			const latency = started === undefined ? 'unknown latency' : `${this.now() - started}ms`
 			this.log(`[voice] ${callId} tool ${name}: ${latency}`)
-			this.continueAfterTools(runtime)
+			if (inputEpoch === runtime.inputEpoch) this.continueAfterTools(runtime)
 		})()
 	}
 
@@ -477,6 +547,40 @@ export class VoiceBroker {
 		}
 		this.deps.history?.record(callId, event)
 		const type = event.type
+		if (
+			typeof type === 'string' &&
+			/^response\.(output_audio_transcript|audio_transcript|output_text)\.delta$/.test(type) &&
+			runtime.firstOutputAt === null
+		)
+			runtime.firstOutputAt = this.now()
+		if (type === 'input_audio_buffer.speech_started') {
+			runtime.inputEpoch++
+			runtime.userSpeaking = true
+			runtime.waitingForUserResponse = true
+			runtime.responseDone = false
+			runtime.responseHadTool = false
+			return
+		}
+		if (type === 'input_audio_buffer.speech_stopped') {
+			runtime.userSpeaking = false
+			// Wait for committed input, not transcription (which can arrive much later).
+			return
+		}
+		if (type === 'input_audio_buffer.committed' && runtime.managedTurns) {
+			runtime.waitingForUserResponse = false
+			runtime.userTurnPending = true
+			this.respondToUser(runtime)
+			return
+		}
+		if (type === 'output_audio_buffer.started') {
+			runtime.playing = true
+			return
+		}
+		if (type === 'output_audio_buffer.stopped' || type === 'output_audio_buffer.cleared') {
+			runtime.playing = false
+			this.flush(runtime)
+			return
+		}
 		if (type === 'mcp_list_tools.completed') {
 			if (runtime.mode !== 'mcp') return
 			runtime.toolsReady = true
@@ -492,12 +596,20 @@ export class VoiceBroker {
 			// Server VAD can start a response without this sideband having sent
 			// `response.create`; broker nudges must not collide with it.
 			runtime.responseActive = true
+			runtime.responseId = (event.response as { id?: string })?.id ?? null
+			runtime.responseStartedAt = this.now()
+			runtime.firstOutputAt = null
+			runtime.responseDone = false
+			runtime.responseHadTool = false
+			if (!runtime.managedTurns) runtime.waitingForUserResponse = false
+			else if (runtime.userSpeaking || runtime.waitingForUserResponse) this.send(runtime, { type: 'response.cancel' })
 			return
 		}
 		if (type === 'response.mcp_call.in_progress' && typeof event.item_id === 'string') {
 			runtime.responseHadTool = true
 			runtime.pendingTools.add(event.item_id)
 			runtime.toolStarted.set(event.item_id, this.now())
+			runtime.toolEpoch.set(event.item_id, runtime.inputEpoch)
 			return
 		}
 		if (type === 'response.function_call_arguments.done') {
@@ -520,13 +632,42 @@ export class VoiceBroker {
 			return
 		}
 		if (type === 'response.done') {
-			runtime.responseActive = false
-			runtime.responseDone = true
 			const response = (event.response ?? {}) as {
+				id?: string
+				status?: string
+				status_details?: { reason?: string; error?: { code?: string; type?: string } }
 				usage?: RealtimeUsage | null
 				output?: Record<string, unknown>[]
 			}
 			if (response.usage) this.logUsage(callId, response.usage)
+			// Keep terminal outcomes even for an empty/cancelled answer, without logging prompts or errors containing secrets.
+			const safe = (value: unknown) =>
+				typeof value === 'string' ? value.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 100) : 'none'
+			this.log(
+				`[voice] ${callId} response ${safe(response.id)} status=${safe(response.status)} reason=${safe(response.status_details?.reason)} code=${safe(response.status_details?.error?.code ?? response.status_details?.error?.type)} first_output_ms=${runtime.firstOutputAt === null ? 'none' : runtime.firstOutputAt - runtime.responseStartedAt}`
+			)
+			if (response.id && runtime.finishedResponses.has(response.id)) return
+			if (response.id) {
+				runtime.finishedResponses.add(response.id)
+				if (runtime.finishedResponses.size > 256)
+					runtime.finishedResponses.delete(runtime.finishedResponses.values().next().value!)
+			}
+			if (response.id && runtime.responseId && response.id !== runtime.responseId) return
+			runtime.responseActive = false
+			runtime.responseId = null
+			runtime.responseDone = !response.status || response.status === 'completed'
+			if (runtime.typed.length) {
+				this.flushTyped(runtime)
+				return
+			}
+			if (runtime.userTurnPending) {
+				this.respondToUser(runtime)
+				return
+			}
+			if (!runtime.responseDone || runtime.waitingForUserResponse) {
+				runtime.responseHadTool = false
+				return
+			}
 			for (const item of response.output ?? []) {
 				if (item.type === 'mcp_call') runtime.responseHadTool = true
 				if (item.type === 'function_call') this.startFunction(callId, runtime, { item })
@@ -548,12 +689,50 @@ export class VoiceBroker {
 		}
 	}
 
+	private flushTyped(runtime: Runtime): void {
+		if (runtime.responseActive || !runtime.typed.length) return
+		for (const text of runtime.typed.splice(0)) {
+			this.send(runtime, {
+				type: 'conversation.item.create',
+				item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
+			})
+		}
+		this.createResponse(runtime)
+	}
+
+	private respondToUser(runtime: Runtime): void {
+		if (runtime.userTurnPending && this.createResponse(runtime)) runtime.userTurnPending = false
+	}
+
+	/** All typed turns share the sideband scheduler with tools and background receipts. */
+	sendText(callId: string, text: string): boolean {
+		const runtime = this.runtimes.get(callId)
+		if (runtime?.mode !== 'function' || !runtime.ready || runtime.socket.readyState !== 1) return false
+		runtime.inputEpoch++
+		runtime.userSpeaking = false
+		runtime.waitingForUserResponse = false
+		runtime.userTurnPending = false
+		runtime.responseDone = false
+		runtime.responseHadTool = false
+		runtime.typed.push(text)
+		this.send(runtime, { type: 'input_audio_buffer.clear' })
+		if (runtime.responseActive) this.send(runtime, { type: 'response.cancel' })
+		this.send(runtime, { type: 'output_audio_buffer.clear' })
+		this.flushTyped(runtime)
+		return true
+	}
+
+	isBrowserCall(callId: string): boolean {
+		return this.calls.get(callId)?.mode === 'function'
+	}
+
 	/** Attach the relay sideband before the browser receives its SDP answer. */
 	registerWebRtc(callId: string, options: VoiceCallOptions = {}): void {
 		this.calls.set(callId, {
 			callId,
 			acceptedAt: this.now(),
 			mode: 'function',
+			managedTurns: true,
 			ready: false,
 			greeted: false
 		})

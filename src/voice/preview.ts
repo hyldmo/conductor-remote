@@ -10,7 +10,11 @@ interface PreviewBase {
 	token: string
 	createdAt: number
 	expiresAt: number
-	status: 'ready' | 'claimed'
+	status: 'ready' | 'claimed' | 'superseded'
+	presented?: boolean
+	reviewPaused?: boolean
+	targetLabel?: string
+	outcome?: { state: 'running' | 'completed' | 'parked' | 'failed' | 'unknown'; workspaceId?: string; message?: string }
 }
 
 export interface SendPreview extends PreviewBase {
@@ -26,7 +30,7 @@ export interface WorkspacePreview extends PreviewBase {
 	prompt: string
 }
 
-type VoicePreview = SendPreview | WorkspacePreview
+export type VoicePreview = SendPreview | WorkspacePreview
 
 export type PreviewRefusal =
 	| 'expired'
@@ -38,8 +42,10 @@ export type PreviewRefusal =
 	| 'wrong-action'
 	| 'already-used'
 	| 'unknown'
+	| 'editing'
 
 interface CreatePreview {
+	targetLabel?: string
 	callId: string
 	workspaceId: string
 	sessionId: string
@@ -68,6 +74,7 @@ export class PreviewStore {
 	readonly file: string
 	private readonly now: () => number
 	private previews: VoicePreview[] | null = null
+	private presentations = new Map<string, (shown: boolean) => void>()
 
 	constructor(file: string, deps: { now?: () => number } = {}) {
 		this.file = file
@@ -83,6 +90,18 @@ export class PreviewStore {
 						preview.kind ? preview : { ...preview, kind: 'send_prompt' }
 					)
 				: []
+			// A previous process may have dispatched before it lost the receipt.
+			let recovered = false
+			for (const preview of this.previews) {
+				if (preview.status === 'claimed' && (!preview.outcome || preview.outcome.state === 'running')) {
+					preview.outcome = {
+						state: 'unknown',
+						message: 'The relay restarted before saving the receipt. Check the destination before retrying.'
+					}
+					recovered = true
+				}
+			}
+			if (recovered) this.write()
 		} catch {
 			this.previews = []
 		}
@@ -91,7 +110,9 @@ export class PreviewStore {
 
 	private write(): void {
 		fs.mkdirSync(path.dirname(this.file), { recursive: true })
-		fs.writeFileSync(this.file, `${JSON.stringify(this.read(), null, 2)}\n`, { mode: 0o600 })
+		const temporary = `${this.file}.tmp`
+		fs.writeFileSync(temporary, `${JSON.stringify(this.read(), null, 2)}\n`, { mode: 0o600 })
+		fs.renameSync(temporary, this.file)
 		fs.chmodSync(this.file, 0o600)
 	}
 
@@ -107,8 +128,8 @@ export class PreviewStore {
 		}
 		// Keep enough history to return an explicit `expired` refusal until the next
 		// preview, then bound this append-only credential file as calls accumulate.
-		this.previews = this.read().filter(candidate => candidate.expiresAt >= createdAt)
-		this.previews.push(preview)
+		this.retire(input.callId, createdAt)
+		this.read().push(preview)
 		this.write()
 		return preview
 	}
@@ -123,10 +144,79 @@ export class PreviewStore {
 			expiresAt: createdAt + PREVIEW_TTL_MS,
 			status: 'ready'
 		}
-		this.previews = this.read().filter(candidate => candidate.expiresAt >= createdAt)
-		this.previews.push(preview)
+		this.retire(input.callId, createdAt)
+		this.read().push(preview)
 		this.write()
 		return preview
+	}
+
+	private retire(callId: string, now: number): void {
+		// Expiry revokes approval, not the review content or its receipt. Keep 30 days.
+		this.previews = this.read().filter(candidate => candidate.createdAt >= now - 30 * 86_400_000)
+		for (const preview of this.previews) {
+			if (preview.callId === callId && preview.status === 'ready') preview.status = 'superseded'
+		}
+	}
+
+	list(callId: string): VoicePreview[] {
+		return this.read()
+			.filter(preview => preview.callId === callId)
+			.map(preview => structuredClone(preview))
+	}
+
+	get(callId: string, token: string): VoicePreview | undefined {
+		return this.list(callId).find(preview => preview.token === token)
+	}
+
+	present(callId: string, token: string): boolean {
+		const preview = this.read().find(candidate => candidate.callId === callId && candidate.token === token)
+		if (preview?.status !== 'ready') return false
+		preview.presented = true
+		this.write()
+		this.presentations.get(token)?.(true)
+		return true
+	}
+
+	waitForPresentation(token: string, timeoutMs = 1800): Promise<boolean> {
+		if (this.read().find(preview => preview.token === token)?.presented) return Promise.resolve(true)
+		return new Promise(resolve => {
+			const finish = (shown: boolean) => {
+				clearTimeout(timer)
+				this.presentations.delete(token)
+				resolve(shown)
+			}
+			const timer = setTimeout(() => finish(false), timeoutMs)
+			this.presentations.set(token, finish)
+		})
+	}
+
+	settle(token: string, outcome: NonNullable<VoicePreview['outcome']>): void {
+		const preview = this.read().find(candidate => candidate.token === token)
+		if (preview?.status !== 'claimed') return
+		preview.outcome = outcome
+		this.write()
+	}
+
+	edit(callId: string, token: string, text: string): VoicePreview | null {
+		const preview = this.get(callId, token)
+		if (preview?.status !== 'ready') return null
+		return preview.kind === 'send_prompt'
+			? this.create({
+					callId,
+					workspaceId: preview.workspaceId,
+					sessionId: preview.sessionId,
+					targetLabel: preview.targetLabel,
+					text
+				})
+			: this.createWorkspace({ callId, repo: preview.repo, prompt: text })
+	}
+
+	pauseReview(callId: string, token: string, paused: boolean): boolean {
+		const preview = this.read().find(preview => preview.callId === callId && preview.token === token)
+		if (preview?.status !== 'ready') return false
+		preview.reviewPaused = paused
+		this.write()
+		return true
 	}
 
 	private available(
@@ -138,11 +228,13 @@ export class PreviewStore {
 		if (this.now() > preview.expiresAt) return { ok: false, reason: 'expired' }
 		if (preview.status !== 'ready') return { ok: false, reason: 'already-used' }
 		if (preview.callId !== callId) return { ok: false, reason: 'foreign-call' }
+		if (preview.reviewPaused) return { ok: false, reason: 'editing' }
 		return { ok: true, preview }
 	}
 
 	private markClaimed<T extends VoicePreview>(preview: T): T {
 		preview.status = 'claimed'
+		preview.outcome = { state: 'running' }
 		this.write()
 		return { ...preview }
 	}

@@ -22,7 +22,7 @@ function tool(tools: Tool[], name: string): Tool {
 	return found
 }
 
-function harness(status = 'idle') {
+function harness(status = 'idle', visual = false) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-tools-'))
 	dirs.push(dir)
 	const state: SessionState = {
@@ -73,11 +73,13 @@ function harness(status = 'idle') {
 			truncated: false
 		})
 	)
+	const previews = new PreviewStore(path.join(dir, 'previews.json'))
 	const tools = createVoiceTools({
 		callId: 'call-a',
 		board,
 		recall,
-		previews: new PreviewStore(path.join(dir, 'previews.json')),
+		previews,
+		presentPreview: async () => visual,
 		findSession: id => (id === 's1' ? state : null),
 		listRepos: () => [
 			{ name: 'conductor-remote', defaultBranch: 'main' },
@@ -88,7 +90,7 @@ function harness(status = 'idle') {
 		dispatch,
 		announce
 	})
-	return { tools, state, board, dispatch, createWorkspace, announce, readChatContext, history, recall }
+	return { tools, previews, state, board, dispatch, createWorkspace, announce, readChatContext, history, recall }
 }
 
 describe('createVoiceTools', () => {
@@ -102,6 +104,7 @@ describe('createVoiceTools', () => {
 			'voice_search_calls',
 			'voice_read_call',
 			'voice_list_repos',
+			'voice_select_repo',
 			'voice_create_workspace_preview',
 			'voice_create_workspace',
 			'voice_send_preview',
@@ -323,4 +326,56 @@ describe('createVoiceTools', () => {
 		await vi.waitFor(() => expect(landed.dispatch).toHaveBeenCalled())
 		expect(landed.announce).not.toHaveBeenCalled()
 	})
+})
+
+it('gives a brief cue for an acknowledged visual draft and the full text for hands-free review', async () => {
+	const text = 'A long draft with exact line breaks.\n'.repeat(30)
+	const visual = harness('idle', true)
+	const card = JSON.parse(
+		await tool(visual.tools, 'voice_send_preview').run({ workspace_id: 'w1', session_id: 's1', text })
+	)
+	expect(card.presentation).toBe('visual')
+	expect(card.spoken).not.toContain('A long draft')
+	expect(card.text).toBe(text.trim())
+	expect(visual.previews.get('call-a', card.token)?.kind).toBe('send_prompt')
+	const handsFree = harness()
+	const spoken = JSON.parse(
+		await tool(handsFree.tools, 'voice_send_preview').run({ workspace_id: 'w1', session_id: 's1', text })
+	)
+	expect(spoken.presentation).toBe('spoken')
+	expect(spoken.spoken).toContain(text.trim())
+})
+
+it('saves the creation receipt even if the spoken announcement fails and refuses duplicate approval', async () => {
+	const h = harness('idle', true)
+	h.announce.mockRejectedValue(new Error('observer disconnected'))
+	const preview = JSON.parse(
+		await tool(h.tools, 'voice_create_workspace_preview').run({ repo: 'conductor-remote', prompt: 'Draft' })
+	)
+	const args = { token: preview.token, repo: preview.repo, prompt: preview.prompt }
+	expect(JSON.parse(await tool(h.tools, 'voice_create_workspace').run(args)).status).toBe('queued')
+	await new Promise(resolve => setImmediate(resolve))
+	expect(new PreviewStore(h.previews.file).get('call-a', preview.token)?.outcome).toEqual({
+		state: 'completed',
+		workspaceId: 'w-new',
+		message: 'First prompt queued.'
+	})
+	expect(JSON.parse(await tool(h.tools, 'voice_create_workspace').run(args)).status).toBe('refused')
+	expect(h.createWorkspace).toHaveBeenCalledTimes(1)
+})
+
+it('retains a contextual repository choice separately from draft approval', async () => {
+	const h = harness()
+	await tool(h.tools, 'voice_select_repo').run({ repo: 'Conductor-Remote', confirmed: false })
+	expect(JSON.parse(await tool(h.tools, 'voice_list_repos').run({})).selection).toEqual({
+		repo: 'conductor-remote',
+		confirmed: false
+	})
+	await tool(h.tools, 'voice_select_repo').run({ repo: 'conductor-remote', confirmed: true })
+	expect(JSON.parse(await tool(h.tools, 'voice_list_repos').run({})).selection).toEqual({
+		repo: 'conductor-remote',
+		confirmed: true
+	})
+	expect(h.previews.list('call-a')).toEqual([])
+	expect(h.createWorkspace).not.toHaveBeenCalled()
 })

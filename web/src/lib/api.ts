@@ -3,6 +3,7 @@
 // `scripts/check-imports.ts` keeps it that way.
 import { routes } from '../../../src/routes.ts'
 import { responseErrorMessage, VIEWING_HEADER } from '../../../src/shared.ts'
+import type { VoicePreview } from '../../../src/voice/preview.ts'
 import { getToken } from './auth-token.ts'
 import type {
 	AgentPatch,
@@ -242,6 +243,19 @@ export const client = {
 			ACTION_TIMEOUT_MS
 		),
 	/** Let the broker speak only after the browser can receive the greeting. */
+	voiceCallText: (callId: string, text: string) =>
+		api<{ ok: true }>(routes.voiceCallText.path(callId), { method: 'POST', body: JSON.stringify({ text }) }),
+	voiceDrafts: (callId: string) => api<{ drafts: VoicePreview[] }>(routes.voiceDrafts.path(callId)),
+	voiceDraftAction: (
+		callId: string,
+		token: string,
+		action: 'present' | 'edit' | 'approve' | 'pause' | 'resume',
+		text?: string
+	) =>
+		api<{ draft?: VoicePreview }>(routes.voiceDraftAction.path(callId), {
+			method: 'POST',
+			body: JSON.stringify({ token, action, text })
+		}),
 	voiceCallReady: (callId: string) =>
 		api<{ ok: true }>(routes.voiceCallReady.path(callId), { method: routes.voiceCallReady.method }, ACTION_TIMEOUT_MS),
 	voiceCallEnd: (callId: string) =>

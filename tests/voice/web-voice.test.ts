@@ -97,3 +97,38 @@ describe('the browser voice seam', () => {
 		})
 	})
 })
+
+it('distinguishes failed and incomplete answers from normal interruption', () => {
+	expect(
+		parseVoiceEvent({
+			type: 'response.done',
+			response: { status: 'failed', status_details: { error: { code: 'server_error' } } }
+		})
+	).toMatchObject({ kind: 'response-done', error: expect.stringContaining('server_error') })
+	expect(
+		parseVoiceEvent({
+			type: 'response.done',
+			response: { status: 'incomplete', status_details: { reason: 'max_output_tokens' } }
+		})
+	).toMatchObject({ error: expect.stringContaining('max_output_tokens') })
+	expect(
+		parseVoiceEvent({
+			type: 'response.done',
+			response: { status: 'cancelled', status_details: { reason: 'turn_detected' } }
+		})
+	).toEqual({ kind: 'response-done' })
+})
+
+it('separates playback from generation and receives caption truncation', () => {
+	expect(parseVoiceEvent({ type: 'output_audio_buffer.started' })).toEqual({ kind: 'playback-started' })
+	expect(parseVoiceEvent({ type: 'response.done', response: { status: 'completed' } })).toEqual({
+		kind: 'response-done'
+	})
+	expect(parseVoiceEvent({ type: 'output_audio_buffer.stopped' })).toEqual({ kind: 'playback-stopped' })
+	expect(parseVoiceEvent({ type: 'output_audio_buffer.cleared' })).toEqual({ kind: 'playback-cleared' })
+	expect(parseVoiceEvent({ type: 'conversation.item.truncated', item_id: 'old' })).toEqual({
+		kind: 'truncated',
+		itemId: 'old'
+	})
+	expect(parseVoiceEvent({ type: 'input_audio_buffer.speech_stopped' })).toEqual({ kind: 'speech-stopped' })
+})

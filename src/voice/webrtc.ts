@@ -55,7 +55,8 @@ export function buildWebRtcSession(input: WebRtcSessionInput): Record<string, un
 					threshold: 0.5,
 					prefix_padding_ms: 300,
 					silence_duration_ms: 650,
-					create_response: true,
+					// The sideband schedules every response (audio, typing, and tool continuations).
+					create_response: false,
 					interrupt_response: true
 				}
 			},

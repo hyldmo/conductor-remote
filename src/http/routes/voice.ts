@@ -24,12 +24,83 @@ import type { RelayServices } from '../services.ts'
 export function createVoiceRoutes(
 	services: Pick<
 		RelayServices,
-		'json' | 'voiceHistory' | 'voiceConfig' | 'voiceBroker' | 'readBody' | 'reads' | 'voiceSafetyIdentifier'
+		| 'json'
+		| 'voiceHistory'
+		| 'voiceConfig'
+		| 'voiceBroker'
+		| 'readBody'
+		| 'reads'
+		| 'voiceSafetyIdentifier'
+		| 'voicePreviews'
+		| 'voiceToolsForCall'
 	>
 ): RouteHandler {
 	const { json, voiceHistory, voiceConfig, voiceBroker, readBody, reads, voiceSafetyIdentifier } = services
 	return async (req, res, url) => {
 		const { pathname } = url
+		const draftsCall = routeParam(routes.voiceDrafts, req.method, pathname)
+		if (draftsCall) return json(req, res, 200, { drafts: services.voicePreviews.list(draftsCall) })
+		const textCall = routeParam(routes.voiceCallText, req.method, pathname)
+		const draftCall = routeParam(routes.voiceDraftAction, req.method, pathname)
+		if (textCall || draftCall) {
+			const id = (textCall || draftCall)!
+			if (!voiceBroker?.isBrowserCall(id))
+				return json(req, res, 409, {
+					error: 'This call is no longer connected. Saved drafts and receipts are still available.'
+				})
+			const raw = await readBody(req)
+			if (raw.length > 40_000) return json(req, res, 413, { error: 'Draft is too large' })
+			const body = JSON.parse(raw || '{}') as { text?: unknown; token?: unknown; action?: unknown }
+			if (textCall) {
+				if (typeof body.text !== 'string' || !body.text.trim())
+					return json(req, res, 400, { error: 'Text is required' })
+				return voiceBroker.sendText(id, body.text.trim())
+					? json(req, res, 200, { ok: true })
+					: json(req, res, 409, { error: 'Voice connection is unavailable' })
+			}
+			if (typeof body.token !== 'string') return json(req, res, 400, { error: 'Draft token is required' })
+			const preview = services.voicePreviews.get(id, body.token)
+			if (!preview) return json(req, res, 404, { error: 'Draft not found in this call' })
+			if (body.action === 'pause' || body.action === 'resume') {
+				return services.voicePreviews.pauseReview(id, body.token, body.action === 'pause')
+					? json(req, res, 200, { ok: true })
+					: json(req, res, 409, { error: 'This revision has already been used or replaced' })
+			}
+			if (body.action === 'present') return json(req, res, 200, { ok: services.voicePreviews.present(id, body.token) })
+			if (body.action === 'edit') {
+				if (typeof body.text !== 'string' || (preview.kind === 'send_prompt' && !body.text.trim()))
+					return json(req, res, 400, { error: 'Draft text is required' })
+				const edited = services.voicePreviews.edit(id, body.token, body.text.trim())
+				if (!edited) return json(req, res, 409, { error: 'This revision has already been used or replaced' })
+				// Reference data only; this update is never a new approval.
+				voiceBroker.inject(
+					id,
+					`The user edited or renewed the draft on screen. Previous approval is invalid. Current draft reference data: ${JSON.stringify(edited)}. Ask for fresh approval; do not read it aloud unless asked.`
+				)
+				return json(req, res, 200, { draft: edited })
+			}
+			if (body.action === 'approve') {
+				const name = preview.kind === 'send_prompt' ? 'voice_send' : 'voice_create_workspace'
+				const args =
+					preview.kind === 'send_prompt'
+						? { token: preview.token, session_id: preview.sessionId, text: preview.text }
+						: { token: preview.token, repo: preview.repo, prompt: preview.prompt }
+				const tool = services.voiceToolsForCall(id).find(tool => tool.name === name)!
+				const result = JSON.parse(await tool.run(args)) as { status: string; spoken: string }
+				if (result.status !== 'refused')
+					voiceBroker.inject(
+						id,
+						`The user approved draft ${preview.token} on screen; the action is queued. Do not request approval again or repeat the action. Its final receipt will be saved separately.`
+					)
+				return json(
+					req,
+					res,
+					result.status === 'refused' ? 409 : 200,
+					result.status === 'refused' ? { error: result.spoken } : result
+				)
+			}
+			return json(req, res, 400, { error: 'Unknown draft action' })
+		}
 
 		const voiceTranscript = routeParam(routes.voiceTranscript, req.method, pathname)
 

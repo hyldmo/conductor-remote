@@ -82,6 +82,10 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 	const completedInputs = useRef(new Set<string>())
 	const completedOutputs = useRef(new Set<string>())
 	const seenTools = useRef(new Set<string>())
+	const playing = useRef(false)
+	const responding = useRef(false)
+	const speaking = useRef(false)
+	const interruptedOutputs = useRef(new Set<string>())
 	const disconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
 	preferencesRef.current = preferences
@@ -104,6 +108,9 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 
 	const closeLocal = useCallback(() => {
 		generation.current += 1
+		playing.current = false
+		responding.current = false
+		speaking.current = false
 		if (disconnectTimer.current) clearTimeout(disconnectTimer.current)
 		disconnectTimer.current = null
 		try {
@@ -151,15 +158,16 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 						completedInputs.current.add(event.itemId)
 						append({ id: `user:${event.itemId}`, role: 'user', text: event.text.trim() })
 					}
-					if (statusRef.current !== 'speaking') setStatus('thinking')
+					// Transcription can arrive after playback; captions do not own call state.
 					return
 				}
 				case 'output-delta':
+					if (interruptedOutputs.current.has(event.itemId)) return
 					outputParts.current.set(event.itemId, (outputParts.current.get(event.itemId) ?? '') + event.text)
 					setOutputPartial(joined(outputParts.current))
-					setStatus('speaking')
 					return
 				case 'output-done': {
+					if (interruptedOutputs.current.has(event.itemId)) return
 					const assembled = (event.text || outputParts.current.get(event.itemId) || '').trim()
 					outputParts.current.delete(event.itemId)
 					setOutputPartial(joined(outputParts.current))
@@ -174,17 +182,49 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 						seenTools.current.add(event.itemId)
 						append({ id: `tool:${event.itemId}`, role: 'activity', text: voiceToolLabel(event.name) })
 					}
-					setStatus('thinking')
+					if (!speaking.current && !playing.current) setStatus('thinking')
 					return
 				case 'speech-started':
+					speaking.current = true
+					for (const id of outputParts.current.keys()) interruptedOutputs.current.add(id)
+					outputParts.current.clear()
+					setOutputPartial('')
 					setStatus('listening')
 					return
-				case 'response-started':
+				case 'speech-stopped':
+					speaking.current = false
 					setStatus('thinking')
 					return
+				case 'playback-started':
+					playing.current = true
+					if (!speaking.current) setStatus('speaking')
+					return
+				case 'playback-cleared':
+				case 'playback-stopped':
+					playing.current = false
+					if (!speaking.current) setStatus(responding.current ? 'thinking' : 'connected')
+					return
+				case 'truncated':
+					interruptedOutputs.current.add(event.itemId)
+					outputParts.current.delete(event.itemId)
+					setOutputPartial(joined(outputParts.current))
+					setEntries(current =>
+						current.map(entry =>
+							entry.id === `assistant:${event.itemId}` ? { ...entry, text: 'Reply interrupted.' } : entry
+						)
+					)
+					return
+				case 'response-started':
+					responding.current = true
+					if (!speaking.current && !playing.current) setStatus('thinking')
+					return
 				case 'response-done':
-					if (event.error) setError(event.error)
-					setStatus('connected')
+					responding.current = false
+					if (event.error) {
+						setError(event.error)
+						append({ id: `failure:${crypto.randomUUID()}`, role: 'activity', text: event.error })
+					}
+					setStatus(speaking.current ? 'listening' : playing.current ? 'speaking' : 'connected')
 					return
 				case 'error':
 					setError(event.text)
@@ -209,6 +249,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 		completedInputs.current.clear()
 		completedOutputs.current.clear()
 		seenTools.current.clear()
+		interruptedOutputs.current.clear()
 		setMuted(false)
 		setStatus('connecting')
 		const currentGeneration = ++generation.current
@@ -334,16 +375,24 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 		(text: string): boolean => {
 			const spoken = text.trim()
 			const dc = channel.current
-			if (!spoken || dc?.readyState !== 'open' || statusRef.current !== 'connected') return false
+			if (
+				!spoken ||
+				dc?.readyState !== 'open' ||
+				!callId.current ||
+				statusRef.current === 'idle' ||
+				statusRef.current === 'connecting'
+			)
+				return false
 			const id = crypto.randomUUID()
 			append({ id: `typed:${id}`, role: 'user', text: spoken })
-			dc.send(
-				JSON.stringify({
-					type: 'conversation.item.create',
-					item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: spoken }] }
-				})
-			)
-			dc.send(JSON.stringify({ type: 'response.create' }))
+			for (const id of outputParts.current.keys()) interruptedOutputs.current.add(id)
+			outputParts.current.clear()
+			setOutputPartial('')
+			void client
+				.voiceCallText(callId.current, spoken)
+				.catch(error =>
+					setError(`Typed message was not confirmed: ${error instanceof Error ? error.message : String(error)}`)
+				)
 			setStatus('thinking')
 			return true
 		},
@@ -392,6 +441,26 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 		},
 		[updatePreferences]
 	)
+
+	const active = status !== 'idle' && status !== 'connecting'
+	useEffect(() => {
+		if (!active || !lastCallId) return
+		let disposed = false
+		const check = async () => {
+			try {
+				const saved = await client.voiceTranscriptStatus(lastCallId)
+				if (!disposed && saved.status !== 'active')
+					failCall('The relay’s voice connection was lost. Check the saved action receipts before retrying.')
+			} catch {
+				if (!disposed) setError('The relay connection could not be checked. Action receipts may be delayed.')
+			}
+		}
+		const timer = setInterval(() => void check(), 5_000)
+		return () => {
+			disposed = true
+			clearInterval(timer)
+		}
+	}, [active, lastCallId, failCall])
 
 	useEffect(
 		() => () => {

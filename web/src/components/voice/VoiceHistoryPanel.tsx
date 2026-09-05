@@ -7,6 +7,7 @@ import { cn } from '../../lib/cn.ts'
 import type { VoiceHistoryCall, VoiceHistoryEntry } from '../../lib/types.ts'
 import { voiceToolLabel } from '../../lib/voice/connection.ts'
 import { voiceTranscriptText } from '../../lib/voice/history.ts'
+import { VoiceDraftCards } from './VoiceDraftCards.tsx'
 
 function date(at: number): string {
 	return new Date(at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -54,6 +55,14 @@ export function SavedVoiceTranscript({ call }: { call: VoiceHistoryCall }) {
 					{call.captureError ?? 'This transcript may have gaps because the connection was interrupted.'}
 				</p>
 			) : null}
+			{call.responseOutcomes
+				?.filter(outcome => outcome.status === 'failed' || outcome.status === 'incomplete')
+				.map((outcome, index) => (
+					<p key={outcome.id ?? index} role="status" className="text-xs text-del">
+						Answer {outcome.status}
+						{outcome.code || outcome.reason ? ` (${outcome.code ?? outcome.reason})` : ''}
+					</p>
+				))}
 			{call.entries.length ? (
 				call.entries.map(entry => <Entry key={entry.id} entry={entry} />)
 			) : (
@@ -173,7 +182,10 @@ export function VoiceHistoryPanel({
 						</button>
 					</div>
 				) : selectedId && call ? (
-					<SavedVoiceTranscript call={call} />
+					<>
+						<SavedVoiceTranscript call={call} />
+						<VoiceDraftCards callId={call.callId} />
+					</>
 				) : (
 					<>
 						<h3 className="mb-1 text-lg font-semibold">Call history</h3>
