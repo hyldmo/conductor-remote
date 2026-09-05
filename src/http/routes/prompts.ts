@@ -1,3 +1,4 @@
+import { freezeAutoModelConfig } from '../../agents/auto-model/config.ts'
 import { hasAgentSettings, sendPromptSchema } from '../../contracts/agent-inputs.ts'
 import { parseInput } from '../../contracts/validation.ts'
 import { attachmentPrompt, writeAttachment } from '../../files/attachments.ts'
@@ -43,7 +44,8 @@ export function createPromptsRoutes(
 		| 'createWorkspaceAndRead'
 		| 'sleep'
 		| 'openChat'
-	>
+	> &
+		Partial<Pick<RelayServices, 'autoModels' | 'autoModelConfig' | 'inspectAutoTarget'>>
 ): RouteHandler {
 	const {
 		orchestration,
@@ -132,6 +134,46 @@ export function createPromptsRoutes(
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
 			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+			const autoJob = services.autoModels?.get(sessionId, ws.id)
+			const useAuto =
+				body.auto === true ||
+				(body.auto !== false && autoJob?.status === 'draft') ||
+				(!!autoJob && ['waiting', 'selecting', 'failed'].includes(autoJob.status))
+			if (useAuto) {
+				if (!services.autoModels || !services.autoModelConfig || !services.inspectAutoTarget)
+					return json(req, res, 503, { error: 'Auto is unavailable.' })
+				if (body.queue || requestedAgent)
+					return json(req, res, 400, {
+						error: 'Auto selects settings for the first message. Omit manual settings and queue mode.'
+					})
+				try {
+					if (!autoJob || ['draft', 'cancelled'].includes(autoJob.status)) {
+						const target = services.inspectAutoTarget({ workspaceId: ws.id, sessionId })
+						if (target.error) return json(req, res, 409, { error: target.error })
+					}
+					const job = services.autoModels.accept({
+						workspaceId: ws.id,
+						sessionId,
+						text: rawText,
+						repo: ws.repo_name ?? '',
+						config:
+							autoJob && !['draft', 'cancelled'].includes(autoJob.status)
+								? autoJob.config
+								: freezeAutoModelConfig(services.autoModelConfig.read(), modelCache.list())
+					})
+					return json(req, res, job.status === 'delivered' ? 200 : 202, {
+						ok: job.status === 'delivered',
+						parked: job.status !== 'delivered',
+						strategy: actuator.name,
+						queued: services.autoModels.pending().find(p => p.sessionId === sessionId)
+					})
+				} catch (error) {
+					return json(req, res, 409, {
+						error: error instanceof Error ? error.message : 'Auto could not accept this prompt.'
+					})
+				}
+			}
+			if (autoJob?.status === 'draft' && body.auto === false) services.autoModels?.cancel(sessionId, ws.id)
 			// One deadline for the whole request: settings eat into the send's budget
 			// rather than extending it past what the phone said it would wait.
 			const deadline = Date.now() + sendBudget(req)
@@ -412,7 +454,12 @@ export function createPromptsRoutes(
 
 		if (forgetFirst) {
 			const workspaceId = forgetFirst
-			if (!firstPrompts.forget(workspaceId)) return json(req, res, 404, { error: 'no pending prompt' })
+			try {
+				if (!services.autoModels?.cancel(undefined, workspaceId) && !firstPrompts.forget(workspaceId))
+					return json(req, res, 404, { error: 'no pending prompt' })
+			} catch (error) {
+				return json(req, res, 409, { error: error instanceof Error ? error.message : 'Auto is sending.' })
+			}
 			return json(req, res, 200, { ok: true })
 		}
 
@@ -421,7 +468,12 @@ export function createPromptsRoutes(
 
 		if (forgetParked) {
 			const sessionId = forgetParked
-			if (!parkedPrompts.forgetSession(sessionId)) return json(req, res, 404, { error: 'no parked prompt' })
+			try {
+				if (!services.autoModels?.cancel(sessionId) && !parkedPrompts.forgetSession(sessionId))
+					return json(req, res, 404, { error: 'no parked prompt' })
+			} catch (error) {
+				return json(req, res, 409, { error: error instanceof Error ? error.message : 'Auto is sending.' })
+			}
 			return json(req, res, 200, { ok: true })
 		}
 		return NOT_HANDLED

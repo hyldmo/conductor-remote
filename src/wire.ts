@@ -25,6 +25,15 @@ import type { DefaultEfforts } from './agents/conductor-settings.ts'
 import type { CachedModelGroup } from './agents/model-cache.ts'
 import type { FirstPrompt } from './delivery/firstprompt.ts'
 import type { ParkedPrompt } from './delivery/parked.ts'
+
+export type {
+	AutoModelConfig,
+	AutoModelConfigResponse,
+	AutoModelProfile,
+	AutoModelState,
+	AutoModelTuple
+} from './agents/auto-model/types.ts'
+
 import type { DevRunConfig } from './dev-server/run-configs.ts'
 import type { DevServerForward, DevServerResult, DevServerState } from './dev-server/types.ts'
 import type { UpdateStatus } from './host/autoupdate.ts'
@@ -687,7 +696,11 @@ export interface DefaultModelResult {
 }
 
 /** Shared request inputs for staged agent settings and workspace creation. */
-export type { AgentPatch, CreateWorkspaceRequest, SetAgentOptionsRequest } from './contracts/agent-inputs.ts'
+export type {
+	AgentDraft as AgentPatch,
+	CreateWorkspaceRequest,
+	SetAgentOptionsRequest
+} from './contracts/agent-inputs.ts'
 
 export interface CreateWorkspaceResult {
 	ok: boolean

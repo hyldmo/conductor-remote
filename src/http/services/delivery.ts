@@ -346,9 +346,13 @@ export function createDeliveryServices(
 	const STAGED_ATTACHMENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
 	const STAGED_ATTACHMENT_SWEEP_MS = 6 * 60 * 60 * 1000
+	let additionalStagedReferences = (): string[] => []
+	function setAdditionalStagedReferences(read: () => string[]): void {
+		additionalStagedReferences = read
+	}
 
 	function referencedStagedAttachments(): Set<string> {
-		const referenced = new Set<string>()
+		const referenced = new Set<string>(additionalStagedReferences())
 		for (const draft of Object.values(readPrefs().drafts)) {
 			if (draft.deleted) continue
 			for (const attachment of draft.attachments) {
@@ -480,7 +484,8 @@ export function createDeliveryServices(
 		sendOnce,
 		PARKED_ERROR,
 		sweepStagedAttachments,
-		STAGED_ATTACHMENT_SWEEP_MS
+		STAGED_ATTACHMENT_SWEEP_MS,
+		setAdditionalStagedReferences
 	}
 }
 export type DeliveryServices = ReturnType<typeof createDeliveryServices>

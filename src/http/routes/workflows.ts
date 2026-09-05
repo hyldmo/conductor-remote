@@ -36,7 +36,8 @@ export function createWorkflowsRoutes(
 		| 'delegationStore'
 		| 'projectDelegation'
 		| 'projectWorkflowDelegation'
-	>
+	> &
+		Partial<Pick<RelayServices, 'autoModels'>>
 ): RouteHandler {
 	const {
 		orchestration,
@@ -117,6 +118,12 @@ export function createWorkflowsRoutes(
 				)
 			}
 			const request = parseStartWorkflowRequest(await workflowRequestBody(req))
+			if (request.target.kind === 'existing_session') {
+				const auto = services.autoModels?.get(request.target.sessionId, request.target.workspaceId)
+				if (auto && ['waiting', 'selecting', 'failed'].includes(auto.status))
+					return json(req, res, 409, { error: 'Dismiss the Auto submission before starting Workflow.' })
+				if (auto?.status === 'draft') services.autoModels?.cancel(request.target.sessionId, request.target.workspaceId)
+			}
 			const replay = orchestration.getIdempotentMutation<{ runId: string }>('start_workflow', request.clientId, {
 				objective: request.objective,
 				target: request.target

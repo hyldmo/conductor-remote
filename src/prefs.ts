@@ -9,7 +9,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from './config.ts'
-import type { ParkedAgentPatch } from './delivery/parked.ts'
+import type { AgentDraft } from './contracts/agent-inputs.ts'
 import { attachmentName, attachmentToken } from './files/attachments.ts'
 import { isAgentEffort } from './shared.ts'
 
@@ -29,7 +29,7 @@ export interface SyncedDraft {
 	/** Empty is valid when agent settings have been staged before any text is typed. */
 	text: string
 	/** Text and its next-send agent choices are one intent and therefore one revision. */
-	agent: ParkedAgentPatch
+	agent: AgentDraft
 	/** Ready attachments are the same intent; uploads still in flight never leave their source device. */
 	attachments: DraftAttachment[]
 	/** Client-side logical timestamp. Newer revisions win; deletion wins an exact tie. */
@@ -65,10 +65,11 @@ function validKey(key: string): boolean {
 	return key.length > 0 && key.length <= MAX_KEY_LENGTH
 }
 
-function sanitizeAgent(raw: unknown): ParkedAgentPatch {
+function sanitizeAgent(raw: unknown): AgentDraft {
 	const value = object(raw)
 	if (!value) return {}
-	const agent: ParkedAgentPatch = {}
+	const agent: AgentDraft = {}
+	if (typeof value.auto === 'boolean') agent.auto = value.auto
 	if (typeof value.model === 'string' && value.model.length <= MAX_AGENT_LABEL_LENGTH) agent.model = value.model
 	if (isAgentEffort(value.effort)) agent.effort = value.effort
 	if (typeof value.plan === 'boolean') agent.plan = value.plan

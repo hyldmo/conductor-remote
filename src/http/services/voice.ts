@@ -35,7 +35,7 @@ import type { CreateWorkspaceResult } from '../../wire.ts'
 import { screenLocked } from '../../writes/guards.ts'
 import type { BaseServices } from './base.ts'
 
-export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads'>) {
+export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads' | 'chatHistory'>) {
 	const { cfg, reads } = services
 
 	// The voice process surface shares this process (and therefore the one UI lock) but not
@@ -79,6 +79,7 @@ export function createVoiceServices(services: Pick<BaseServices, 'cfg' | 'reads'
 		let board = voiceBoards.get(callId)
 		if (board) return board
 		board = new VoiceBriefBoard({
+			chatHistory: workspaceId => services.chatHistory.forWorkspace(workspaceId),
 			reads: {
 				listWorkspaces: () => {
 					const workspaces = reads.listWorkspaces()

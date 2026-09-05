@@ -85,6 +85,7 @@ export const routes = {
 	voiceCallText: param('POST', '/api/voice/calls/:callId/text'),
 	voiceDrafts: param('GET', '/api/voice/calls/:callId/drafts'),
 	voiceDraftAction: param('POST', '/api/voice/calls/:callId/drafts'),
+	voiceCallDiagnostics: param('POST', '/api/voice/calls/:callId/diagnostics'),
 	/** End one PWA-owned call. SIP calls remain owned by their phone leg. */
 	voiceCallEnd: param('DELETE', '/api/voice/calls/:callId'),
 	/** Durable call history remains readable even when voice is no longer configured. */
@@ -127,6 +128,8 @@ export const routes = {
 	pushTest: flat('POST', '/api/push/test'),
 	/** Global picker-backed delegated-role definitions. */
 	roles: flat('GET', '/api/roles'),
+	autoModelConfig: flat('GET', '/api/auto-model'),
+	updateAutoModelConfig: flat('PATCH', '/api/auto-model'),
 	updateRoles: flat('PATCH', '/api/roles'),
 	/** Active and failed jobs; optionally filtered with `?workspaceId=`. */
 	delegations: flat('GET', '/api/delegations'),

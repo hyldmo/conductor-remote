@@ -225,7 +225,7 @@ export async function driveJobConfigure(
 	}
 	const cursor = await context.deps.captureDeliveryCursor(job.childSessionId)
 	const handoff = scrubWorkflowSecrets((await context.deps.materializeHandoff?.({ run, job })) ?? '')
-	const basePrompt = handoff ? `${job.prompt}\n\nSanitized root handoff: ${handoff}` : job.prompt
+	const basePrompt = handoff ? `${job.prompt}\n\nOptional root context (read only if needed): ${handoff}` : job.prompt
 	const prompt = `${basePrompt}\n\n${privateCorrelationBlock(run.id, taskAction)}`
 	finishJobConfiguration(context, run, job, taskAction, cursor, prompt, true)
 	return true

@@ -3,12 +3,15 @@
 // `scripts/check-imports.ts` keeps it that way.
 import { routes } from '../../../src/routes.ts'
 import { responseErrorMessage, VIEWING_HEADER } from '../../../src/shared.ts'
+import type { VoiceDiagnosticEvent } from '../../../src/voice/diagnostic-fields.ts'
 import type { VoicePreview } from '../../../src/voice/preview.ts'
 import { getToken } from './auth-token.ts'
 import type {
 	AgentPatch,
 	AgentResult,
 	ArchiveResult,
+	AutoModelConfig,
+	AutoModelConfigResponse,
 	CloseChatResult,
 	ClosedSessionsResponse,
 	ConfirmUiStableRequest,
@@ -223,6 +226,12 @@ function cachedObjectUrl(path: string): Promise<string> {
 }
 
 export const client = {
+	autoModelConfig: () => api<AutoModelConfigResponse>(routes.autoModelConfig.path()),
+	updateAutoModelConfig: (config: AutoModelConfig) =>
+		api<AutoModelConfigResponse>(routes.updateAutoModelConfig.path(), {
+			method: routes.updateAutoModelConfig.method,
+			body: JSON.stringify(config)
+		}),
 	state: () => api<StateResponse>(routes.state.path()),
 	/** Mint a short-lived native-call URI using the same bearer this PWA already holds. */
 	voiceTicket: () => api<VoiceTicketResponse>(routes.voiceTicket.path(), { method: routes.voiceTicket.method }),
@@ -258,6 +267,12 @@ export const client = {
 		}),
 	voiceCallReady: (callId: string) =>
 		api<{ ok: true }>(routes.voiceCallReady.path(callId), { method: routes.voiceCallReady.method }, ACTION_TIMEOUT_MS),
+	voiceCallDiagnostics: (callId: string, events: VoiceDiagnosticEvent[]) =>
+		api<{ ok: true }>(routes.voiceCallDiagnostics.path(callId), {
+			method: routes.voiceCallDiagnostics.method,
+			body: JSON.stringify({ events }),
+			keepalive: true
+		}),
 	voiceCallEnd: (callId: string) =>
 		api<{ ok: true }>(routes.voiceCallEnd.path(callId), { method: routes.voiceCallEnd.method }, ACTION_TIMEOUT_MS),
 	voiceHistory: (offset = 0) => api<VoiceHistoryResponse>(`${routes.voiceHistory.path()}?offset=${offset}`),
@@ -327,13 +342,14 @@ export const client = {
 		workspaceId: string,
 		agent?: AgentPatch,
 		clientId?: string,
-		queue?: boolean
+		queue?: boolean,
+		auto?: boolean
 	) =>
 		api<SendResult>(
 			routes.sendPrompt.path(sessionId),
 			{
 				method: routes.sendPrompt.method,
-				body: JSON.stringify({ text, workspaceId, agent, clientId, queue } satisfies SendPromptRequest)
+				body: JSON.stringify({ text, workspaceId, agent, clientId, queue, auto } satisfies SendPromptRequest)
 			},
 			SEND_TIMEOUT_MS
 		),

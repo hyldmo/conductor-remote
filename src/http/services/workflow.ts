@@ -10,6 +10,7 @@ import { WorkflowRequestError, workflowClientIsMcp } from '../../orchestration/w
 import type { FrozenWorkflowRole } from '../../orchestration/workflow/prompts.ts'
 import { workflowReportBody } from '../../orchestration/workflow/report.ts'
 import type { DeliveryReceipt } from '../../reads/types.ts'
+import { chatCursor } from '../../transcript/cursor.ts'
 import { renderTranscript } from '../../transcript/parser.ts'
 
 import { retryWontHelp, screenLocked } from '../../writes/guards.ts'
@@ -39,6 +40,7 @@ export function createWorkflowServices(
 			| 'sessionMatchesWorkflowRole'
 			| 'workflowDeliveryCursor'
 			| 'stableWorkflowAttachment'
+			| 'stableWorkflowFile'
 			| 'sendWorkflowPrompt'
 			| 'workflowSessionId'
 			| 'assertWorkflowRootStillPristine'
@@ -68,6 +70,7 @@ export function createWorkflowServices(
 		sessionMatchesWorkflowRole,
 		workflowDeliveryCursor,
 		stableWorkflowAttachment,
+		stableWorkflowFile,
 		sendWorkflowPrompt,
 		workflowSessionId,
 		assertWorkflowRootStillPristine,
@@ -263,7 +266,7 @@ export function createWorkflowServices(
 					const entries = reads
 						.getMessages(run.rootSessionId)
 						.entries.filter(entry => typeof cursor !== 'number' || entry.rowid <= cursor)
-					const rendered = renderTranscript(entries, { thinking: true, tools: false })
+					const rendered = renderTranscript(entries, { thinking: false, tools: false })
 					if (!rendered.kept) return undefined
 					const body = [
 						`# Workflow handoff for ${job.logicalKey}`,
@@ -271,10 +274,18 @@ export function createWorkflowServices(
 						`Workflow: ${run.id}`,
 						`Workflow job: ${job.id}`,
 						`Root chat: ${run.rootSessionId}`,
+						'Reasoning and tool calls omitted. Use this history only when the focused assignment needs it.',
 						'',
 						rendered.text
 					].join('\n')
-					return stableWorkflowAttachment(ws.worktree, job.id, `Workflow ${job.role} handoff.md`, body)
+					// A file reference avoids Conductor's mandatory attachment-read instruction.
+					// Version the path so an unfinished older handoff can still resume unchanged.
+					const file = stableWorkflowFile(ws.worktree, `${job.id}:context:v2`, `Workflow ${job.role} handoff.md`, body)
+					const read = {
+						session_id: run.rootSessionId,
+						...(typeof cursor === 'number' ? { near: chatCursor(cursor), before: 6, after: 0 } : {})
+					}
+					return `\`${file.relPath}\`. For earlier evidence: read_chat(${JSON.stringify(read)}).`
 				},
 				sendPrompt: call => sendWorkflowPrompt(call, false),
 				materializeReport: async ({ run, job, outcome }) => {

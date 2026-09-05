@@ -65,17 +65,18 @@ describe('new-workspace Workflow mode', () => {
 		expect(prompt).toContain('Prefer the smallest complete plan.')
 		expect(prompt).toContain('already scheduled one tracked explorer')
 		expect(prompt).toContain('delegate_task')
-		expect(prompt).toContain('Do not edit files')
+		expect(prompt).toContain('Do small fixes directly')
+		expect(prompt).not.toContain('Do not edit files')
 		expect(prompt).toContain('## Frozen roles for this Workflow')
-		expect(prompt).toContain('- planning — Fable 5.1: this root chat; plan and integrate delegated work')
+		expect(prompt).toContain('- planning — Fable 5.1: coordinate, integrate, and handle small fixes')
 		expect(prompt).toContain(
-			'- exploration — opencode-go/muse-spark-1.3-contributor: read-only investigation and evidence'
+			'- exploration — opencode-go/muse-spark-1.3-contributor: investigation, tests, and scratch reproductions'
 		)
 		expect(prompt).toContain('- implementation — 5.6 Sol: code changes and verification')
 		expect(prompt).toContain('This catalog is authoritative for this run')
 		expect(prompt).not.toContain('list_roles')
 		expect(prompt).not.toContain('effort')
-		expect(prompt).not.toContain('fast')
+		expect(prompt).not.toMatch(/\bfast\b/)
 		expect(prompt).not.toContain('Plan mode')
 	})
 
@@ -115,8 +116,7 @@ describe('new-workspace Workflow mode', () => {
 		if (!result.ok) throw new Error('workflow should resolve')
 		const bootstrap = workflowBootstrapPrompt({
 			objective: result.prepared.objective,
-			role: result.prepared.roles.exploration,
-			handoffAttachment: '@⟦Transcript.md⟧(.context/attachments/ABC123/Transcript.md)'
+			role: result.prepared.roles.exploration
 		})
 		const implementation = workflowChildPrompt({
 			roleName: 'implementation',
@@ -125,7 +125,7 @@ describe('new-workspace Workflow mode', () => {
 			task: 'Implement the validated parser change.'
 		})
 
-		expect(bootstrap).toContain('Do not edit files')
+		expect(bootstrap).toContain('keep source files unchanged')
 		expect(bootstrap).toContain('Keep this exact objective.')
 		expect(bootstrap).toContain('## Baton')
 		expect(implementation).toContain('Implement the validated parser change.')

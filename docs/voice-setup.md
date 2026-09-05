@@ -46,6 +46,21 @@ live agent status, workspace status, PR
 status, and an `updated_since`/`updated_before` time window; each spoken row says
 how recently its selected chat changed.
 
+Overviews distinguish workspaces from chats: one workspace can have several
+running chats and several waiting for input. Every waiting sibling is reachable
+when you ask to continue through the questions, independently of the newest
+activity pages. **Needs input** means an explicit live input or plan request;
+an idle reply that asks a question is a **possible follow-up**, not a confirmed
+blocker. Unread updates alone do not count as input requests.
+
+When Compact continues a conversation in a new chat, the overview suppresses its
+older context only after a successor turn has been dispatched. An unsent handoff
+keeps the predecessor visible. Independent siblings, running predecessors, and
+predecessors messaged after the successor was created remain visible. These
+replacement rules apply before status and date filters, so filtering for waiting
+work cannot bring an obsolete question back. Cached decisions also skip chats
+that were replaced, resumed, closed, or updated since the roll call.
+
 Past calls are available only when you ask. After reconnecting, ask **“What did
 we just talk about?”** to read the preceding call, or **“What did we talk about
 yesterday?”** to look up calls by date. You can also search a remembered topic.
@@ -346,6 +361,35 @@ conductor-remote config set voice.webhook-secret unset
 Rotating a value through `config set` restarts the managed service. The relay token, generated MCP token, and trunk marker secret are separate; neither relay token nor provider secrets are returned by `config` or the log API.
 
 ## Troubleshooting
+
+### Browser echo and interruptions
+
+WebRTC calls emit `[voice-diagnostics]` metadata into the relay log. After reproducing,
+use `relay_logs` with `contains: "voice-diagnostics"` (or the call ID from
+`list_voice_calls`). For a managed relay, `file: "relay.log"` also reaches entries
+from before a restart. Inspect promptly: the live log is a bounded ring, not a
+permanent diagnostic archive. Both the PWA and relay must run the updated build.
+
+Browser `capture` and five-second `sample` events report actual microphone settings,
+support flags, mute state, playback state and available WebRTC audio levels/energy.
+A null setting means the browser did not report it; `echoCancellation: true` means
+enabled, not proof that all echo was removed. Missing echo-loss statistics mean
+unsupported/unreported, not zero echo. Browser events use monotonic `atMs` since
+diagnostics started for that call; `receivedAt` is the relay's receipt time, which
+may lag after buffering or a network delay. Speech-start, playback-buffer and
+response events carry item/response IDs to correlate with the saved transcript.
+Server events provide a second timeline even when browser uploads fail.
+
+Diagnostics never mute the microphone, change speech thresholds or disable
+interruptions. They store no raw audio, captions, device identifiers, SDP or tools.
+Uploads are bounded and best-effort; `dropped` counts discarded metadata events.
+Background suspension, disconnection or process exit can still leave gaps.
+
+The user bubbles come from a separate transcription model. The Realtime model
+consumes audio directly, so a wrong caption can accompany a correctly understood
+command; see the [Realtime API reference](https://platform.openai.com/docs/api-reference/realtime).
+
+### Connection and configuration
 
 - **The call rings and then fails with no relay log:** confirm the public endpoint is on 443 and is exactly `/voice`. OpenAI does not deliver this webhook through Funnel 8443 or 10000.
 - **Twilio gets 403:** check the allowlist, the account's primary auth token, and that `voice.public-url + /twiml` is byte-for-byte the URL configured on the number.

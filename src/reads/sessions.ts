@@ -165,6 +165,7 @@ export class SessionReads {
 			directory_name: string | null
 			repo_name: string | null
 			tab_count: number
+			created_at: string
 			turn_started_at: string | null
 			last_user_message_at: string | null
 			updated_at: string
@@ -175,7 +176,7 @@ export class SessionReads {
 			// `status` cycles working → idle on every lap. Both are needed: `turn_started_at`
 			// stays at the first message when a person steers the running turn, while
 			// `last_user_message_at` moves. See src/notifications/notify.ts.
-			`SELECT s.id, s.status, s.title, s.workspace_id, s.last_user_message_at, s.updated_at,
+			`SELECT s.id, s.status, s.title, s.workspace_id, s.last_user_message_at, s.updated_at, s.created_at,
 			        w.workspace_name, w.pr_title, w.branch, w.directory_name,
 			        r.name AS repo_name,
 			        (SELECT COUNT(*) FROM sessions t WHERE t.workspace_id = w.id AND COALESCE(t.is_hidden, 0) = 0) AS tab_count,
@@ -188,6 +189,7 @@ export class SessionReads {
 		return rows.map(r => ({
 			sessionId: r.id,
 			workspaceId: r.workspace_id,
+			createdAt: r.created_at,
 			status: r.status,
 			updatedAt: r.updated_at,
 			turnStartedAt: r.turn_started_at,

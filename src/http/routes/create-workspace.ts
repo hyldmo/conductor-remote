@@ -1,7 +1,9 @@
+import { freezeAutoModelConfig } from '../../agents/auto-model/config.ts'
 import { createWorkspaceSchema, hasAgentSettings } from '../../contracts/agent-inputs.ts'
 import { parseInput } from '../../contracts/validation.ts'
 import { stagedAttachments } from '../../files/staged-attachments.ts'
 import { isRoute, routes } from '../../routes.ts'
+import type { AutoModelConfig } from '../../wire.ts'
 
 import { parseJsonBody } from '../input.ts'
 import { NOT_HANDLED, type RouteHandler } from '../router-types.ts'
@@ -11,7 +13,8 @@ export function createCreateWorkspaceRoutes(
 	services: Pick<
 		RelayServices,
 		'readBody' | 'json' | 'STAGED_ATTACHMENTS_DIR' | 'reads' | 'createWorkspaceAndRead' | 'firstPrompts'
-	>
+	> &
+		Partial<Pick<RelayServices, 'autoModels' | 'autoModelConfig' | 'modelCache'>>
 ): RouteHandler {
 	const { readBody, json, STAGED_ATTACHMENTS_DIR, reads, createWorkspaceAndRead, firstPrompts } = services
 	return async (req, res, url) => {
@@ -26,6 +29,20 @@ export function createCreateWorkspaceRoutes(
 			const body = parseInput(createWorkspaceSchema, input)
 			const { attachmentIds, model, effort, plan, fast } = body
 			const requestedAgent = { model, effort, plan, fast }
+			if (body.auto && [body.model, body.effort, body.fast, body.plan].some(value => value !== undefined))
+				return json(req, res, 400, {
+					error: 'Auto chooses the agent settings. Omit manual model, effort, Fast, and Plan.'
+				})
+			let autoConfig: AutoModelConfig | undefined
+			if (body.auto) {
+				if (!services.autoModels || !services.autoModelConfig || !services.modelCache)
+					return json(req, res, 503, { error: 'Auto is unavailable.' })
+				try {
+					autoConfig = freezeAutoModelConfig(services.autoModelConfig.read(), services.modelCache.list())
+				} catch (error) {
+					return json(req, res, 409, { error: error instanceof Error ? error.message : 'Invalid Auto settings.' })
+				}
+			}
 			const attachments = stagedAttachments(STAGED_ATTACHMENTS_DIR, attachmentIds)
 			if (!attachments) return json(req, res, 409, { error: 'an attached file is no longer available; add it again' })
 			// The prompt is optional — a bare `path=` opens an empty workspace, like
@@ -42,13 +59,32 @@ export function createCreateWorkspaceRoutes(
 			const repo = body.repo ? reads.listRepos().find(r => r.name === body.repo) : undefined
 			if (body.repo && !repo) return json(req, res, 404, { error: `unknown repo ${body.repo}` })
 			if (repo && !repo.root_path) return json(req, res, 409, { error: `${repo.name} has no checkout path` })
-			const { result, created } = await createWorkspaceAndRead(prompt, repo?.root_path ?? null, repo?.name)
+			const { result, created } = await createWorkspaceAndRead(prompt, repo?.root_path ?? null, repo?.name, !!body.auto)
 			if (!result.ok) return json(req, res, 502, result)
 			if (!created) {
 				return json(req, res, 502, {
 					ok: false,
 					strategy: result.strategy,
 					error: 'Conductor didn’t create a workspace — check it’s running and not showing a dialog.'
+				})
+			}
+			if (autoConfig && services.autoModels) {
+				const sessions = reads.listSessions(created.id)
+				services.autoModels.accept({
+					workspaceId: created.id,
+					sessionId: sessions.length === 1 ? sessions[0].id : undefined,
+					text: prompt,
+					repo: created.repo_name ?? body.repo ?? '',
+					config: autoConfig,
+					attachmentIds,
+					sendImmediately: body.sendImmediately
+				})
+				return json(req, res, 200, {
+					ok: true,
+					workspaceId: created.id,
+					workspace: created,
+					pendingPrompt: prompt || undefined,
+					sent: false
 				})
 			}
 			// Return as soon as the row exists (~2s) — waiting for delivery would block the

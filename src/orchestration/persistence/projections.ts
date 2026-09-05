@@ -151,8 +151,11 @@ export function projectRun(context: PersistenceConnection, run: WorkflowRunRecor
 		!!blocked &&
 		(candidates.length > 0 || blocked.retryClass === 'ambiguous') &&
 		(adoptionKind === 'workspace' || adoptionKind === 'session')
-	const outstanding = jobs.some(job => !isTerminalWorkflowJobState(job.state))
-	const implementationReturned = jobs.some(job => job.role === 'implementation' && job.state === 'returned')
+	const resultsDelivered =
+		jobs.length > 0 &&
+		jobs.every(
+			job => job.state === 'returned' && (job.batonReceipt as { kind?: unknown } | undefined)?.kind === 'message'
+		)
 	return {
 		id: run.id,
 		...(run.workspaceId ? { workspaceId: run.workspaceId } : {}),
@@ -180,7 +183,7 @@ export function projectRun(context: PersistenceConnection, run: WorkflowRunRecor
 			canAdopt: run.phase === 'blocked' && candidates.length > 0,
 			canReplayAmbiguous: run.phase === 'blocked' && run.blocked?.retryClass === 'ambiguous',
 			canCancel: !isTerminalWorkflowPhase(run.phase),
-			canComplete: run.phase === 'reviewing' && implementationReturned && !outstanding
+			canComplete: (run.phase === 'planning' || run.phase === 'reviewing') && resultsDelivered
 		},
 		createdAt: run.createdAt,
 		updatedAt: run.updatedAt

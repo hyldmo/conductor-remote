@@ -106,6 +106,7 @@ export interface WorkflowCoordinatorDeps {
 	captureSessionBaseline(workspaceId: string): Promise<unknown>
 	captureDeliveryCursor(sessionId: string): Promise<WorkflowDeliveryCursor>
 	captureTranscriptCursor?(sessionId: string): Promise<unknown>
+	/** Optional reference material, not a Conductor attachment that forces a transcript read. */
 	materializeHandoff?(input: { run: WorkflowRunRecord; job: WorkflowJobRecord }): Promise<string | undefined>
 	materializeReport(input: {
 		run: WorkflowRunRecord

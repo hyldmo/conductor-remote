@@ -26,6 +26,7 @@ export const agentPatchSchema = z.object({
 export const setAgentOptionsSchema = agentPatchSchema.extend({ workspaceId: workspaceIdSchema })
 
 export const sendPromptSchema = z.object({
+	auto: z.boolean().optional().describe('Select a configured model from this pristine chat’s first message.'),
 	text: z.string({ error: 'prompt must be a string' }).trim().min(1, 'empty prompt'),
 	workspaceId: workspaceIdSchema,
 	agent: agentPatchSchema.optional(),
@@ -34,6 +35,7 @@ export const sendPromptSchema = z.object({
 })
 
 export const createWorkspaceSchema = agentPatchSchema.extend({
+	auto: z.boolean().optional().describe('Use Auto to select the initial model. Omit manual agent settings.'),
 	repo: z.string().trim().min(1).optional().describe('Exact name from list_repos.'),
 	prompt: optionalText.describe('First prompt for the new agent. Omit to open an empty workspace.'),
 	send: z
@@ -52,6 +54,8 @@ export const createWorkspaceSchema = agentPatchSchema.extend({
 })
 
 export type AgentPatch = z.input<typeof agentPatchSchema>
+/** Draft selection mode is a preference; concrete UI writes still use AgentPatch. */
+export type AgentDraft = AgentPatch & { auto?: boolean }
 export type SetAgentOptionsRequest = z.input<typeof setAgentOptionsSchema>
 export type SendPromptRequest = z.input<typeof sendPromptSchema>
 export type CreateWorkspaceRequest = z.input<typeof createWorkspaceSchema>

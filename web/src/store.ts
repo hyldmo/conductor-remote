@@ -78,6 +78,7 @@ const defaultView: ViewPrefs = {
 /** Drop keys with no staged value, so "nothing staged" is `{}` and never `{ plan: undefined }`. */
 function prunePatch(patch: AgentPatch): AgentPatch {
 	const next: AgentPatch = {}
+	if (patch.auto !== undefined) next.auto = patch.auto
 	if (patch.model !== undefined) next.model = patch.model
 	if (patch.effort !== undefined) next.effort = patch.effort
 	if (patch.plan !== undefined) next.plan = patch.plan
@@ -188,6 +189,7 @@ interface AppState {
 	clearWorking: (sessionId: string) => void
 	/** Add (or reset, by id — used by Retry) the bubble and status-ring `sending` state. */
 	addPending: (m: {
+		auto?: boolean
 		id: string
 		sessionId: string
 		workspaceId: string
@@ -386,6 +388,7 @@ export const useApp = create<AppState>((set, get) => {
 			const current = get().agentDrafts[sessionId]
 			if (!current) return
 			const next = prunePatch({
+				auto: current.auto === applied.auto ? undefined : current.auto,
 				model: current.model === applied.model ? undefined : current.model,
 				effort: current.effort === applied.effort ? undefined : current.effort,
 				plan: current.plan === applied.plan ? undefined : current.plan,

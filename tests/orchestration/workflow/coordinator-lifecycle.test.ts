@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest'
+import { hashCapabilityToken } from '../../../src/orchestration/persistence/db.ts'
 import { workflowEffectCorrelationMarker } from '../../../src/orchestration/workflow/coordinator.ts'
 import { scrubWorkflowSecrets } from '../../../src/shared.ts'
-import { capability, coordinator, modelGroups, roles, startExisting } from './fixtures.ts'
+import { capability, coordinator, databaseFile, modelGroups, roles, startExisting } from './fixtures.ts'
 
 describe('WorkflowCoordinator durable barriers', () => {
 	test('starts independent roots in two untouched tabs of the same workspace', async () => {
@@ -143,6 +144,42 @@ describe('WorkflowCoordinator durable barriers', () => {
 		db.close()
 	})
 
+	test('completes work handled by the root after delivered exploration, including after restart', async () => {
+		const file = databaseFile()
+		const { db, fake, value } = coordinator(file)
+		const accepted = await startExisting(value)
+		const finish = { clientId: 'complete-root-work', workflowId: accepted.workflow.id }
+		expect(value.projection(accepted.workflow.id).actions.canComplete).toBe(false)
+		await expect(value.complete(finish)).rejects.toMatchObject({ code: 'workflow_recovery_invalid' })
+		await value.wake(accepted.workflow.id)
+		fake.promote(fake.sent[0].receipt.id)
+		await value.wake(accepted.workflow.id)
+		const explorer = db.listWorkflowJobs(accepted.workflow.id)[0]
+		await expect(value.complete(finish)).rejects.toMatchObject({ code: 'workflow_recovery_invalid' })
+		fake.outcomes.set(explorer.childSessionId ?? '', { kind: 'success', baton: 'The root can finish this small fix.' })
+		await value.wake(accepted.workflow.id)
+		const baton = fake.sent.find(item => item.kind === 'baton')!
+		expect(value.projection(accepted.workflow.id).actions.canComplete).toBe(false)
+		await expect(value.complete(finish)).rejects.toMatchObject({ code: 'workflow_recovery_invalid' })
+		fake.promote(baton.receipt.id)
+		await value.wake(accepted.workflow.id)
+		expect(value.projection(accepted.workflow.id)).toMatchObject({
+			phase: 'planning',
+			actions: { canComplete: true },
+			jobs: { implementation: { requested: 0 } }
+		})
+		expect(fake.opened).toHaveLength(1)
+		db.close()
+
+		const restarted = coordinator(file)
+		expect(restarted.value.projection(accepted.workflow.id).actions.canComplete).toBe(true)
+		const completed = await restarted.value.complete(finish)
+		expect(completed.workflow).toMatchObject({ phase: 'completed', actions: { canComplete: false } })
+		expect((await restarted.value.complete(finish)).replayed).toBe(true)
+		expect(restarted.db.getWorkflowCapability(hashCapabilityToken(capability(baton.text)))?.revokedAt).toBeDefined()
+		restarted.db.close()
+	})
+
 	test('runs a capability-scoped implementation and leaves reviewing stable until phone completion', async () => {
 		const { db, fake, value } = coordinator()
 		const accepted = await startExisting(value)
@@ -165,16 +202,22 @@ describe('WorkflowCoordinator durable barriers', () => {
 			task: 'Implement the reviewed coordinator boundary.'
 		})
 		expect(delegated.workflow.phase).toBe('implementing')
+		expect(delegated.workflow.actions.canComplete).toBe(false)
+		await expect(value.complete({ clientId: 'too-early', workflowId: accepted.workflow.id })).rejects.toMatchObject({
+			code: 'workflow_recovery_invalid'
+		})
 		await value.wake(accepted.workflow.id)
 		const implementer = db.getWorkflowJob(delegated.job.id)
 		if (!implementer?.childSessionId) throw new Error('implementation child did not open')
 		fake.outcomes.set(implementer.childSessionId, { kind: 'success', baton: 'Implementation verified.' })
 		await value.wake(accepted.workflow.id)
 		const implementationBaton = fake.sent.filter(item => item.kind === 'baton').at(-1)
+		expect(value.projection(accepted.workflow.id).actions.canComplete).toBe(false)
 		fake.promote(implementationBaton?.receipt.id ?? '')
 		await value.wake(accepted.workflow.id)
 
 		expect(value.projection(accepted.workflow.id).phase).toBe('reviewing')
+		expect(value.projection(accepted.workflow.id).actions.canComplete).toBe(true)
 		expect((await value.wake(accepted.workflow.id)).phase).toBe('reviewing')
 		const completed = await value.complete({ clientId: 'complete', workflowId: accepted.workflow.id })
 		expect(completed.workflow.phase).toBe('completed')

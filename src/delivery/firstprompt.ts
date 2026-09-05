@@ -63,6 +63,7 @@ export interface FirstPromptTarget {
 }
 
 export interface FirstPrompt {
+	autoModel?: true
 	workspaceId: string
 	text: string
 	/** Agent choices selected while the workspace was being created. */

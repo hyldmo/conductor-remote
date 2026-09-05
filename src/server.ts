@@ -20,6 +20,7 @@ const {
 	wakeWorkflows,
 	actuator,
 	firstPrompts,
+	autoModels,
 	sweepStagedAttachments,
 	STAGED_ATTACHMENT_SWEEP_MS,
 	parkedPrompts,
@@ -76,6 +77,7 @@ server.listen(cfg.port, cfg.host, () => {
 	// Pick up any first prompt the previous process was still holding — an auto-update
 	// restart lands mid-setup often enough that this is the normal path, not a rare one.
 	firstPrompts.start()
+	autoModels.start()
 	// New Workspace uploads are host-side so another device can restore their pills.
 	// Sweep only week-old directories absent from both a draft and the delivery queue.
 	sweepStagedAttachments()

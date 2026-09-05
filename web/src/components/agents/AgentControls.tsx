@@ -1,10 +1,14 @@
-import { Map as MapIcon, Zap } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { Map as MapIcon, Sparkles, Zap } from 'lucide-react'
+import { lazy, type ReactNode, Suspense, useState } from 'react'
 import { displayedModelPickerLabel } from '../../../../src/shared.ts'
 import { EFFORT_LABELS, supportsEffortControl, supportsFastMode, supportsPlanMode } from '../../lib/agent.ts'
 import { cn } from '../../lib/cn.ts'
 import { EffortBars, ProviderMark } from './AgentIcons.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
+
+const AutoModelSettings = lazy(() =>
+	import('./AutoModelSettings.tsx').then(module => ({ default: module.AutoModelSettings }))
+)
 
 /**
  * The compact agent-control row shared by an existing chat and the first-message
@@ -38,6 +42,8 @@ export function AgentControls({
 	onPlanChange,
 	disabled = false,
 	freezeAgent = false,
+	auto = false,
+	onAutoChange,
 	beforeModel,
 	status
 }: {
@@ -71,22 +77,33 @@ export function AgentControls({
 	disabled?: boolean
 	/** Freeze the provider/model/effort/fast tuple while leaving generic Plan independent. */
 	freezeAgent?: boolean
+	auto?: boolean
+	onAutoChange?: (active: boolean) => void
 	/** A mode switch placed before the agent settings it controls. */
 	beforeModel?: ReactNode
 	status?: ReactNode
 }) {
+	const [autoSettings, setAutoSettings] = useState(false)
 	const showPlan = planAvailable ?? supportsPlanMode(agentType, providerModel)
 	const effortAvailable = supportsEffortControl(agentType, providerModel)
 	const fastAvailable = supportsFastMode(agentType, providerModel)
 
 	return (
 		<div className="min-w-0 flex-1">
+			{autoSettings ? (
+				<Suspense fallback={null}>
+					<AutoModelSettings onClose={() => setAutoSettings(false)} />
+				</Suspense>
+			) : null}
 			<div className="flex min-w-0 items-center gap-0.5">
 				{beforeModel}
 				{/* Only the model control opens a menu; the other settings stay one-tap ghost controls. */}
 				<div className="min-w-0">
 					<ModelPicker
-						value={model}
+						value={auto ? undefined : model}
+						autoSelected={auto}
+						onSelectAuto={onAutoChange ? () => onAutoChange(true) : undefined}
+						onAutoSettings={() => setAutoSettings(true)}
 						models={models}
 						open={modelPickerOpen}
 						onOpenChange={onModelPickerOpenChange}
@@ -95,13 +112,16 @@ export function AgentControls({
 						defaultModel={defaultModel}
 						onSetDefault={onSetDefaultModel}
 						settingDefault={settingDefaultModel}
-						onSelect={onModelChange}
+						onSelect={model => {
+							onAutoChange?.(false)
+							onModelChange(model)
+						}}
 						renderTrigger={({ picking, toggle }) => (
 							<button
 								type="button"
 								disabled={disabled || freezeAgent}
 								onClick={toggle}
-								aria-label={`Change model, currently ${model}`}
+								aria-label={`Change model, currently ${auto ? 'Auto' : model}`}
 								aria-haspopup="menu"
 								aria-expanded={picking}
 								className={cn(
@@ -109,8 +129,12 @@ export function AgentControls({
 									modelStaged && 'text-accent'
 								)}
 							>
-								<ProviderMark agentType={agentType} model={providerModel} className="size-[15px]" />
-								<span className="truncate">{displayedModelPickerLabel(model)}</span>
+								{auto ? (
+									<Sparkles size={15} />
+								) : (
+									<ProviderMark agentType={agentType} model={providerModel} className="size-[15px]" />
+								)}
+								<span className="truncate">{auto ? 'Auto' : displayedModelPickerLabel(model)}</span>
 							</button>
 						)}
 					/>
@@ -118,7 +142,7 @@ export function AgentControls({
 				{fastAvailable ? (
 					<button
 						type="button"
-						disabled={disabled || freezeAgent}
+						disabled={disabled || freezeAgent || auto}
 						onClick={onFastChange}
 						aria-label={`Fast mode ${fast === undefined ? 'default' : fast ? 'on' : 'off'}`}
 						aria-pressed={fast === true}
@@ -134,7 +158,7 @@ export function AgentControls({
 				{effortAvailable && (effort || showEmptyEffort) ? (
 					<button
 						type="button"
-						disabled={disabled || freezeAgent}
+						disabled={disabled || freezeAgent || auto}
 						onClick={onEffortChange}
 						aria-label={`Reasoning effort: ${effort ? EFFORT_LABELS[effort] : 'default'}`}
 						className={cn(
@@ -149,7 +173,7 @@ export function AgentControls({
 				{showPlan ? (
 					<button
 						type="button"
-						disabled={disabled}
+						disabled={disabled || auto}
 						onClick={onPlanChange}
 						aria-label={`Plan mode ${plan === undefined ? 'default' : plan ? 'on' : 'off'}`}
 						aria-pressed={plan === true}

@@ -33,6 +33,7 @@ export type ParkedStatus = 'waiting' | 'failed'
 export type ParkedAgentPatch = AgentPatch
 
 export interface ParkedPrompt {
+	autoModel?: true
 	workspaceId: string
 	sessionId: string
 	text: string

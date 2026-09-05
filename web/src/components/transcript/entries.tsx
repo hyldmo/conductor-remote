@@ -17,10 +17,10 @@ const sameNodes = (a: { nodes: TranscriptNode[] }, b: { nodes: TranscriptNode[] 
 	a.nodes.length === b.nodes.length && a.nodes.every((node, i) => node.e === b.nodes[i]?.e)
 
 /**
- * The collapsed run of steps. Closed by default, but the header carries the last
- * step's label — which keeps updating while the agent works — so the group reads
- * as live activity without being opened, and any tool failure inside is counted
- * on the header rather than hidden behind it.
+ * The collapsed run of steps. Closed by default, but the header lists the distinct
+ * step labels in first-seen order, so the mix of tools is visible without opening
+ * the group. Any tool failure inside is counted on the header rather than hidden
+ * behind it.
  *
  * Memoised on the rows themselves rather than on the array: a new row rebuilds every
  * group's slice, so the default shallow compare would re-render the whole backlog
@@ -28,8 +28,7 @@ const sameNodes = (a: { nodes: TranscriptNode[] }, b: { nodes: TranscriptNode[] 
  */
 export const StepGroup = memo(function StepGroup({ nodes }: { nodes: TranscriptNode[] }) {
 	const failed = nodes.filter(node => node.e.error).length
-	const last = nodes[nodes.length - 1].e
-	const lastLabel = last.role === 'thinking' ? 'Thinking' : last.text
+	const labels = [...new Set(nodes.map(({ e }) => (e.role === 'thinking' ? 'Thinking' : e.text)))].join(', ')
 	return (
 		<details className="group/steps min-w-0 overflow-hidden rounded-xl border border-border-soft bg-surface/40">
 			<summary className="flex cursor-pointer select-none list-none items-baseline gap-2 overflow-hidden whitespace-nowrap px-3 py-1.5 [&::-webkit-details-marker]:hidden">
@@ -37,7 +36,7 @@ export const StepGroup = memo(function StepGroup({ nodes }: { nodes: TranscriptN
 					▸
 				</span>
 				<span className="shrink-0 text-[12.5px] text-muted">{nodes.length} steps</span>
-				<span className="min-w-0 flex-1 truncate text-[11px] text-faint group-open/steps:invisible">{lastLabel}</span>
+				<span className="min-w-0 flex-1 truncate text-[11px] text-faint group-open/steps:invisible">{labels}</span>
 				{failed ? <span className="shrink-0 text-[11px] text-del">{failed} failed</span> : null}
 			</summary>
 			<div className="flex min-w-0 flex-col gap-2.5 border-t border-border-soft px-2 py-2.5">
@@ -132,17 +131,19 @@ export function SubagentResult({ text, failed }: { text: string; failed?: boolea
  */
 export function QueuedEntry({
 	queued,
+	dismissError,
 	onRetry,
 	onDismiss
 }: {
 	queued: PendingPrompt
+	dismissError?: string
 	onRetry?: () => void
 	onDismiss: () => void
 }) {
 	const failed = queued.status === 'failed'
 	// A parked entry names its chat, a first prompt carries no `sessionId` (src/wire.ts) — and only
 	// the parked one is held by the lock screen, only for as long as it hasn't given up.
-	const unlock = !failed && !!queued.sessionId
+	const unlock = !failed && !!queued.sessionId && (!queued.autoModel || queued.reason?.includes('unlock'))
 	return (
 		<QueueBubble
 			state={failed ? 'failed' : 'pending'}
@@ -162,13 +163,20 @@ export function QueuedEntry({
 							...(onRetry ? [{ label: 'Retry', onClick: onRetry, primary: true }] : []),
 							{ label: 'Dismiss prompt', onClick: onDismiss }
 						]
-					: []
+					: queued.autoModel
+						? [{ label: 'Dismiss prompt', onClick: onDismiss }]
+						: []
 			}
 			dataUserMessage={messagePreview(queued.text)}
 			dataMessageState="queued"
 		>
 			<div>
 				<Markdown>{queued.text}</Markdown>
+				{dismissError ? (
+					<p className="mt-2 text-xs text-del" role="alert">
+						{dismissError}
+					</p>
+				) : null}
 			</div>
 		</QueueBubble>
 	)

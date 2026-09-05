@@ -12,7 +12,7 @@ import {
 import { openAIOriginForSipHost } from '../../voice/config.ts'
 
 import { parseVoiceCallTarget, readVoiceChatContext, VoiceContextError } from '../../voice/context.ts'
-
+import { parseVoiceDiagnostics } from '../../voice/diagnostic-fields.ts'
 import { MAX_VOICE_SEARCH_CHARS } from '../../voice/history.ts'
 
 import { mintSipTicket, missingTicketConfig } from '../../voice/ticket.ts'
@@ -100,6 +100,25 @@ export function createVoiceRoutes(
 				)
 			}
 			return json(req, res, 400, { error: 'Unknown draft action' })
+		}
+
+		const diagnosticCall = routeParam(routes.voiceCallDiagnostics, req.method, pathname)
+		if (diagnosticCall) {
+			if (!voiceHistory.status(diagnosticCall)) return json(req, res, 404, { error: 'Saved voice call not found' })
+			const raw = await readBody(req)
+			if (raw.length > 32_000) return json(req, res, 413, { error: 'Voice diagnostic batch is too large' })
+			let events: ReturnType<typeof parseVoiceDiagnostics> = null
+			try {
+				events = parseVoiceDiagnostics(JSON.parse(raw))
+			} catch {}
+			if (!events) return json(req, res, 400, { error: 'Invalid voice diagnostic batch' })
+			// Keep each entry below the log ring's per-line cap, even after an offline batch.
+			const receivedAt = Date.now()
+			for (const event of events)
+				console.info(
+					`[voice-diagnostics] ${JSON.stringify({ callId: diagnosticCall, source: 'browser', receivedAt, ...event })}`
+				)
+			return json(req, res, 200, { ok: true })
 		}
 
 		const voiceTranscript = routeParam(routes.voiceTranscript, req.method, pathname)

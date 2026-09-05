@@ -16,6 +16,8 @@
 
 import type { TranscriptEntry } from './transcript/parser.ts'
 
+export { voiceDiagnosticData, voiceRealtimeDiagnostic } from './voice/diagnostic-fields.ts'
+
 /** Stable wire values used by request validation and the phone's effort controls. */
 export const AGENT_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] as const
 

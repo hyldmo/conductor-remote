@@ -23,6 +23,29 @@ function controls(agentType: string | null, model: string | null): string {
 }
 
 describe('agent controls', () => {
+	test('Auto leaves a way to select a manual model and disables effort, Fast, and Plan', () => {
+		const html = renderToStaticMarkup(
+			<AgentControls
+				model="5.6 Sol"
+				providerModel="5.6 Sol"
+				agentType="codex"
+				models={['5.6 Sol']}
+				auto
+				onAutoChange={vi.fn()}
+				effort="high"
+				fast
+				planAvailable
+				onModelChange={vi.fn()}
+				onFastChange={vi.fn()}
+				onEffortChange={vi.fn()}
+				onPlanChange={vi.fn()}
+			/>
+		)
+		const buttons = html.match(/<button[^>]*>/g) ?? []
+		expect(buttons.find(button => button.includes('Change model, currently Auto'))).not.toMatch(/\sdisabled(?:=|\s|>)/)
+		for (const control of ['Fast mode', 'Reasoning effort', 'Plan mode'])
+			expect(buttons.find(button => button.includes(control))).toMatch(/\sdisabled(?:=|\s|>)/)
+	})
 	test.each([
 		['claude', 'opus-5-1m'],
 		[null, 'Opus 5'],

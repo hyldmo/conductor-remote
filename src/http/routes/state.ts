@@ -38,7 +38,8 @@ export function createStateRoutes(
 		| 'planUsage'
 		| 'toolUsage'
 		| 'roleStore'
-	>
+	> &
+		Partial<Pick<RelayServices, 'autoModels'>>
 ): RouteHandler {
 	const {
 		reads,
@@ -76,9 +77,12 @@ export function createStateRoutes(
 			// Prompts parked for the lock screen ride the same way, one list per workspace,
 			// each entry naming its chat (src/delivery/parked.ts).
 			const parked = parkedPrompts.list()
+			const auto = services.autoModels?.pending() ?? []
 			for (const ws of workspaces) {
-				ws.pending_prompt = firstPrompts.get(ws.id)
-				const mine = parked.filter(p => p.workspaceId === ws.id)
+				ws.pending_prompt = firstPrompts.get(ws.id) ?? auto.find(p => p.workspaceId === ws.id && !p.sessionId)
+				const mine = [...parked, ...auto.filter((p): p is typeof p & { sessionId: string } => !!p.sessionId)].filter(
+					p => p.workspaceId === ws.id
+				)
 				if (mine.length) ws.parked_prompts = mine
 			}
 			return json(req, res, 200, {

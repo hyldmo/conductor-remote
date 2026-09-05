@@ -9,6 +9,7 @@ import {
 	voiceToolLabel,
 	type WorkspaceVoiceTarget
 } from '../../lib/voice/connection.ts'
+import { startVoiceDiagnostics } from '../../lib/voice/diagnostics.ts'
 
 export type VoiceCallStatus = 'idle' | 'connecting' | 'connected' | 'listening' | 'thinking' | 'speaking'
 export type VoiceCallRole = 'user' | 'assistant' | 'activity'
@@ -77,6 +78,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 	const microphone = useRef<MediaStreamTrack | null>(null)
 	const remoteAudio = useRef<HTMLAudioElement | null>(null)
 	const callId = useRef<string | null>(null)
+	const diagnostics = useRef<ReturnType<typeof startVoiceDiagnostics> | null>(null)
 	const inputParts = useRef(new Map<string, string>())
 	const outputParts = useRef(new Map<string, string>())
 	const completedInputs = useRef(new Set<string>())
@@ -107,6 +109,8 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 	}, [])
 
 	const closeLocal = useCallback(() => {
+		diagnostics.current?.stop()
+		diagnostics.current = null
 		generation.current += 1
 		playing.current = false
 		responding.current = false
@@ -283,7 +287,10 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 				void audio.play().catch(() => setError('Tap the audio notice to hear this call'))
 			})
 			dc.addEventListener('message', event => {
-				if (currentGeneration === generation.current) handleEvent(event.data)
+				if (currentGeneration === generation.current) {
+					diagnostics.current?.realtime(event.data)
+					handleEvent(event.data)
+				}
 			})
 			dc.addEventListener('close', () => {
 				if (currentGeneration === generation.current && statusRef.current !== 'idle') failCall('The call closed')
@@ -323,6 +330,13 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 			}
 			callId.current = answer.callId
 			setLastCallId(answer.callId)
+			try {
+				diagnostics.current = startVoiceDiagnostics(track, pc, audio, events =>
+					client.voiceCallDiagnostics(answer.callId, events)
+				)
+			} catch {
+				/* Optional browser diagnostics must never block a call. */
+			}
 			await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
 			await new Promise<void>((resolve, reject) => {
 				if (dc.readyState === 'open') return resolve()
