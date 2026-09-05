@@ -47,7 +47,7 @@ export const otherRelay: RelayIdentity = {
 export const roles: RolesConfig = {
 	version: 1,
 	roles: {
-		planning: { model: '5.6 Sol', effort: 'high', preamble: 'Plan without editing.' },
+		planning: { model: '5.6 Sol', effort: 'high', preamble: 'Delegate when it pays off.' },
 		exploration: { model: 'Claude Sonnet 4.6', effort: 'medium', preamble: 'Investigate only.' },
 		implementation: { model: 'Claude Opus 4.6', effort: 'high', preamble: 'Implement carefully.' }
 	}

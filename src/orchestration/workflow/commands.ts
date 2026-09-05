@@ -11,12 +11,7 @@ import {
 	promptRole,
 	workflowEffectCorrelationMarker
 } from './helpers.ts'
-import {
-	assertWorkflowDelegation,
-	isTerminalWorkflowJobState,
-	type WorkflowCapabilityClaims,
-	workflowDelegationTransition
-} from './machine.ts'
+import { assertWorkflowDelegation, type WorkflowCapabilityClaims, workflowDelegationTransition } from './machine.ts'
 import { workflowChildPrompt } from './prompts.ts'
 import {
 	assertCompatible,
@@ -353,28 +348,20 @@ export async function complete(
 		() => {
 			const run = requireRun(context, input.workflowId)
 			const jobs = context.db.listWorkflowJobs(run.id)
-			const outstanding = jobs.some(job => !isTerminalWorkflowJobState(job.state))
-			const implementationDelivered = jobs.some(
-				job =>
-					job.role === 'implementation' &&
-					job.state === 'returned' &&
-					isDeliveryReceipt(job.batonReceipt) &&
-					job.batonReceipt.kind === 'message'
-			)
-			if (
-				run.phase !== 'reviewing' ||
-				outstanding ||
-				!implementationDelivered ||
-				run.implementationBatonsDelivered < 1
-			) {
+			const resultsDelivered =
+				jobs.length > 0 &&
+				jobs.every(
+					job => job.state === 'returned' && isDeliveryReceipt(job.batonReceipt) && job.batonReceipt.kind === 'message'
+				)
+			if ((run.phase !== 'planning' && run.phase !== 'reviewing') || !resultsDelivered) {
 				throw new WorkflowCoordinatorError(
 					'workflow_recovery_invalid',
-					'Workflow can complete only from reviewing after a delivered implementation Baton and no outstanding job.'
+					'Workflow can complete only from planning or reviewing after every helper result is delivered.'
 				)
 			}
 			context.db.transitionWorkflowRun({
 				runId: run.id,
-				expectedPhase: 'reviewing',
+				expectedPhase: run.phase,
 				expectedCancellationGeneration: run.cancellationGeneration,
 				phase: 'completed',
 				eventKey: `workflow-completed:${input.clientId}`,

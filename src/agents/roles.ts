@@ -54,17 +54,30 @@ export const ROLE_CONTROL_CAPABILITIES = {
 	providers: Record<string, { efforts: readonly AgentEffort[]; fast: boolean }>
 }
 
-const batonPreamble = (role: string): string =>
-	`You are the ${role} agent for this workspace. End your final answer with a \`## Baton\` section: Decision, Evidence, Files changed, Risks, Suggested next role.`
-
 export const DEFAULT_ROLES: RolesConfig = {
 	version: 1,
 	roles: {
-		planning: { model: 'Fable 5', effort: 'max', fast: false, preamble: batonPreamble('planning') },
+		planning: {
+			model: 'Fable 5',
+			effort: 'max',
+			fast: false,
+			preamble:
+				'Optimize completion time and expensive-model token use. Delegate when it pays off; handle small fixes directly. Keep assignments and updates concise.'
+		},
 		// Conductor currently offers two distinct Muse Spark rows. This descriptive
 		// placeholder intentionally matches neither, so the user must choose exactly.
-		exploration: { model: 'Muse Spark', preamble: batonPreamble('exploration') },
-		implementation: { model: '5.6 Sol', effort: 'xhigh', fast: false, preamble: batonPreamble('implementation') }
+		exploration: {
+			model: 'Muse Spark',
+			preamble:
+				'Return concise evidence the parent can act on, with relevant file references and remaining uncertainties. Investigate only as far as the assignment needs.'
+		},
+		implementation: {
+			model: '5.6 Sol',
+			effort: 'xhigh',
+			fast: false,
+			preamble:
+				'Implement the assigned scope and verify it. Report the outcome, changed files, and remaining risks concisely.'
+		}
 	}
 }
 

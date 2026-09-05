@@ -6,35 +6,43 @@ repository. Reviewed against worktree commit `4b62235` plus the upstream diff to
 the relay's orchestration database, Conductor's database, and the one live run this
 review ran inside.
 
-## Short version
+## Agreed direction
 
-The prompting commits every run to one shape: explore, then implement, then review. The
-mechanics make each child a single question with a single answer. Those two facts are
-where iteration is lost.
+The orchestrator exists to reduce total completion time and token use on expensive
+models. Delegation earns its place when those savings exceed the cost of writing the
+assignment, starting a helper, transferring context, and integrating its result. Faster,
+simpler models can make that worthwhile; extra agents and phases are not goals themselves.
 
-The recommendations are ordered by value. Items 1 to 3, 9 and 10 are relay changes and are
-implemented locally in this worktree. Items 4 and 5 are prompt wording and wait for the owner's
-read. Items 6 to 8 are design changes for later.
+The owner approved direct small product fixes by the planner, as well as planning documents
+and scratch reproductions. If explaining a task would cost more than doing it, the planner
+should do it. Keep assignments to the task, useful paths, ownership, and success criteria.
+Use independent helpers when they shorten the work; avoid duplicating their investigation.
+Use judgment rather than generating a budget analysis for every delegation.
+
+## Current status
+
+Items 1 to 3, 9 and 10 merged in PR #298. This follow-up implements the prompt changes in
+items 4 and 5, completion without an implementation child from item 6, and optional context
+references from item 8. Skipping the initial explorer and reusing child chats remain open.
 
 | Item | Kind | Status |
 |---|---|---|
-| 1. Deliver the complete child reply with every Baton | relay | implemented locally |
-| 2. Tell the root and the phone when a run blocks | relay | implemented locally |
-| 3. Classify a post-apply verification mismatch as deterministic | relay | implemented locally |
-| 4. Tell the root the mechanics it depends on | prompt | waits for the owner's read |
-| 5. Loosen the child prompts and preambles | prompt | waits for the owner's read |
-| 6. Let the objective decide the shape | design | later |
+| 1. Deliver the complete child reply with every Baton | relay | merged in #298 |
+| 2. Tell the root and the phone when a run blocks | relay | merged in #298 |
+| 3. Classify a post-apply verification mismatch as deterministic | relay | merged in #298 |
+| 4. Tell the root the mechanics it depends on | prompt | implemented locally |
+| 5. Loosen the child prompts and preambles | prompt | implemented locally for new prompts and defaults |
+| 6. Let the objective decide the shape | design | completion implemented; optional bootstrap later |
 | 7. Follow-up delegation into an existing child chat | design | later |
-| 8. Cap or scope the handoff | design | later |
-| 9. Render relay error objects in the MCP client | relay | implemented locally |
-| 10. Do not block a run on a transient compatibility read | relay | implemented locally |
+| 8. Cap or scope the handoff | design | optional reference implemented; no byte cap |
+| 9. Render relay error objects in the MCP client | relay | merged in #298 |
+| 10. Do not block a run on a transient compatibility read | relay | merged in #298 |
 | Shared model matcher for Workflow receipts | relay | shipped upstream in `047682a` |
 
-## Implementation from this run
+## Relay fixes merged in PR #298
 
-Items 1 to 3, 9 and 10 are implemented locally, starting from upstream commit
-`c5cc918`. The source changes accompany this review; deployment is tracked separately.
-Prompt builders, role preambles and the design changes in items 4 to 8 remain for our review.
+Items 1 to 3, 9 and 10 were implemented starting from upstream commit `c5cc918` and merged
+as `74746ee`. Deployment is tracked separately.
 
 - New successful outcomes save the full final reply and completion cursor. The return
   effect freezes its report reference and public text before sending. Paths include the
@@ -60,10 +68,35 @@ notification routing, quarantine, known configuration failures and transient pro
 adapters; no live UI run or push was sent. The Node build and its MCP initialization
 and EOF-drain smoke check also passed.
 
+## Pragmatic delegation follow-up
+
+- The root may do small code edits itself and delegates only when expected savings cover
+  the overhead. Its prompt explains capability rotation, phase choices, child questions,
+  result pointers, and when the phone can mark Complete.
+- Complete is allowed from planning or reviewing after every helper result has been
+  delivered as a durable message. A run that needs no implementation child can finish.
+- Child results use useful headings instead of a mandatory five-part template. Explorers
+  may run tests and write scratch reproductions. Default role preambles use concise,
+  task-neutral wording. Existing saved preambles and frozen runs are not rewritten.
+- The focused assignment is primary. A frozen transcript without reasoning or tool calls
+  is available by an optional file reference and `read_chat` cursor. It is not sent as a
+  Conductor attachment, because that would force the child to read it before proceeding.
+  Existing prepared task prompts retain their bytes; new context files use a versioned
+  path. The dead prompt-builder attachment argument has been removed.
+- The bootstrap explorer still runs automatically. Follow-ups still require a new job.
+  These are the next design constraints to review against the speed and token goal.
+
+Verification: after integrating `origin/main` at `bd97fbc`, `yarn verify` passed with all
+1,209 tests in 153 files, type checking, Biome, and repository checks. The Node and PWA
+production builds also passed. Coordinator tests cover completion without an implementer,
+rejection while results are pending, restart and idempotent completion. Adapter tests
+check the frozen cursor, omitted reasoning, and absence of a forced attachment token.
+No live helper run or performance measurement was made for this follow-up.
+
 ## Findings recorded before implementation
 
-These findings preserve the original review evidence. The local fixes above address F4,
-F5, F10, F12 and F13; the remaining findings are still open.
+These findings preserve the original review evidence, including behavior that has since
+changed. The status and implementation sections above describe the current work.
 
 **F1. The pipeline shape is fixed before anyone reads the objective.**
 The bootstrap explorer's task is the same sentence for every run: "Explore the objective
@@ -196,7 +229,7 @@ ordinary path's report design is the right model to copy.
 
 ### 1. Deliver the complete child reply with every Baton
 
-Kind: relay. Status: implemented locally.
+Kind: relay. Status: merged in PR #298.
 
 What: mirror the ordinary delegation return. Freeze the child's complete final reply in the
 job outcome at completion. At return, write it as a report attachment in the worktree and
@@ -224,7 +257,7 @@ Acceptance:
 
 ### 2. Tell the root and the phone when a run blocks
 
-Kind: relay. Status: implemented locally.
+Kind: relay. Status: merged in PR #298.
 
 What: when a run enters `blocked`, send one push to subscribed devices and post one short
 message into the root chat. Both name the workspace, the phase, the failed action in plain
@@ -250,7 +283,7 @@ Acceptance:
 
 ### 3. Classify a post-apply verification mismatch as deterministic
 
-Kind: relay. Status: implemented locally.
+Kind: relay. Status: merged in PR #298.
 
 What: when `applyAgentPatch` returned ok and the frozen-role probe still disagrees, mark the
 effect failed with retry class deterministic, do not activate the UI quarantine, and let the
@@ -270,46 +303,45 @@ Acceptance:
 
 ### 4. Tell the root the mechanics it depends on
 
-Kind: prompt. Status: waits for the owner's read.
+Kind: prompt. Status: implemented locally after the owner's review.
 
-Add to the root prompt, in plain words:
+The root prompt now states, in plain words:
+- Delegation should save total time or expensive-model work. Small fixes, plans, and
+  scratch work can be done directly; assignments should be short and respect file ownership.
 - Each accepted `delegate_task` consumes the capability. The next envelope arrives as a
   later message. Wait for it before the next delegation.
 - A child ends on its first answer. A question from a child ends its job. Answer it by
-  opening a new job that quotes the question and the answer.
+  handling it directly or opening a new job that quotes the question and the answer.
 - What each phase allows. After the implementation Baton the run is in reviewing. The
   planner may request one more implementer, or an explorer that opens a new cycle. Only
-  the phone presses Complete, so end the turn with a clear "ready to mark complete" or
-  "needs another pass".
+  the phone presses Complete, from planning or reviewing once all helpers have returned.
+  End with the outcome, verification, and "ready to mark complete" when satisfied.
 - Where a child's chat is (the report pointer from item 1, or `list_chats`).
-- Remove the presupposition of a change. Say "if the objective needs code changes, delegate
-  them to the implementation role" instead of "delegate tracked code changes".
+- Neither code changes nor an implementation child are required to finish an objective.
 
 ### 5. Loosen the child prompts and preambles
 
-Kind: prompt. Status: waits for the owner's read.
+Kind: prompt. Status: implemented locally for new prompts and default preambles.
 
-- Make the Baton headings a suggestion. Keep Decision, Evidence and Risks. Drop "Files
-  changed" and "Suggested next role" for explorers.
-- Tell the child that stopping ends the job, and to put its question in the Decision.
+- Return concise results with evidence and remaining risks. Use a short `## Baton` summary
+  only for a longer report; fixed subheadings and a suggested next role are unnecessary.
+- Tell the child that its first final answer ends the job and to state any question clearly.
 - Allow an explorer to run tests and to write scratch files under `.context/scratch/` for
   a reproduction. Keep source files read-only.
-- Exploration preamble in `roles.json`: replace "a focused implementation/test plan" with
-  "evidence the planner can act on".
-- Planning preamble: drop the Baton requirement for messages addressed to the user, or make
-  it optional.
+- Default exploration preamble: ask for evidence the parent can act on. Default planning
+  preamble: optimize time and expensive-model tokens without imposing a Baton on the user.
+  Saved `roles.json` customizations remain owner-controlled; active runs retain frozen roles.
 - Bootstrap task text: make it objective-neutral, for example "Map the code and constraints
   the objective touches and return evidence the planner can use".
-- Remove the dead `handoffAttachment` parameter or make dispatch use it, so tests match
-  production.
+- Remove the dead `handoffAttachment` parameter; dispatch supplies the optional reference.
 - Split the `delegate_task` description into an ordinary paragraph and a Workflow paragraph.
 
 ### 6. Let the objective decide the shape
 
-Kind: design. Status: later.
+Kind: design. Status: completion implemented locally; bootstrap choice remains later.
 
-- Allow Complete from planning when the planner declares that no implementation is needed.
-  A review or research objective then has a proper end.
+- The phone can Complete from planning or reviewing once every helper result is delivered.
+  No implementation child is required for a review, research, or a small fix by the root.
 - Let the phone set the bootstrap explorer's task, or skip the bootstrap explorer and let
   the planner write its own first question.
 
@@ -324,15 +356,17 @@ real and keeps the child's context alive.
 
 ### 8. Cap or scope the handoff
 
-Kind: design. Status: later.
+Kind: design. Status: optional reference implemented locally; no byte cap.
 
-Cap the rendered handoff in bytes, or default to the planner's own brief and make the full
-transcript opt-in per delegation. The planner's task text is already the focused
-assignment.
+The focused assignment is primary. The transcript is frozen at the delegation cursor,
+omits reasoning and tools, and is referenced as an optional local file instead of a
+mandatory Conductor attachment. A bounded `read_chat` pointer supplies earlier evidence
+when needed. A byte cap or per-delegation attachment control can be considered if real
+usage still shows unnecessary context reads.
 
 ### 9. Render relay error objects in the MCP client
 
-Kind: relay package, MCP client side. Status: implemented locally.
+Kind: relay package, MCP client side. Status: merged in PR #298.
 
 What: when a relay answer carries an error object, format it as `code: message` before
 throwing. Keep string errors as they are.
@@ -346,7 +380,7 @@ path and asserts the thrown message contains both fields and never `[object Obje
 
 ### 10. Do not block a run on a transient compatibility read
 
-Kind: relay. Status: implemented locally.
+Kind: relay. Status: merged in PR #298.
 
 What: separate "could not verify the relay processes" from "verified an incompatible relay".
 A verification failure is retried on later wake ticks with a bounded budget and blocks the

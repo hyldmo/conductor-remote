@@ -229,7 +229,24 @@ hashed, causally delivered capability for its exact cycle, revision, phase, and 
 role. Every current exploration Baton must exist as a durable parent message—not merely
 an accepted outbox row—before implementation opens. Implementation Batons likewise
 lead to `reviewing`, which stays stable until the planner requests another permitted
-tracked pass or the phone explicitly marks the run complete.
+tracked pass or the phone explicitly marks the run complete. The phone can also complete
+from `planning` after every helper result is delivered, so a review or a small fix handled
+by the root needs no implementation child.
+
+Delegation should save total completion time or expensive-model work after assignment,
+startup, context, and integration costs. The planner may edit code, plans, and scratch
+files directly for small tasks. Helpers get focused assignments and concise result
+instructions; explorers may run tests and write reproductions under `.context/scratch/`
+while leaving source files unchanged. The worktree is shared, so assignments name file
+ownership and agents respect each other's edits. The initial explorer remains automatic.
+
+New helper prompts reference a frozen root transcript as an optional local file, without
+an attachment token: Conductor's attachment tokens cause a mandatory read instruction.
+The file omits reasoning and tool calls, and a `read_chat` pointer names the frozen cursor
+for earlier evidence. Existing prepared task prompts retain their original bytes on retry;
+the new context file uses a versioned path. Full child result reports still return as
+attachments. Saved role preambles and active runs' frozen settings remain user-owned;
+new default preambles do not overwrite them.
 
 Jobs and UI effects keep logical identity across physical attempts. A process-local
 priority queue still orders calls inside one relay; a SQLite lease serializes UI access
@@ -276,15 +293,13 @@ id, phase, and frozen public roles so the sidebar's Workflow/role icon stack doe
 fall back to whichever chat model happens to be active; pre-coordinator workspaces use
 the old un-delegated planning-root marker as a narrow upgrade fallback. The phone owns
 idempotent Retry, explicit candidate adoption, separately
-confirmed risky replay, non-destructive Cancel, and stable-review Complete (only after
-an implementation Baton and with no outstanding job). The pipeline uses explicit
+confirmed risky replay, non-destructive Cancel, and Complete from planning or reviewing
+(only after every helper result is a durable message). The pipeline uses explicit
 Workflow ids for child tabs; it never
 infers managed ownership from arbitrary role chips or delegation records.
 
-The planner's instruction forbids code edits and the phase gates ensure tracked
-implementation goes through the implementation role. That is an orchestration and
-prompt contract, not an OS sandbox: an ordinary Conductor root still has filesystem
-tools, and the relay cannot remove them from an already-running chat.
+Phase gates govern tracked delegation; the root can finish small fixes itself. These
+are orchestration and prompt contracts, not an OS sandbox.
 
 Ordinary chats use a lightweight path through `src/orchestration/delegation/intake.ts`
 and `src/orchestration/delegation/queue.ts`, with JSON persistence in `store.ts` and
