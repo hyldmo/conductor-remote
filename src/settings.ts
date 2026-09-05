@@ -7,7 +7,7 @@
  *
  * **Nothing secret goes in here.** The file is plain JSON at rest and its contents flow
  * back out through a token-gated API, so the Wi-Fi entries are SSIDs only — macOS already
- * holds the credentials for any network it has joined, and `src/wifi.ts` never passes a
+ * holds the credentials for any network it has joined, and `src/host/wifi.ts` never passes a
  * password. An SSID the Mac doesn't know is reported as unjoinable rather than stored
  * with one.
  *

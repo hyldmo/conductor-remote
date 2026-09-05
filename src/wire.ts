@@ -5,9 +5,9 @@
  * under the names the wire uses, and declares the response envelopes the route
  * handlers assemble. Three callers read it and none of them may disagree:
  *
- *   - `src/server.ts` builds these payloads,
+ *   - `src/http/routes/` builds these payloads,
  *   - `web/src/lib/types.ts` re-exports the lot for the PWA,
- *   - `src/mcp-tools.ts` annotates its relay calls with them.
+ *   - `src/mcp/tools/` annotates its relay calls with them.
  *
  * Before this, the phone kept a hand-written mirror of all of it and `mcp-tools.ts`
  * kept a third copy inline. Nothing enforced the copies — a field renamed in
@@ -21,41 +21,41 @@
  * The one exception is `src/shared.ts`, which is stdlib-free on purpose.
  */
 
-import type { UpdateStatus } from './autoupdate.ts'
-import type { DefaultEfforts } from './conductor-settings.ts'
-import type { ContextBreakdown } from './context-breakdown.ts'
-import type { DevServerForward, DevServerResult, DevServerState } from './dev-server.ts'
-import type { FirstPrompt } from './firstprompt.ts'
-import type { LogEntry, LogFileInfo } from './logbuf.ts'
-import type { CachedModelGroup } from './model-cache.ts'
-import type { NoSleepState } from './nosleep.ts'
-import type { DeviceInfo } from './notify.ts'
-import type { ParkedAgentPatch, ParkedPrompt } from './parked.ts'
+import type { DefaultEfforts } from './agents/conductor-settings.ts'
+import type { CachedModelGroup } from './agents/model-cache.ts'
+import type { FirstPrompt } from './delivery/firstprompt.ts'
+import type { ParkedAgentPatch, ParkedPrompt } from './delivery/parked.ts'
+import type { DevRunConfig } from './dev-server/run-configs.ts'
+import type { DevServerForward, DevServerResult, DevServerState } from './dev-server/types.ts'
+import type { UpdateStatus } from './host/autoupdate.ts'
+import type { LogEntry, LogFileInfo } from './host/logbuf.ts'
+import type { NoSleepState } from './host/nosleep.ts'
+import type { DeviceInfo } from './notifications/notify.ts'
+import type { DraftAttachment, Prefs, SyncedDraft } from './prefs.ts'
+import type { ClosedSession, Workspace as ReadWorkspace, RepoRow, SearchWorkspace, SessionRow } from './reads/types.ts'
+import type { IndexStatus, SearchResult as SearchEvidence } from './search/coordinator.ts'
+import type { Settings } from './settings.ts'
+import type { OpenAIRealtimeVoice, VoiceLanguage } from './shared.ts'
+import type { ContextBreakdown } from './transcript/context-breakdown.ts'
+import type { TranscriptEntry } from './transcript/parser.ts'
 import type {
 	PlanUsageBucket,
 	PlanUsageProviderId,
 	PlanUsageSnapshot,
 	PlanUsageWindow,
 	ProviderPlanUsage
-} from './plan-usage.ts'
-import type { DraftAttachment, Prefs, SyncedDraft } from './prefs.ts'
-import type { ClosedSession, Workspace as ReadWorkspace, RepoRow, SearchWorkspace, SessionRow } from './reads.ts'
-import type { DevRunConfig } from './run-configs.ts'
-import type { IndexStatus, SearchResult as SearchEvidence } from './search.ts'
-import type { Settings } from './settings.ts'
-import type { OpenAIRealtimeVoice, VoiceLanguage } from './shared.ts'
-import type { ToolUsageSnapshot } from './tool-usage.ts'
-import type { TranscriptEntry } from './transcript.ts'
-import type { ActuatorInfo, SendResult as ActuatorSendResult } from './writes.ts'
+} from './usage/plan-usage.ts'
+import type { ToolUsageSnapshot } from './usage/tool-usage.ts'
+import type { ActuatorInfo, SendResult as ActuatorSendResult } from './writes/types.ts'
 
-export type { BackgroundTask } from './background-tasks.ts'
-export type { DiffFile, DiffStats, WorkspaceDiff, WorkspaceFileDiff } from './git.ts'
-export type { RepoIcon } from './icons.ts'
-export type { LogLevel } from './logbuf.ts'
-export type { MergeMethod, MergeResult } from './merge.ts'
-export type { NoSleepResult } from './nosleep.ts'
-export type { PrStatus, UnreadSession } from './reads.ts'
-export type { SearchRole, SearchSnippet } from './search.ts'
+export type { RepoIcon } from './files/icons.ts'
+export type { DiffFile, DiffStats, WorkspaceDiff, WorkspaceFileDiff } from './git/diff.ts'
+export type { MergeMethod, MergeResult } from './git/merge.ts'
+export type { LogLevel } from './host/logbuf.ts'
+export type { NoSleepResult } from './host/nosleep.ts'
+export type { BackgroundTask } from './reads/background-tasks.ts'
+export type { PrStatus, UnreadSession } from './reads/types.ts'
+export type { SearchRole, SearchSnippet } from './search/coordinator.ts'
 export type { VoiceCallTarget } from './voice/context.ts'
 export type {
 	ActuatorInfo,
@@ -417,8 +417,8 @@ export type DismissDelegationResult = { ok: true; delegationId: string } | { ok:
 
 /**
  * A prompt the relay is holding and will deliver itself: a workspace's first prompt
- * waiting on setup (`src/firstprompt.ts`), or one parked for the lock screen
- * (`src/parked.ts`). Widened rather than a union, because the chat renders both with
+ * waiting on setup (`src/delivery/firstprompt.ts`), or one parked for the lock screen
+ * (`src/delivery/parked.ts`). Widened rather than a union, because the chat renders both with
  * one bubble and reads `reason` off either — the fields only a parked entry has are
  * optional here and required there.
  */
@@ -440,7 +440,7 @@ export interface StateResponse {
 	actuator: ActuatorInfo
 	/** Relay version this daemon is running. */
 	version?: string
-	/** Self-update state (see src/autoupdate.ts). */
+	/** Self-update state (see src/host/autoupdate.ts). */
 	update?: UpdateStatus
 }
 
@@ -554,7 +554,7 @@ export interface FilePreviewResponse {
  * The phone uses these for the diff window's All-files rail and turns
  * `` `tests/foo.ts` `` in a message into a source link only when this list proves it
  * exists. `truncated` says the worktree held more previewable paths than the relay
- * will ship (src/git.ts ▸ `listSourceFiles`).
+ * will ship (src/git/diff.ts ▸ `listSourceFiles`).
  */
 export interface WorkspaceFilesResponse {
 	files: string[]
@@ -668,7 +668,7 @@ export type PlanUsageResponse = PlanUsageSnapshot
 
 /** GET /api/usage/tools — recent tool traffic, separate from provider plan limits. */
 export type ToolUsageResponse = ToolUsageSnapshot
-export type { ToolUsageRange, ToolUsageRow } from './tool-usage.ts'
+export type { ToolUsageRange, ToolUsageRow } from './usage/tool-usage.ts'
 
 /** POST /api/sessions/:id/default-model — the star is re-read before success. */
 export interface DefaultModelResult {

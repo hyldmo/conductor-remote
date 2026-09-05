@@ -2,7 +2,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { Tool } from '../mcp-tools.ts'
+import type { Tool } from '../mcp/types.ts'
 import type { VoiceLanguage } from '../shared.ts'
 import type { VoiceHistory } from './history.ts'
 import { VOICE_INSTRUCTIONS } from './prompt.ts'

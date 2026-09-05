@@ -3,6 +3,7 @@
 // `scripts/check-imports.ts` keeps it that way.
 import { routes } from '../../../src/routes.ts'
 import { responseErrorMessage, VIEWING_HEADER } from '../../../src/shared.ts'
+import { getToken } from './auth-token.ts'
 import type {
 	AgentPatch,
 	AgentResult,
@@ -79,41 +80,6 @@ import type {
 	WorkspaceResponse
 } from './types.ts'
 
-const TOKEN_KEY = 'conductor-remote-token'
-
-/** Pull a `#token=…` out of the URL on first load, persist it, and clean the hash. */
-export function bootstrapToken(): string | null {
-	const hash = new URLSearchParams(location.hash.slice(1))
-	const fromHash = hash.get('token')
-	if (fromHash) {
-		localStorage.setItem(TOKEN_KEY, fromHash)
-		history.replaceState(null, '', location.pathname + location.search)
-	}
-	return localStorage.getItem(TOKEN_KEY)
-}
-
-export function getToken(): string | null {
-	return localStorage.getItem(TOKEN_KEY)
-}
-
-export function clearToken(): void {
-	localStorage.removeItem(TOKEN_KEY)
-}
-
-/** Persist a token that arrived outside the URL flow (e.g. pasted into the TokenGate). */
-export function setStoredToken(token: string): void {
-	localStorage.setItem(TOKEN_KEY, token)
-}
-
-/** Accept a bare token or anything containing `token=…` (a full `/#token=` URL, say); null if neither. */
-export function parseTokenInput(raw: string): string | null {
-	const s = raw.trim()
-	if (!s) return null
-	const m = s.match(/token=([^&\s]+)/)
-	if (m) return decodeURIComponent(m[1])
-	return /\s/.test(s) ? null : s
-}
-
 export class ApiError extends Error {
 	constructor(
 		message: string,
@@ -136,20 +102,25 @@ export class ApiError extends Error {
 // 28s of AppleScript + 3s of confirming against the DB, and a workspace creation
 // polls for the new row for 20s, both past the old flat 25s. A send is the long one
 // because the relay retries inside the request (`SEND_BUDGET_MS`, 55s, in
-// src/server.ts) — waiting is cheap here, since the prompt sits in the chat as a
+// src/http/services/delivery.ts) — waiting is cheap here, since the prompt sits in the chat as a
 // "Sending…" bubble rather than blocking the UI.
 const POLL_TIMEOUT_MS = 6000
+
 const ACTION_TIMEOUT_MS = 45000
+
 // Continue can fetch the merged PR's base before it checks out a fresh branch.
 // Its UI press returns immediately, so the relay waits on the DB for the real receipt.
 const CONTINUE_TIMEOUT_MS = 75000
+
 const SEND_TIMEOUT_MS = 75000
+
 // A cold Run action can spend 28s in Accessibility, 15s waiting for the
 // workspace port, then configure Tailscale Serve. Keep the phone alive through
 // the relay's complete answer so it never reports failure for a late success.
 const DEV_SERVER_TIMEOUT_MS = 75000
+
 // A restart is mostly waiting — the quit being honoured, a cold launch, then the first
-// window — and the relay caps its own attempt at 45s (writes.ts ▸ RESTART_ATTEMPT_MS).
+// window — and the relay caps its own attempt at 45s (src/writes/runner.ts ▸ RESTART_ATTEMPT_MS).
 // Kept clear of that so the phone can never give up in the second the answer arrives,
 // with room for the UI lock holding the run behind a send already in flight.
 const RESTART_TIMEOUT_MS = 75000
@@ -171,7 +142,7 @@ async function api<T>(
 				'content-type': 'application/json',
 				// How long this request will be waited on. The relay caps its own retrying at
 				// this, so the two budgets can't drift apart across versions: the relay
-				// updates itself (src/autoupdate.ts) while this app sits in a service-worker
+				// updates itself (src/host/autoupdate.ts) while this app sits in a service-worker
 				// cache, so pairing the numbers by hand would eventually have the phone
 				// abandoning a send the relay was still retrying — a failure shown for a
 				// prompt that then lands, the one outcome worse than a plain failure.
@@ -229,6 +200,7 @@ async function upload<T>(path: string, file: File): Promise<T> {
  * is evicted so it can be retried.
  */
 const objectUrlCache = new Map<string, Promise<string>>()
+
 async function fetchObjectUrl(path: string): Promise<string> {
 	const token = getToken()
 	const res = await fetch(path, {
@@ -294,7 +266,7 @@ export const client = {
 	/**
 	 * `readingAs` is this device's push id, sent only while the chat is actually on
 	 * screen. It makes the poll double as a heartbeat, so the relay can leave this
-	 * device out of the notification for a turn ending in front of it (src/notify.ts).
+	 * device out of the notification for a turn ending in front of it (src/notifications/notify.ts).
 	 */
 	messages: (sessionId: string, after: number, readingAs?: string | null) =>
 		api<MessagesResponse>(`${routes.messages.path(sessionId)}?after=${after}`, {
@@ -326,7 +298,7 @@ export const client = {
 	/**
 	 * `clientId` is the pending bubble's own id, and it is what stops Retry doubling a
 	 * prompt: the relay answers a repeat of the same id with the first send's outcome
-	 * instead of typing again (src/sendonce.ts). Retry reuses the bubble's id, a fresh
+	 * instead of typing again (src/delivery/sendonce.ts). Retry reuses the bubble's id, a fresh
 	 * send makes a fresh one, so saying the same thing twice on purpose still does.
 	 */
 	sendPrompt: (
@@ -522,7 +494,7 @@ export const client = {
 	/**
 	 * Create a workspace from a first prompt via Conductor's deep link. Returns as
 	 * soon as the row exists — the worktree may still be setting up, and the relay
-	 * sends the prompt itself from there (src/firstprompt.ts). `sendImmediately: false`
+	 * sends the prompt itself from there (src/delivery/firstprompt.ts). `sendImmediately: false`
 	 * holds that send until the worktree is built instead.
 	 */
 	createWorkspace: (request: CreateWorkspaceRequest) =>

@@ -3,8 +3,8 @@ import { resolve } from 'node:path'
 import { exportSql } from 'drizzle-kit/cli'
 
 const root = resolve(import.meta.dirname, '..')
-const schemaPath = resolve(root, 'src/orchestration-schema.ts')
-const outputPath = resolve(root, 'src/orchestration-schema.generated.ts')
+const schemaPath = resolve(root, 'src/orchestration/persistence/schema.ts')
+const outputPath = resolve(root, 'src/orchestration/persistence/schema.generated.ts')
 
 const result = await exportSql({ dialect: 'sqlite', schema: schemaPath })
 if (result.status === 'error') {

@@ -1,7 +1,7 @@
 /** Signature-gated Twilio and OpenAI route handlers for the public voice listener. */
 import crypto from 'node:crypto'
 import type http from 'node:http'
-import type { RpcRequest } from '../mcp-tools.ts'
+import type { RpcRequest } from '../mcp/types.ts'
 import type { VoiceConfig } from './config.ts'
 import type { VoiceReply, VoiceRoutes } from './server.ts'
 import {

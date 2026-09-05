@@ -13,7 +13,7 @@ const svg = await readFile(path.join(pub, 'icon.svg'))
  * double-round: a visible bite where the two radii disagree. Corners *flattened* for
  * iOS, which composites a transparent home-screen icon onto black, stop being corners at
  * all and become four opaque wedges — which is what read as a black edge on the logo,
- * because `resolveRepoIcon` (src/icons.ts) serves `public/apple-touch-icon.png` as this
+ * because `resolveRepoIcon` (src/files/icons.ts) serves `public/apple-touch-icon.png` as this
  * repo's own sidebar avatar and the phone clips it to `rounded-lg`. It was hidden while
  * the tile inset the image by 6px and showed the moment that padding came off.
  *

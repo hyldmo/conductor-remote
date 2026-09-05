@@ -7,7 +7,7 @@ import { isPreviewableImage, isPreviewableSource } from '../../../src/shared.ts'
  * Agents write paths in backticks constantly — "updated `tests/foo.ts`", "plan written
  * to `~/.gstack/plan.md`" — and every one of them was dead text on the phone, while the
  * same path written as a Markdown link has opened the source sheet for a while now
- * (`Markdown.tsx` ▸ `sourceReference`). This is the missing half: the same sheet, from
+ * (`web/src/components/transcript/Markdown.tsx` ▸ `sourceReference`). This is the missing half: the same sheet, from
  * the spelling people actually use.
  *
  * The rule that keeps it from linking prose is **a mention must name a file that is
@@ -134,8 +134,8 @@ function parseMention(text: string): { path: string; location: string } | null {
 /**
  * The one file this mention names, or null if the repo holds none or several.
  *
- * A suffix match is what lets `Markdown.tsx` and `components/Markdown.tsx` both find
- * `web/src/components/Markdown.tsx`, and the `/` boundary is what stops `dex.ts` from
+ * A suffix match is what lets `Markdown.tsx` and `components/transcript/Markdown.tsx` both find
+ * `web/src/components/transcript/Markdown.tsx`, and the `/` boundary is what stops `dex.ts` from
  * matching `index.ts`. Requiring a *unique* hit is the same fail-closed rule the sidebar
  * row lookup follows: two candidates mean we don't know which was meant.
  */
@@ -151,7 +151,7 @@ function uniqueFile(byName: Map<string, string[]>, mention: string): string | nu
  * The resolver for the workspace on screen, or null where there is none.
  *
  * Context rather than a prop because the consumer is `ChatCode`, one entry in
- * `Markdown.tsx`'s static component map, which no caller threads props through. It also
+ * `web/src/components/transcript/Markdown.tsx`'s static component map, which no caller threads props through. It also
  * has to update past `Markdown`'s `memo`: the file list lands a moment after the first
  * paint, and a context read is the one thing that re-renders a bailed-out subtree.
  */

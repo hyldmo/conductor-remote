@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { packageRoot } from './pkg-root.ts'
-import type { WriteStrategy } from './writes.ts'
+import type { WriteStrategy } from './writes/types.ts'
 
 const home = os.homedir()
 
