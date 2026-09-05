@@ -145,7 +145,10 @@ describe('createVoiceTools', () => {
 			asOf: '2026-09-02T12:00:00.000Z',
 			current: 0,
 			waitingForYou: 0,
+			waitingChatCount: 0,
+			possibleFollowUpCount: 0,
 			waiting: [],
+			waitingCursor: null,
 			dormant: 0,
 			completed: 0,
 			filtered: 0,
@@ -154,6 +157,7 @@ describe('createVoiceTools', () => {
 		})
 		await tool(tools, 'voice_workspace_overview').run({
 			cursor: 3,
+			waiting_cursor: 6,
 			repo: 'conductor-remote',
 			agent_status: 'working',
 			workspace_status: 'in-review',
@@ -163,16 +167,20 @@ describe('createVoiceTools', () => {
 			include_merged: true,
 			include_dormant: true
 		})
-		expect(overview).toHaveBeenCalledWith(3, {
-			repo: 'conductor-remote',
-			agentStatus: 'working',
-			workspaceStatus: 'in-review',
-			updatedSince: 'today',
-			updatedBefore: '2026-09-03',
-			includeDone: true,
-			includeMerged: true,
-			includeDormant: true
-		})
+		expect(overview).toHaveBeenCalledWith(
+			3,
+			{
+				repo: 'conductor-remote',
+				agentStatus: 'working',
+				workspaceStatus: 'in-review',
+				updatedSince: 'today',
+				updatedBefore: '2026-09-03',
+				includeDone: true,
+				includeMerged: true,
+				includeDormant: true
+			},
+			6
+		)
 	})
 
 	it('lists repos, previews an exact workspace creation, and consumes approval once', async () => {
