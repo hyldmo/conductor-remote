@@ -195,6 +195,37 @@ describe('phone chat tabs', () => {
 		expect(html.match(/<button/g)).toHaveLength(7)
 	})
 
+	test.each([true, false])('keeps one selected tab with the file active=%s', active => {
+		const html = renderToStaticMarkup(
+			<SessionTabs
+				sessions={[session]}
+				activeId={session.id}
+				readMarks={{}}
+				promptStates={{}}
+				fileTab={{ path: 'web/src/App.tsx', active, onSelect: vi.fn(), onClose: vi.fn() }}
+				onSelect={vi.fn()}
+				onContext={vi.fn()}
+				onNewChat={vi.fn()}
+				onClose={vi.fn()}
+				creating={false}
+				closingId={null}
+				online={false}
+			/>
+		)
+
+		const currentButton = html.match(/<button\b[^>]*aria-current="page"[^>]*>[\s\S]*?<\/button>/g) ?? []
+		expect(currentButton).toHaveLength(1)
+		expect(currentButton[0]).toContain(active ? 'App.tsx' : 'Alpha')
+		// Switching to the chat keeps the local file reachable, with the full path
+		// available even though its visible label is only the filename.
+		expect(html).toContain('aria-label="Open web/src/App.tsx"')
+		expect(html).toContain('title="web/src/App.tsx"')
+		expect(html).toContain('<span class="whitespace-nowrap">App.tsx</span>')
+		// The preview can close offline and does not count as a second Conductor chat.
+		expect(html).toMatch(/<button\b(?![^>]*disabled)[^>]*aria-label="Close web\/src\/App.tsx file tab"/)
+		expect(html).not.toContain('aria-label="Close Alpha chat"')
+	})
+
 	test('shows the full tab title without a width cap', () => {
 		const longTitle = 'Auk brain memory retrieval improvements'
 		const html = renderToStaticMarkup(

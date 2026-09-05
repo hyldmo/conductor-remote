@@ -13,7 +13,7 @@ import {
 	X
 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import {
 	useAnyWorkspace,
 	useClearChatNotification,
@@ -54,6 +54,7 @@ import { ContextBreakdownSheet } from './ContextBreakdownSheet.tsx'
 import { DelegationPipeline } from './DelegationPipeline.tsx'
 import { DevServerControls } from './DevServerControls.tsx'
 import { DiffFileViewer, type DiffReviewState, DiffView } from './DiffView.tsx'
+import { FileIcon } from './FileIcon.tsx'
 import { Header } from './Header.tsx'
 import { RoleChip, RolesSettings } from './RolesSettings.tsx'
 import type { SplitFormat } from './Transcript.tsx'
@@ -133,14 +134,23 @@ export function SessionView() {
 	// notification for a chat you had tabbed away from arrives as the *same* URL, so
 	// nothing would tell the state to give way. One source of truth, last writer wins.
 	const [searchParams, setSearchParams] = useSearchParams()
+	const location = useLocation()
 	const pickedSession = searchParams.get('session')
 	const pickedSubagent = searchParams.get('subagent')
 	const pickSession = (id: string) => setSearchParams({ session: id }, { replace: true })
 	const [diffOpen, setDiffOpen] = useState(false)
 	const [diffFileScope, setDiffFileScope] = useState<DiffFileScope>('changed')
-	const [selectedDiff, setSelectedDiff] = useState<{ workspaceId: string; path: string } | null>(null)
-	const [diffNavigatorOpen, setDiffNavigatorOpen] = useState(false)
+	const [selectedDiff, setSelectedDiff] = useState<{
+		workspaceId: string
+		path: string
+		locationKey: string
+	} | null>(null)
+	const [diffNavigatorLocation, setDiffNavigatorLocation] = useState<string | null>(null)
 	const selectedDiffFile = selectedDiff && selectedDiff.workspaceId === workspaceId ? selectedDiff.path : null
+	// A file stays in its temporary tab when a chat is selected. Every navigation,
+	// including a notification for the same chat, returns the pane to the transcript.
+	const activeDiffFile = selectedDiff?.locationKey === location.key ? selectedDiffFile : null
+	const diffNavigatorOpen = diffNavigatorLocation === location.key
 	const [rolesOpen, setRolesOpen] = useState(false)
 	const [delegationError, setDelegationError] = useState<string | null>(null)
 	const [creatingChat, setCreatingChat] = useState(false)
@@ -158,11 +168,11 @@ export function SessionView() {
 	const workspaceActions = useWorkspaceActions(workspaceId)
 	const { data, isLoading } = useWorkspaces()
 	const liveWorkspace = data?.workspaces.find(w => w.id === workspaceId)
-	const diffQuery = useDiff(workspaceId, diffOpen && !!liveWorkspace)
+	const diffQuery = useDiff(workspaceId, (diffOpen || !!activeDiffFile) && !!liveWorkspace)
 	const fileDiffQuery = useFileDiff(
 		workspaceId,
-		selectedDiffFile,
-		diffOpen && diffFileScope === 'changed' && !!liveWorkspace && !!diffQuery.data?.truncated
+		activeDiffFile,
+		!!activeDiffFile && diffFileScope === 'changed' && !!liveWorkspace && !!diffQuery.data?.truncated
 	)
 	// `/api/state` lists only live workspaces, so an id that isn't in it is either archived
 	// or gone. Ask by id before saying "not found": the worktree is deleted on archive, the
@@ -192,7 +202,7 @@ export function SessionView() {
 	const workspaceFilesQuery = useWorkspaceFiles(
 		workspaceId,
 		!!liveWorkspace?.worktree,
-		diffOpen && diffFileScope === 'all'
+		(diffOpen || !!activeDiffFile) && diffFileScope === 'all'
 	)
 	const { data: workspaceFiles } = workspaceFilesQuery
 	const worktree = liveWorkspace?.worktree ?? null
@@ -228,7 +238,7 @@ export function SessionView() {
 		workspaceWorkflows,
 		delegations,
 		sessionRoles,
-		pickedSubagent ? null : sessionId
+		pickedSubagent || activeDiffFile ? null : sessionId
 	)
 	const activeWorkflowAssignment = sessionId ? sessionRoles[sessionId] : undefined
 	const activeWorkflowJob = sessionId
@@ -260,14 +270,14 @@ export function SessionView() {
 	useEffect(() => {
 		// Not for an archived chat: its unread flag is read off the live list, which no
 		// longer holds it, so a mark here would only grow the store with dead ids.
-		if (!(ws && sessionId && activeUpdatedAt)) return
+		if (!(ws && sessionId && activeUpdatedAt) || activeDiffFile) return
 		if (document.visibilityState !== 'visible') return
 		markRead(sessionId, activeUpdatedAt)
-	}, [ws, sessionId, activeUpdatedAt, markRead])
+	}, [ws, sessionId, activeUpdatedAt, activeDiffFile, markRead])
 	// And take down the notification this chat already put on the lock screen: the relay
 	// keeps quiet about a chat being read, which cannot reach one delivered before it was
 	// opened.
-	useClearChatNotification(sessionId, activeUpdatedAt)
+	useClearChatNotification(activeDiffFile ? null : sessionId, activeUpdatedAt)
 
 	// The palette's rows for this workspace (`lib/commands.ts`). Keyed on the few facts
 	// that decide what is offered and checked, with the handlers behind a ref: the poll
@@ -424,7 +434,7 @@ export function SessionView() {
 			// The Mac chooses the previously viewed surviving tab. Follow that choice only
 			// when the phone was showing the tab that disappeared; a background close must
 			// not pull this reader away from its own current chat.
-			if (sessionId === id) {
+			if (sessionId === id && !activeDiffFile) {
 				if (result.activeSessionId) pickSession(result.activeSessionId)
 				else setSearchParams({}, { replace: true })
 			}
@@ -473,23 +483,21 @@ export function SessionView() {
 	}
 	const closeDiff = () => {
 		setDiffOpen(false)
-		setSelectedDiff(null)
-		setDiffNavigatorOpen(false)
+		setDiffNavigatorLocation(null)
 	}
 	const closeDiffFile = () => {
-		// The file viewer sits beside the changed-files rail on desktop. Its close
-		// button dismisses only that file; the rail's own close button owns closing
-		// the whole review. On mobile, reopening the navigator is the equivalent
-		// "back to changed files" destination.
+		// Closing the temporary tab returns to the chat; the file rail is independent.
 		setSelectedDiff(null)
-		setDiffNavigatorOpen(true)
+		setDiffNavigatorLocation(null)
 	}
 
 	const toggleDiff = () => {
-		if (diffOpen) closeDiff()
+		// On a phone the rail is hidden after choosing a tab, so reopen its navigator
+		// on the first tap. On desktop the same control toggles the visible side rail.
+		if (diffOpen && (diffNavigatorOpen || window.matchMedia('(min-width: 1024px)').matches)) closeDiff()
 		else {
 			setDiffOpen(true)
-			setDiffNavigatorOpen(true)
+			setDiffNavigatorLocation(location.key)
 		}
 	}
 	const openCall = () => {
@@ -512,10 +520,10 @@ export function SessionView() {
 	}
 
 	const selectDiffFile = (path: string) => {
-		setSelectedDiff({ workspaceId: ws.id, path })
+		setSelectedDiff({ workspaceId: ws.id, path, locationKey: location.key })
 		// The file rail stays mounted on desktop. On a phone it is an overlay,
 		// so selecting a row dismisses it to reveal this file in the transcript's slot.
-		setDiffNavigatorOpen(false)
+		setDiffNavigatorLocation(null)
 	}
 	const changeDiffFileScope = (scope: DiffFileScope) => {
 		setDiffFileScope(scope)
@@ -567,7 +575,7 @@ export function SessionView() {
 							</>
 						}
 					/>
-					{sessions.length > 0 || ws.state === 'ready' ? (
+					{sessions.length > 0 || ws.state === 'ready' || selectedDiffFile ? (
 						<SessionTabs
 							sessions={sessions}
 							activeId={pickedSubagent ? null : sessionId}
@@ -575,6 +583,16 @@ export function SessionView() {
 							promptStates={promptStates}
 							roles={sessionRoles}
 							subtabSessionIds={delegationSubtabSessionIds}
+							fileTab={
+								selectedDiffFile
+									? {
+											path: selectedDiffFile,
+											active: !!activeDiffFile,
+											onSelect: () => selectDiffFile(selectedDiffFile),
+											onClose: closeDiffFile
+										}
+									: undefined
+							}
 							onSelect={pickSession}
 							onContext={session => setContextSession({ workspaceId: ws.id, id: session.id, title: session.title })}
 							onNewChat={createChat}
@@ -624,15 +642,18 @@ export function SessionView() {
 						{/* The relay's undelivered prompt for this chat: one parked for the lock screen
 							    wins (it names its session; oldest first, since delivery is FIFO), else the
 							    workspace's first prompt still waiting on setup. */}
-						{selectedDiffFile ? (
+						{activeDiffFile ? (
 							<DiffFileViewer
-								key={selectedDiffFile}
+								key={activeDiffFile}
 								review={diffReview}
-								filePath={selectedDiffFile}
+								filePath={activeDiffFile}
 								scope={diffFileScope}
 								showFolders={showFolders}
 								onSelectFile={selectDiffFile}
-								onShowFiles={() => setDiffNavigatorOpen(true)}
+								onShowFiles={() => {
+									setDiffOpen(true)
+									setDiffNavigatorLocation(location.key)
+								}}
 								onClose={closeDiffFile}
 							/>
 						) : (
@@ -655,7 +676,7 @@ export function SessionView() {
 								onOpenRoles={() => setRolesOpen(true)}
 							/>
 						)}
-						{diffOpen && (diffNavigatorOpen || !selectedDiffFile) ? (
+						{diffOpen && diffNavigatorOpen ? (
 							<MobileDiffNavigator
 								review={diffReview}
 								sessionId={sessionId}
@@ -663,7 +684,7 @@ export function SessionView() {
 								onScopeChange={changeDiffFileScope}
 								showFolders={showFolders}
 								onShowFoldersChange={value => setView({ showFolders: value })}
-								selectedFile={selectedDiffFile}
+								selectedFile={activeDiffFile}
 								onSelectFile={selectDiffFile}
 								onClose={closeDiff}
 							/>
@@ -714,7 +735,7 @@ export function SessionView() {
 						onScopeChange={changeDiffFileScope}
 						showFolders={showFolders}
 						onShowFoldersChange={value => setView({ showFolders: value })}
-						selectedFile={selectedDiffFile}
+						selectedFile={activeDiffFile}
 						onSelectFile={selectDiffFile}
 						onClose={closeDiff}
 					/>
@@ -788,6 +809,7 @@ export function SessionTabs({
 	promptStates,
 	roles = {},
 	subtabSessionIds,
+	fileTab,
 	onSelect,
 	onContext,
 	onNewChat,
@@ -803,6 +825,8 @@ export function SessionTabs({
 	roles?: Record<string, SessionRoleAssignment>
 	/** Live delegated children not yet present in the durable role snapshot. */
 	subtabSessionIds?: ReadonlySet<string>
+	/** One local preview tab, independent of Conductor's real chat sessions. */
+	fileTab?: { path: string; active: boolean; onSelect: () => void; onClose: () => void }
 	onSelect: (id: string) => void
 	onContext: (session: Session) => void
 	onNewChat: () => void
@@ -812,21 +836,26 @@ export function SessionTabs({
 	online: boolean
 }) {
 	const activeTab = useRef<HTMLDivElement>(null)
+	const activeSessionId = fileTab?.active ? null : activeId
+	const activeFilePath = fileTab?.active ? fileTab.path : null
 	const primarySessions = sessions.filter(
 		session => !roles[session.id]?.delegationId && !subtabSessionIds?.has(session.id)
 	)
-	const activeHasPrimaryTab = primarySessions.some(session => session.id === activeId)
+	const activeHasPrimaryTab = primarySessions.some(session => session.id === activeSessionId)
 
 	// Opening a workspace can restore a session near the end of a long tab row. Keep its
 	// selected tab visible on first paint and after each tab change, without moving the
 	// transcript or the rest of the page.
 	useLayoutEffect(() => {
-		if (!(activeId && activeHasPrimaryTab)) return
+		if (!(activeSessionId && activeHasPrimaryTab) && !activeFilePath) return
 		activeTab.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-	}, [activeId, activeHasPrimaryTab])
+	}, [activeSessionId, activeHasPrimaryTab, activeFilePath])
 
 	return (
-		<nav className="flex shrink-0 items-center gap-1 border-b border-border-soft bg-bg px-3 py-2">
+		<nav
+			aria-label="Workspace tabs"
+			className="flex shrink-0 items-center gap-1 border-b border-border-soft bg-bg px-3 py-2"
+		>
 			<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
 				{primarySessions.map(s => {
 					const promptState = promptStates[s.id]
@@ -834,15 +863,16 @@ export function SessionTabs({
 					return (
 						<div
 							key={s.id}
-							ref={s.id === activeId ? activeTab : undefined}
+							ref={s.id === activeSessionId ? activeTab : undefined}
 							className={cn(
 								'flex shrink-0 items-center rounded-full text-sm font-medium text-muted transition',
-								s.id === activeId && 'bg-surface-2 text-text'
+								s.id === activeSessionId && 'bg-surface-2 text-text'
 							)}
 						>
 							<button
 								type="button"
 								onClick={() => onSelect(s.id)}
+								aria-current={s.id === activeSessionId ? 'page' : undefined}
 								className={cn(
 									'flex min-w-0 items-center gap-1.5 py-1.5 pl-3.5',
 									sessions.length > 1 || hasContext ? 'pr-1' : 'pr-3.5'
@@ -875,6 +905,35 @@ export function SessionTabs({
 						</div>
 					)
 				})}
+				{fileTab ? (
+					<div
+						ref={fileTab.active ? activeTab : undefined}
+						className={cn(
+							'flex shrink-0 items-center rounded-full text-sm font-medium text-muted transition',
+							fileTab.active && 'bg-surface-2 text-text'
+						)}
+					>
+						<button
+							type="button"
+							onClick={fileTab.onSelect}
+							aria-label={`Open ${fileTab.path}`}
+							aria-current={fileTab.active ? 'page' : undefined}
+							title={fileTab.path}
+							className="flex min-w-0 items-center gap-1.5 py-1.5 pl-3.5 pr-1"
+						>
+							<FileIcon path={fileTab.path} />
+							<span className="whitespace-nowrap">{fileTab.path.split('/').pop()}</span>
+						</button>
+						<button
+							type="button"
+							onClick={fileTab.onClose}
+							aria-label={`Close ${fileTab.path} file tab`}
+							className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-full text-faint transition active:bg-bg/70 active:text-text"
+						>
+							<X size={12} />
+						</button>
+					</div>
+				) : null}
 			</div>
 			<button
 				type="button"
