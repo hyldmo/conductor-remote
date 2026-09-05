@@ -32,7 +32,14 @@ export interface WorkflowRootInspection {
 }
 
 export type WorkflowChildOutcome =
-	| { kind: 'success'; baton: string; evidence?: unknown }
+	| {
+			kind: 'success'
+			baton: string
+			/** Absent only in outcomes saved by relays predating full reports. */
+			text?: string
+			assistantRowid?: number
+			evidence?: unknown
+	  }
 	| {
 			kind: 'failure'
 			code: string
@@ -70,7 +77,17 @@ export interface WorkflowEffectCall extends WorkflowEffectReadCall {
 	dispatch: WorkflowEffectDispatch
 }
 
+export interface WorkflowBlockNotice {
+	run: WorkflowRunRecord
+	eventId: number
+	action: string
+	recovery: string
+}
+
 export interface WorkflowCoordinatorDeps {
+	notifyBlocked?(notice: WorkflowBlockNotice): Promise<void>
+	/** A single queued UI send; the adapter must recheck the block and shared UI hold. */
+	sendBlockedNotice?(notice: WorkflowBlockNotice): Promise<void>
 	/** Snapshot before a new-workspace deep link. It is persisted with the create intent. */
 	captureWorkspaceBaseline(repo: string): Promise<unknown>
 	/** Read-only validation of an explicitly selected existing root. */
@@ -90,6 +107,11 @@ export interface WorkflowCoordinatorDeps {
 	captureDeliveryCursor(sessionId: string): Promise<WorkflowDeliveryCursor>
 	captureTranscriptCursor?(sessionId: string): Promise<unknown>
 	materializeHandoff?(input: { run: WorkflowRunRecord; job: WorkflowJobRecord }): Promise<string | undefined>
+	materializeReport(input: {
+		run: WorkflowRunRecord
+		job: WorkflowJobRecord
+		outcome: Extract<WorkflowChildOutcome, { kind: 'success' }>
+	}): Promise<string>
 	sendPrompt(input: WorkflowEffectCall & { sessionId: string; text: string }): Promise<DeliveryReceipt>
 	returnBaton(
 		input: WorkflowEffectCall & { job: WorkflowJobRecord; sessionId: string; text: string }
@@ -179,6 +201,7 @@ export type WorkflowCoordinatorErrorCode =
 	| 'workflow_recovery_invalid'
 	| 'workflow_adapter_invalid'
 	| 'workflow_incompatible_relay'
+	| 'workflow_role_verification_failed'
 
 export interface CapabilityGrant {
 	phase: 'exploring' | 'planning' | 'reviewing'

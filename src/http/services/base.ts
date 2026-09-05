@@ -209,9 +209,12 @@ export function createBaseServices() {
 	}
 
 	/** Fail closed if another UI-capable relay cannot prove it speaks this protocol. */
-	async function workflowCompatibilityError(): Promise<string | null> {
+	async function workflowCompatibilityError(): Promise<{
+		kind: 'incompatible' | 'unverified'
+		message: string
+	} | null> {
 		if (!orchestration.writable) {
-			return `Workflow is disabled because ${orchestrationUnavailableReason()}.`
+			return { kind: 'incompatible', message: `Workflow is disabled because ${orchestrationUnavailableReason()}.` }
 		}
 		try {
 			const processes = await listUiCapableRelayProcesses()
@@ -221,9 +224,15 @@ export function createBaseServices() {
 				ORCHESTRATION_PROTOCOL_VERSION
 			)
 			if (!incompatible.length) return null
-			return `Workflow needs every live conductor-remote UI relay on protocol ${ORCHESTRATION_PROTOCOL_VERSION}. Stop incompatible PID${incompatible.length === 1 ? '' : 's'} ${incompatible.map(process => process.pid).join(', ')} and try again.`
+			return {
+				kind: 'incompatible',
+				message: `Workflow needs every live conductor-remote UI relay on protocol ${ORCHESTRATION_PROTOCOL_VERSION}. Stop incompatible PID${incompatible.length === 1 ? '' : 's'} ${incompatible.map(process => process.pid).join(', ')} and try again.`
+			}
 		} catch (error) {
-			return `Workflow could not verify the live relay processes: ${error instanceof Error ? error.message : String(error)}`
+			return {
+				kind: 'unverified',
+				message: `Workflow could not verify the live relay processes: ${error instanceof Error ? error.message : String(error)}`
+			}
 		}
 	}
 

@@ -588,7 +588,20 @@ Two asymmetric halves — keep them separate:
     session id and completion cursor for `read_chat` with `after: 0`. Helpers also
     receive their parent's id and a transcript cut frozen at task acceptance.
     Existing queued returns keep their saved text for receipt matching. Managed
-    Workflow Batons retain their capability and phase-delivery contract.
+    Workflow Batons retain their capability and phase-delivery contract. New managed
+    outcomes also freeze the complete final reply and cursor; `workflow/report.ts`
+    returns a stable attachment plus a `read_chat` pointer beside the inline Baton.
+    Already-prepared returns and older outcomes preserve their saved bytes.
+    Each Workflow block durably claims one push attempt and at most one queued root
+    notice. The latter uses background `uiTurn`, checks compatibility and quarantine,
+    and skips an unprompted or unavailable root. Notice failures never re-block a run;
+    claims prevent duplicate sends across restart, with a possible lost notice if the
+    relay exits after claiming but before sending. The phone summary stays durable.
+    Failed process inventories defer work until a later wake; three consecutive
+    failures, persisted in audit events, expose Retry. A verified incompatible relay
+    still blocks immediately. Only a completed role apply with a present, mismatching
+    readback gets deterministic post-dispatch failure; missing chats and uncertain
+    writes keep the existing quarantine behavior.
 
     **Workflow mode is the explicit root entry point, not Conductor Plan mode**
     (`src/orchestration/workflow/prompts.ts`, `web/src/components/orchestration/WorkflowModePill.tsx`). The pill in New

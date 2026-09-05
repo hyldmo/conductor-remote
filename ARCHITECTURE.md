@@ -80,6 +80,8 @@ src/                     Node relay; source runs as .ts, npm ships emitted dist-
       coordinator.ts     WorkflowCoordinator facade; one wake map shared by all lifecycle operations
       start.ts, wake.ts, root.ts      intake, coalesced advancement and root binding/delivery
       job-dispatch.ts, job-results.ts child opening/configuration/send, outcomes and Baton barriers
+      report.ts          saved child reply, stable report body and completion pointer
+      blocked.ts, compatibility.ts block notification claims and persisted process-read retry budget
       commands.ts        scoped delegation, Retry, Adopt, Replay, Complete and Cancel
       effects.ts, effect-recovery.ts durable UI dispatch and positive-receipt reconciliation
       effect-runner.ts   external helper gate: persist process identity before GO; bounded group cleanup
@@ -233,6 +235,29 @@ durable wake query keeps only cancelled runs with unresolved dispatched effects,
 receipts, or delivered child turns under observation. A later receipt or child result is
 recorded for audit without reopening the run, returning a Baton, or scheduling more work,
 including after a relay restart.
+
+Managed Batons keep their inline summary and phase capability. New successful outcomes
+also freeze the complete final reply and its completion cursor. The return effect saves
+one report reference plus a `read_chat` pointer before sending, and the attachment path
+is stable per job attempt. Retries use that saved content; old outcomes and already
+prepared returns keep their earlier bytes. `src/orchestration/workflow/report.ts` never
+rescans a child's later conversation. All report content is scrubbed before persistence.
+
+A block event claims one push attempt and at most one root-message attempt in the relay's
+database. The root message is queued at background priority and rechecks the current block,
+destination and global UI hold under the shared lock. An unprompted or unavailable root,
+quarantine, or failed compatibility check suppresses the message. Delivery failures remain
+audit observations and cannot create another block. Claims precede external sends to avoid
+duplicates on restart; a crash between claim and send can lose that notice. The phone's
+persisted Workflow summary remains available.
+
+An unreadable relay-process inventory defers the wake. Three consecutive failed wakes
+cause a deterministic block; audit events preserve the budget across restarts and a
+successful wake clears it. Checks before a UI command's private gate can defer only while
+`mayExecute` is false. A verified incompatible process still blocks immediately. A completed
+role apply followed by a present but mismatching chat read is a separate deterministic
+configuration failure. Missing chats and other errors after a possible UI write keep the
+existing ambiguity and quarantine rules.
 
 `WorkflowRunWire` exposes only the bounded, secret-free projection needed by the PWA:
 phase, frozen public roles, guaranteed/extra job counts, navigation ids, sanitized error,
