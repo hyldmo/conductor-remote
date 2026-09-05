@@ -1,11 +1,11 @@
 import { freezeAutoModelConfig } from '../../agents/auto-model/config.ts'
-import type { ParkedAgentPatch } from '../../delivery/parked.ts'
+import { createWorkspaceSchema, hasAgentSettings } from '../../contracts/agent-inputs.ts'
+import { parseInput } from '../../contracts/validation.ts'
 import { stagedAttachments } from '../../files/staged-attachments.ts'
 import { isRoute, routes } from '../../routes.ts'
+import type { AutoModelConfig } from '../../wire.ts'
 
-import type { AutoModelConfig, CreateWorkspaceRequest } from '../../wire.ts'
-
-import { EFFORT_LABELS } from '../../writes/agent-options.ts'
+import { parseJsonBody } from '../input.ts'
 import { NOT_HANDLED, type RouteHandler } from '../router-types.ts'
 import type { RelayServices } from '../services.ts'
 
@@ -23,10 +23,12 @@ export function createCreateWorkspaceRoutes(
 		// POST /api/workspaces { repo, prompt, model?/effort?/plan?/fast?, send? }
 		// — create a workspace via Conductor's deep link, then configure its first chat.
 		if (isRoute(routes.createWorkspace, req.method, pathname)) {
-			const body = JSON.parse((await readBody(req)) || '{}') as CreateWorkspaceRequest
-			const attachmentIds = body.attachmentIds ?? []
-			if (body.auto !== undefined && typeof body.auto !== 'boolean')
-				return json(req, res, 400, { error: 'auto must be a boolean' })
+			const input = parseJsonBody(await readBody(req))
+			if (input && typeof input === 'object' && 'workflow' in input)
+				return json(req, res, 400, { error: 'Workflow starts through POST /api/workflows.' })
+			const body = parseInput(createWorkspaceSchema, input)
+			const { attachmentIds, model, effort, plan, fast } = body
+			const requestedAgent = { model, effort, plan, fast }
 			if (body.auto && [body.model, body.effort, body.fast, body.plan].some(value => value !== undefined))
 				return json(req, res, 400, {
 					error: 'Auto chooses the agent settings. Omit manual model, effort, Fast, and Plan.'
@@ -41,26 +43,6 @@ export function createCreateWorkspaceRoutes(
 					return json(req, res, 409, { error: error instanceof Error ? error.message : 'Invalid Auto settings.' })
 				}
 			}
-			if ('workflow' in body) return json(req, res, 400, { error: 'Workflow starts through POST /api/workflows.' })
-			if (body.model !== undefined && typeof body.model !== 'string')
-				return json(req, res, 400, { error: 'model must be a picker label' })
-			if (body.effort !== undefined && typeof body.effort !== 'string')
-				return json(req, res, 400, { error: 'effort must be a string' })
-			const effort = body.effort?.trim() || undefined
-			if (effort && !EFFORT_LABELS[effort])
-				return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
-			if (body.plan !== undefined && typeof body.plan !== 'boolean')
-				return json(req, res, 400, { error: 'plan must be a boolean' })
-			if (body.fast !== undefined && typeof body.fast !== 'boolean')
-				return json(req, res, 400, { error: 'fast must be a boolean' })
-			const requestedAgent: ParkedAgentPatch = {
-				model: body.model?.trim() || undefined,
-				effort,
-				plan: body.plan,
-				fast: body.fast
-			}
-			if (!Array.isArray(attachmentIds) || attachmentIds.some(id => typeof id !== 'string'))
-				return json(req, res, 400, { error: 'attachment ids must be a list of strings' })
 			const attachments = stagedAttachments(STAGED_ATTACHMENTS_DIR, attachmentIds)
 			if (!attachments) return json(req, res, 409, { error: 'an attached file is no longer available; add it again' })
 			// The prompt is optional — a bare `path=` opens an empty workspace, like
@@ -71,7 +53,7 @@ export function createCreateWorkspaceRoutes(
 			if (!objective && !body.repo) return json(req, res, 400, { error: 'need a repo or a prompt' })
 			const prompt = objective
 			const agent = requestedAgent
-			const configureAgent = Object.values(agent).some(value => value !== undefined)
+			const configureAgent = hasAgentSettings(agent)
 			// Resolve the repo to a real path: an unmatched `path` would silently land
 			// the workspace in whichever repo Conductor happens to list first.
 			const repo = body.repo ? reads.listRepos().find(r => r.name === body.repo) : undefined
@@ -86,7 +68,6 @@ export function createCreateWorkspaceRoutes(
 					error: 'Conductor didn’t create a workspace — check it’s running and not showing a dialog.'
 				})
 			}
-			// Return as soon as the row exists (~2s) — waiting for delivery would block the
 			if (autoConfig && services.autoModels) {
 				const sessions = reads.listSessions(created.id)
 				services.autoModels.accept({
@@ -106,6 +87,7 @@ export function createCreateWorkspaceRoutes(
 					sent: false
 				})
 			}
+			// Return as soon as the row exists (~2s) — waiting for delivery would block the
 			// request through Conductor's whole setup, measured at 30s+ on a real repo and
 			// past any budget a phone should hold a request open for. The queue delivers on
 			// its own schedule and the phone watches it in /api/state; `send:true` opts API
@@ -116,7 +98,7 @@ export function createCreateWorkspaceRoutes(
 					? firstPrompts.enqueue(
 							created.id,
 							prompt,
-							body.sendImmediately !== false,
+							body.sendImmediately,
 							attachmentIds,
 							configureAgent ? agent : undefined
 						)

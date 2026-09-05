@@ -1,3 +1,4 @@
+import { createWorkspaceSchema, hasAgentSettings } from '../../contracts/agent-inputs.ts'
 import { routes } from '../../routes.ts'
 import { workspaceTitle } from '../../shared.ts'
 import type {
@@ -11,7 +12,8 @@ import type {
 	StatusResult,
 	WorkspaceDiff
 } from '../../wire.ts'
-import { need, rejectUnknown, str } from '../arguments.ts'
+import { need, str } from '../arguments.ts'
+import { defineTool } from '../define-tool.ts'
 import { clip, formatDevServer, unmark } from '../formatters.ts'
 import { WRITE_TIMEOUT_MS } from '../protocol.ts'
 import type { RelayCall, Tool } from '../types.ts'
@@ -101,55 +103,33 @@ export function createListReposTool(call: RelayCall): Tool {
 	}
 }
 
+const createWorkspaceInputSchema = createWorkspaceSchema
+	.omit({
+		// Auto is selected in the PWA; keep this tool's explicit agent settings contract.
+		auto: true,
+		send: true,
+		sendImmediately: true,
+		attachmentIds: true
+	})
+	.extend({
+		repo: createWorkspaceSchema.shape.repo.unwrap().describe('Exact name from list_repos.'),
+		model: createWorkspaceSchema.shape.model.describe(
+			'Picker label from list_models with no session_id. The relay applies it before the first prompt, or configures an empty workspace once its chat exists.'
+		),
+		wait_for_send: createWorkspaceSchema.shape.send,
+		send_immediately: createWorkspaceSchema.shape.sendImmediately
+	})
+	.strict()
+
 export function createCreateWorkspaceTool(call: RelayCall): Tool {
-	return {
+	return defineTool({
 		name: 'create_workspace',
 		description:
 			'Start an ordinary new Conductor workspace in a repo, optionally with a first prompt and agent settings. The workspace starts from a Conductor deep link, so creation itself needs no Accessibility. The relay applies requested model, effort, plan, and fast settings through Conductor’s UI after it creates the first chat and before it delivers the prompt. This utility cannot start or join a Workflow. Returns as soon as the workspace row exists (~2s), before the worktree is built.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				repo: { type: 'string', description: 'Exact name from list_repos.' },
-				prompt: { type: 'string', description: 'First prompt for the new agent. Omit to open an empty workspace.' },
-				model: {
-					type: 'string',
-					description:
-						'Picker label from list_models with no session_id. The relay applies it before the first prompt, or configures an empty workspace once its chat exists.'
-				},
-				effort: {
-					type: 'string',
-					enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'],
-					description: 'Reasoning effort applied before the first prompt.'
-				},
-				plan: { type: 'boolean', description: 'Start the first chat in Conductor’s Plan mode.' },
-				fast: { type: 'boolean', description: 'Set Fast mode before the first prompt.' },
-				wait_for_send: {
-					type: 'boolean',
-					description:
-						'Block until the first prompt is actually delivered (tens of seconds, and longer behind other queued sends). Default false.'
-				},
-				send_immediately: {
-					type: 'boolean',
-					description:
-						"Send the first prompt without waiting for the worktree to finish building, which is how Conductor's own New workspace box behaves. Default true. Pass false only when the agent's first move needs what the repo's setup script installs."
-				}
-			},
-			required: ['repo'],
-			additionalProperties: false
-		},
+		inputSchema: createWorkspaceInputSchema,
 		run: async args => {
-			rejectUnknown(args, ['repo', 'prompt', 'model', 'effort', 'plan', 'fast', 'wait_for_send', 'send_immediately'])
-			const repo = need(args, 'repo')
-			const prompt = str(args.prompt)
-			const model = str(args.model)
-			const effort = str(args.effort)
-			const plan = typeof args.plan === 'boolean' ? args.plan : undefined
-			const fast = typeof args.fast === 'boolean' ? args.fast : undefined
-			const explicitAgent = model !== undefined || effort !== undefined || plan !== undefined || fast !== undefined
-			const configured = explicitAgent
-			const send = args.wait_for_send === true
-			// Default on, matching the relay: an omitted flag must never mean "wait".
-			const sendImmediately = args.send_immediately !== false
+			const { repo, prompt, model, effort, plan, fast, wait_for_send: send, send_immediately: sendImmediately } = args
+			const configured = hasAgentSettings(args)
 			const data = await call<CreateWorkspaceResult>(routes.createWorkspace.path(), {
 				method: routes.createWorkspace.method,
 				body: { repo, prompt, model, effort, plan, fast, send, sendImmediately },
@@ -166,7 +146,7 @@ export function createCreateWorkspaceTool(call: RelayCall): Tool {
 			if (configured) lines.push(data.configured ? 'agent settings applied' : 'agent settings queued')
 			return lines.join('\n')
 		}
-	}
+	})
 }
 
 export function createSetWorkspaceStatusTool(call: RelayCall): Tool {

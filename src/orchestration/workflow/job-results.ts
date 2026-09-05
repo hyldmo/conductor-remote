@@ -14,6 +14,7 @@ import {
 	workflowEffectCorrelationMarker
 } from './helpers.ts'
 import { phaseAfterDeliveredBaton } from './machine.ts'
+import { workflowReportReturnText } from './report.ts'
 import { blockRun, effectCall, effectReadCall, requireEffect, requireRun } from './state.ts'
 import type { CapabilityGrant, WorkflowChildOutcome, WorkflowContext } from './types.ts'
 
@@ -144,6 +145,12 @@ export async function driveJobBaton(
 		// that deterministic final job until every earlier sibling Baton is a
 		// durable root message; accepted outbox rows do not satisfy the barrier.
 		if (designatedFinal && !grant) return false
+		// Old outcomes and already-prepared returns keep their original bytes. A new
+		// return freezes its public message before any UI attempt or receipt lookup.
+		const returnText =
+			outcome.text === undefined
+				? outcome.baton
+				: workflowReportReturnText(job, outcome, await context.deps.materializeReport({ run, job, outcome }))
 		effect = context.db.prepareWorkflowEffect({
 			id: `${run.id}:${actionId}`,
 			runId: run.id,
@@ -152,6 +159,7 @@ export async function driveJobBaton(
 			jobId: job.id,
 			target: { sessionId: run.rootSessionId },
 			inputs: {
+				returnText,
 				...(grant ? { grant } : {}),
 				correlationMarker: workflowEffectCorrelationMarker(run.id, actionId)
 			},
@@ -161,6 +169,7 @@ export async function driveJobBaton(
 		}).effect
 	}
 	const grant = effectGrant(effect) ?? undefined
+	const savedText = (effect.inputs as { returnText?: string } | undefined)?.returnText ?? outcome.baton
 	let current = effect
 	let changed = false
 	if (effect.state !== 'committed') {
@@ -184,7 +193,7 @@ export async function driveJobBaton(
 					...effectCall(run, effect, dispatch, job),
 					job,
 					sessionId: run.rootSessionId as string,
-					text: [outcome.baton, envelope, privateCorrelationBlock(run.id, effect.actionId)].filter(Boolean).join('\n\n')
+					text: [savedText, envelope, privateCorrelationBlock(run.id, effect.actionId)].filter(Boolean).join('\n\n')
 				})
 			},
 			validate: assertDeliveryReceipt

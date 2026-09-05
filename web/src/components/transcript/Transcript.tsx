@@ -74,7 +74,7 @@ export function Transcript({
 	selectedSubagentId?: string | null
 	/** Opens a new chat or workspace with a selected transcript cut staged as an attachment. */
 	onFork?: (format: SplitFormat) => Promise<void>
-	/** Latest response only; same formats as Fork, keeping prior chats inline in this UI tab. */
+	/** Stage a transcript format for compaction on the next send. */
 	onCompact?: (format: SplitFormat) => Promise<void>
 	compactUnavailable?: string
 	onSelectSession?: (sessionId: string) => void

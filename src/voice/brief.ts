@@ -1,6 +1,8 @@
 /** Deterministic, speech-bounded fleet briefing built only from Conductor's read side. */
 import type { Prefs, PrefsPatch } from '../prefs.ts'
 import type { SessionState, Workspace } from '../reads/types.ts'
+import type { ChatHistoryLink } from '../wire.ts'
+import { currentConversations } from './conversations.ts'
 import { parseVoiceDate } from './dates.ts'
 import { clipExact, oneLine, speechText } from './speech.ts'
 
@@ -30,6 +32,7 @@ export interface VoiceQueueItem {
 	title: string
 	updatedAt: string
 	priority: number
+	possibleFollowUp?: boolean
 	decision: VoiceDecision
 }
 
@@ -64,6 +67,14 @@ export interface WorkspaceOverviewItem {
 	update: string
 	/** The newest waiting chat, which may differ from the workspace's latest activity. */
 	waitingForYou: WaitingChat | null
+	/** Counts cover current logical chats matching the filters, excluding replaced contexts. */
+	chatCount: number
+	workingCount: number
+	waitingCount: number
+	possibleFollowUpCount: number
+	/** Bounded previews; the independent waiting cursor can reach every waiting sibling. */
+	waiting: WaitingChat[]
+	possibleFollowUps: WaitingChat[]
 }
 
 export interface WorkspaceOverview {
@@ -73,8 +84,12 @@ export interface WorkspaceOverview {
 	current: number
 	/** Matching workspaces with a chat waiting for input; unread alone is not a question. */
 	waitingForYou: number
-	/** Bounded waiting-work heads, even when the latest activity page is all running chats. */
+	/** Matching chats explicitly waiting for input, across all matching workspaces. */
+	waitingChatCount: number
+	possibleFollowUpCount: number
+	/** Independently paged waiting chats, even when the activity page is all running chats. */
 	waiting: (WaitingChat & { workspaceId: string; title: string })[]
+	waitingCursor: number | null
 	dormant: number
 	completed: number
 	filtered: number
@@ -98,6 +113,7 @@ export interface WorkspaceOverviewFilters {
 
 interface BriefDeps {
 	reads: VoiceBriefReads
+	chatHistory?: (workspaceId: string) => Record<string, ChatHistoryLink>
 	locked: () => Promise<boolean>
 	readPrefs: () => Prefs
 	writePrefs: (patch: PrefsPatch) => Prefs
@@ -283,6 +299,12 @@ function fallbackDecision(state: SessionState, said: string): VoiceDecision {
 
 function spokenDecision(item: VoiceQueueItem): string {
 	const d = item.decision
+	if (item.possibleFollowUp) {
+		return clipExact(
+			`${item.title}. Possible follow-up: ${d.question} Open the chat to check whether an answer is still needed.`,
+			400
+		)
+	}
 	const fields = [
 		`Situation: ${item.title}. ${d.situation}`,
 		`Decision needed: ${d.question}`,
@@ -312,8 +334,13 @@ export class VoiceBriefBoard {
 			parseProseDecision(said) ??
 			(waitingStatus(state) ? parseStructuredQuestion(this.deps.reads.lastQuestionInput(state.sessionId)) : null)
 		const question = decision?.question ?? trailingQuestion(said)
-		const waiting = waitingStatus(state) || ((!state.status || state.status === 'idle') && question !== null)
-		return { said, decision, question, waiting }
+		const waiting = waitingStatus(state)
+		const possibleFollowUp = (!state.status || state.status === 'idle') && question !== null
+		return { said, decision, question, waiting, possibleFollowUp }
+	}
+
+	private currentStates(): SessionState[] {
+		return currentConversations(this.deps.reads.listSessionStates(), this.deps.chatHistory ?? (() => ({})))
 	}
 
 	private build(): { queue: VoiceQueueItem[]; working: number; dormant: number } {
@@ -323,7 +350,7 @@ export class VoiceBriefBoard {
 		let working = 0
 		let dormant = 0
 		const queue: VoiceQueueItem[] = []
-		for (const state of this.deps.reads.listSessionStates()) {
+		for (const state of this.currentStates()) {
 			const workspace = workspaces.get(state.workspaceId)
 			// Completion applies to every chat signal, including working and waiting for input.
 			if (!workspace || isDone(workspace) || isMerged(workspace)) continue
@@ -339,16 +366,17 @@ export class VoiceBriefBoard {
 
 			const signal = this.signal(state)
 			const unread = workspace.unread_sessions.some(s => s.id === state.sessionId)
-			const priority = state.status === 'error' ? 0 : waitingStatus(state) ? 1 : signal.waiting ? 2 : unread ? 3 : 4
+			const priority = state.status === 'error' ? 0 : signal.waiting ? 1 : signal.possibleFollowUp || unread ? 3 : 4
 			queue.push({
 				workspaceId: state.workspaceId,
 				sessionId: state.sessionId,
 				title: state.sessionTitle ? `${state.workspaceTitle}, ${state.sessionTitle}` : state.workspaceTitle,
 				updatedAt: state.updatedAt,
 				priority,
+				...(signal.possibleFollowUp ? { possibleFollowUp: true } : {}),
 				decision: signal.decision ?? {
 					...fallbackDecision(state, signal.said),
-					...(signal.waiting && signal.question ? { question: signal.question } : {})
+					...((signal.waiting || signal.possibleFollowUp) && signal.question ? { question: signal.question } : {})
 				}
 			})
 		}
@@ -364,7 +392,11 @@ export class VoiceBriefBoard {
 	}
 
 	/** A deliberately uncached read: a new overview must not replay the call-opening tally. */
-	async workspaceOverview(cursor = 0, filters: WorkspaceOverviewFilters = {}): Promise<WorkspaceOverview> {
+	async workspaceOverview(
+		cursor = 0,
+		filters: WorkspaceOverviewFilters = {},
+		waitingCursor = 0
+	): Promise<WorkspaceOverview> {
 		if (filters.agentStatus && !OVERVIEW_AGENT_STATUSES.has(filters.agentStatus))
 			throw new Error('agent_status must be working, idle, error, or needs-you')
 		const now = this.now()
@@ -383,7 +415,7 @@ export class VoiceBriefBoard {
 			filters.prStatus !== undefined
 		const workspaces = new Map(this.deps.reads.listWorkspaces().map(workspace => [workspace.id, workspace]))
 		const grouped = new Map<string, SessionState[]>()
-		for (const state of this.deps.reads.listSessionStates()) {
+		for (const state of this.currentStates()) {
 			if (!workspaces.has(state.workspaceId)) continue
 			const states = grouped.get(state.workspaceId) ?? []
 			states.push(state)
@@ -394,6 +426,7 @@ export class VoiceBriefBoard {
 		let completed = 0
 		let filtered = 0
 		const items: WorkspaceOverviewItem[] = []
+		const allWaiting: WorkspaceOverview['waiting'] = []
 		for (const [workspaceId, workspace] of workspaces) {
 			if (filters.repo && workspace.repo_name?.toLowerCase() !== filters.repo.toLowerCase()) {
 				filtered++
@@ -439,22 +472,30 @@ export class VoiceBriefBoard {
 			}
 			current.sort((a, b) => newestFirst(a.state, b.state))
 			const { state, signal } = current[0]
-			const waiting = current.find(candidate => candidate.signal.waiting)
+			const toQuestion = (candidate: (typeof current)[number]): WaitingChat => ({
+				sessionId: candidate.state.sessionId,
+				chatTitle: candidate.state.sessionTitle,
+				updatedAt: candidate.state.updatedAt,
+				question: candidate.signal.question ? oneLine(speechText(candidate.signal.question, 180), 180) : null
+			})
+			const waiting = current.filter(candidate => candidate.signal.waiting).map(toQuestion)
+			const possibleFollowUps = current.filter(candidate => candidate.signal.possibleFollowUp).map(toQuestion)
+			const title = oneLine(state.workspaceTitle, 100)
+			allWaiting.push(...waiting.map(chat => ({ ...chat, workspaceId, title })))
 			items.push({
 				workspaceId,
 				sessionId: state.sessionId,
-				title: oneLine(state.workspaceTitle, 100),
+				title,
 				status: overviewStatus(state, workspace, signal.waiting),
 				updatedAt: state.updatedAt,
 				update: oneLine(speechText(signal.said, 150), 150),
-				waitingForYou: waiting
-					? {
-							sessionId: waiting.state.sessionId,
-							chatTitle: waiting.state.sessionTitle,
-							updatedAt: waiting.state.updatedAt,
-							question: waiting.signal.question ? oneLine(speechText(waiting.signal.question, 180), 180) : null
-						}
-					: null
+				waitingForYou: waiting[0] ?? null,
+				chatCount: current.length,
+				workingCount: current.filter(candidate => candidate.state.status === 'working').length,
+				waitingCount: waiting.length,
+				possibleFollowUpCount: possibleFollowUps.length,
+				waiting: waiting.slice(0, OVERVIEW_PAGE_SIZE),
+				possibleFollowUps: possibleFollowUps.slice(0, OVERVIEW_PAGE_SIZE)
 			})
 		}
 		items.sort(newestFirst)
@@ -465,31 +506,42 @@ export class VoiceBriefBoard {
 		const noun = items.length === 1 ? 'workspace' : 'workspaces'
 		const lines = page.map(item => {
 			const waiting = item.waitingForYou
+			const followUp = item.possibleFollowUps[0]
 			const attention = waiting
 				? `${waiting.sessionId === item.sessionId ? '' : ` ${waiting.chatTitle ?? 'Another chat'} is waiting for you.`}${waiting.question ? ` ${waiting.question}` : ''}`
-				: item.update
-					? ` ${item.update}`
-					: ' No agent update yet.'
-			return `${item.title} ${item.status}. ${spokenUpdateAge(item.updatedAt, now)}${attention}`
+				: followUp
+					? ` Possible follow-up${followUp.chatTitle ? ` in ${followUp.chatTitle}` : ''}: ${followUp.question}`
+					: item.update
+						? ` ${item.update}`
+						: ' No agent update yet.'
+			const chats =
+				item.chatCount > 1
+					? ` ${item.chatCount} chats: ${item.workingCount} running, ${item.waitingCount} need input.`
+					: ''
+			return `${item.title} ${item.status}. ${spokenUpdateAge(item.updatedAt, now)}${chats}${attention}`
 		})
-		const waiting = items
-			.flatMap(item =>
-				item.waitingForYou ? [{ ...item.waitingForYou, workspaceId: item.workspaceId, title: item.title }] : []
-			)
-			.sort(newestFirst)
+		allWaiting.sort(newestFirst)
+		const waitingOffset = Number.isFinite(waitingCursor) ? Math.max(0, Math.floor(waitingCursor)) : 0
+		const waitingPage = allWaiting.slice(waitingOffset, waitingOffset + OVERVIEW_PAGE_SIZE)
+		const nextWaiting =
+			waitingOffset + waitingPage.length < allWaiting.length ? waitingOffset + waitingPage.length : null
+		const waitingWorkspaces = items.filter(item => item.waitingCount > 0).length
 		const more = next === null ? '' : ` ${items.length - next} more current; ask me to continue.`
 		const none = items.length ? '' : filtered ? ' Nothing matches those filters.' : ' Nothing is active right now.'
 		const completedSummary = completed ? `, ${completed} completed hidden` : ''
 		const filteredSummary = filtered ? `, ${filtered} outside filters` : ''
 		return {
 			spoken: clipExact(
-				`Fresh overview: ${items.length} current ${noun}${completedSummary}${filteredSummary}, ${dormant} dormant. ${waiting.length} waiting for you. ${lines.join(' ')}${more}${none}`.trim(),
+				`Fresh overview: ${items.length} current ${noun}${completedSummary}${filteredSummary}, ${dormant} dormant. ${waitingWorkspaces} workspaces with ${allWaiting.length} chats waiting for you. ${lines.join(' ')}${more}${none}`.trim(),
 				700
 			),
 			asOf: new Date(now).toISOString(),
 			current: items.length,
-			waitingForYou: waiting.length,
-			waiting: waiting.slice(0, OVERVIEW_PAGE_SIZE),
+			waitingForYou: waitingWorkspaces,
+			waitingChatCount: allWaiting.length,
+			possibleFollowUpCount: items.reduce((sum, item) => sum + item.possibleFollowUpCount, 0),
+			waiting: waitingPage,
+			waitingCursor: nextWaiting,
 			dormant,
 			completed,
 			filtered,
@@ -514,11 +566,14 @@ export class VoiceBriefBoard {
 	async nextDecision(cursor = 0): Promise<NextDecision | null> {
 		const items = this.items()
 		const workspaces = new Map(this.deps.reads.listWorkspaces().map(workspace => [workspace.id, workspace]))
+		const current = new Map(this.currentStates().map(state => [state.sessionId, state]))
 		// Keep snapshot positions stable while skipping work completed since the roll call.
 		for (let index = Math.max(0, Math.floor(cursor)); index < items.length; index++) {
 			const item = items[index]
 			const workspace = workspaces.get(item.workspaceId)
 			if (!workspace || isDone(workspace) || isMerged(workspace)) continue
+			const state = current.get(item.sessionId)
+			if (!state || state.status === 'working' || state.updatedAt !== item.updatedAt) continue
 			return {
 				spoken: spokenDecision(item),
 				cursor: index + 1,

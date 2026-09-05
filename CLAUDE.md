@@ -588,7 +588,20 @@ Two asymmetric halves — keep them separate:
     session id and completion cursor for `read_chat` with `after: 0`. Helpers also
     receive their parent's id and a transcript cut frozen at task acceptance.
     Existing queued returns keep their saved text for receipt matching. Managed
-    Workflow Batons retain their capability and phase-delivery contract.
+    Workflow Batons retain their capability and phase-delivery contract. New managed
+    outcomes also freeze the complete final reply and cursor; `workflow/report.ts`
+    returns a stable attachment plus a `read_chat` pointer beside the inline Baton.
+    Already-prepared returns and older outcomes preserve their saved bytes.
+    Each Workflow block durably claims one push attempt and at most one queued root
+    notice. The latter uses background `uiTurn`, checks compatibility and quarantine,
+    and skips an unprompted or unavailable root. Notice failures never re-block a run;
+    claims prevent duplicate sends across restart, with a possible lost notice if the
+    relay exits after claiming but before sending. The phone summary stays durable.
+    Failed process inventories defer work until a later wake; three consecutive
+    failures, persisted in audit events, expose Retry. A verified incompatible relay
+    still blocks immediately. Only a completed role apply with a present, mismatching
+    readback gets deterministic post-dispatch failure; missing chats and uncertain
+    writes keep the existing quarantine behavior.
 
     **Workflow mode is the explicit root entry point, not Conductor Plan mode**
     (`src/orchestration/workflow/prompts.ts`, `web/src/components/orchestration/WorkflowModePill.tsx`). The pill in New
@@ -1016,6 +1029,21 @@ Two asymmetric halves — keep them separate:
     attached these files. Read them before proceeding. - &lt;path&gt; (113.8 KB)"* ahead of the
     prompt, and read the file. The attachment token is the one canonical reference: a
     second prose path creates a duplicate link in Conductor's chat.
+  - **Fork context waits for the user's first send.** The PWA saves the transcript as a
+    draft attachment with `source: 'fork'`, outside the textarea and attachment tray.
+    That context alone cannot enable Send. The user's text or added files enable it,
+    and one ordinary prompt carries the context and request together. The persisted
+    pending bubble owns both through delivery and Retry; clearing the draft prevents
+    the context from riding on later messages. The marker survives preference sync,
+    reloads and the workspace-to-chat draft move. Existing `Forked from` drafts are
+    converted when local preferences load or restore from the host, keeping the user's
+    continuation. **Compact stages a choice until Send.** Both Compact controls toggle
+    the per-chat choice in `web/src/lib/prompts/compact-draft.ts`; the composer shows
+    a cancellable banner and leaves the current chat and draft in place. Send rechecks
+    eligibility, creates the new context with the selected format, and hands its draft
+    to the ordinary persisted send. Both source and destination composers stay guarded
+    while that handoff runs. A failed creation keeps the original draft and choice;
+    a failed delivery retries in the new chat without creating another fork.
   - **⌘T alone does not open the tab, and it fails by opening something else.** The
     keystroke lands wherever focus is, so a focused terminal panel takes it and you get a
     new *terminal* — measured: the run reported success, `sessions` gained nothing, and
@@ -1140,6 +1168,15 @@ Two asymmetric halves — keep them separate:
       phone gets. Elsewhere the tool *is* the procedure, same in and same out, which
       is why `.meta` pays there and mostly does not here. Revisit past ~25 tools, or
       when something other than the phone becomes the primary client.
+    - **Zod now shares the first three write contracts.** `src/contracts/agent-inputs.ts`
+      owns prompt, workspace-creation and agent-settings inputs; `wire.ts` re-exports
+      their inferred input types. `src/mcp/define-tool.ts` exports JSON Schema with
+      `io: 'input'` (defaults stay optional) and parses every call before its HTTP hop.
+      Tools explicitly map snake_case fields and expose their existing subset of API
+      options. HTTP keeps extra-field compatibility with cached PWAs; the ordinary
+      creation/send routes reject `workflow` before parsing can strip it. Input errors
+      become HTTP 400 or MCP tool errors. Browser callers still import only types;
+      the effort values and guard in `shared.ts` need no Zod runtime in the PWA.
 
 - **Notifications are a read that pushes** — the cheap third shape, on the durable
   side of the split. `src/notifications/notify.ts` polls the same read-only SQLite for

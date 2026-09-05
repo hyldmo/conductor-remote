@@ -1,3 +1,5 @@
+import { setAgentOptionsSchema } from '../../contracts/agent-inputs.ts'
+import { parseInput } from '../../contracts/validation.ts'
 import { writeAttachment } from '../../files/attachments.ts'
 
 import { noteViewing } from '../../notifications/notify.ts'
@@ -5,8 +7,9 @@ import { noteViewing } from '../../notifications/notify.ts'
 import { routeParam, routes } from '../../routes.ts'
 
 import { VIEWING_HEADER } from '../../shared.ts'
-import { EFFORT_LABELS, listAgentModels, setDefaultModel } from '../../writes/agent-options.ts'
+import { listAgentModels, setDefaultModel } from '../../writes/agent-options.ts'
 import { closeChat, restoreChat, stopTurn } from '../../writes/chats.ts'
+import { parseJsonBody } from '../input.ts'
 import { NOT_HANDLED, type RouteHandler } from '../router-types.ts'
 import type { RelayServices } from '../services.ts'
 
@@ -156,16 +159,7 @@ export function createSessionsRoutes(
 
 		if (agentOf) {
 			const sessionId = agentOf
-			const body = JSON.parse((await readBody(req)) || '{}') as {
-				effort?: string
-				plan?: boolean
-				fast?: boolean
-				model?: string
-				workspaceId?: string
-			}
-			if (body.effort && !EFFORT_LABELS[body.effort]) {
-				return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
-			}
+			const body = parseInput(setAgentOptionsSchema, parseJsonBody(await readBody(req)))
 			const frozen = workflowFrozenError(sessionId)
 			if (frozen && (body.model !== undefined || body.effort !== undefined || body.fast !== undefined)) {
 				return json(req, res, 409, frozen)

@@ -13,6 +13,7 @@ import {
 	retryWorkflowEffect
 } from './effect-recovery.ts'
 import {
+	markWorkflowConfigurationRejected,
 	markWorkflowEffectAmbiguous,
 	markWorkflowEffectCancelled,
 	markWorkflowEffectCommitted,
@@ -26,7 +27,7 @@ import {
 	markWorkflowEffectSatisfiedWithoutDispatch,
 	prepareWorkflowEffect
 } from './effects.ts'
-import { listWorkflowEvents } from './events.ts'
+import { listWorkflowEvents, recordWorkflowObservation } from './events.ts'
 import { getIdempotentMutation, idempotentMutation } from './idempotency.ts'
 import { createWorkflowJobAttempt, recordLateWorkflowChildResult, updateWorkflowJobAttempt } from './job-attempts.ts'
 import {
@@ -189,6 +190,8 @@ export class OrchestrationDb {
 
 	markWorkflowEffectFailed = (...args: OperationArgs<typeof markWorkflowEffectFailed>) =>
 		markWorkflowEffectFailed(this.connection, ...args)
+	markWorkflowConfigurationRejected = (...args: OperationArgs<typeof markWorkflowConfigurationRejected>) =>
+		markWorkflowConfigurationRejected(this.connection, ...args)
 
 	markWorkflowEffectFailedBeforeMayExecute = (
 		...args: OperationArgs<typeof markWorkflowEffectFailedBeforeMayExecute>
@@ -232,6 +235,8 @@ export class OrchestrationDb {
 
 	listWorkflowEvents = (...args: OperationArgs<typeof listWorkflowEvents>) =>
 		listWorkflowEvents(this.connection, ...args)
+	recordWorkflowObservation = (...args: OperationArgs<typeof recordWorkflowObservation>) =>
+		recordWorkflowObservation(this.connection, ...args)
 
 	registerRelayInstance = (...args: OperationArgs<typeof registerRelayInstance>) =>
 		registerRelayInstance(this.connection, ...args)

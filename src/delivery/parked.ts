@@ -25,18 +25,12 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import type { AgentPatch } from '../contracts/agent-inputs.ts'
 
 export type ParkedStatus = 'waiting' | 'failed'
 
 /** Staged agent settings riding with the prompt (mirrors the phone's `AgentPatch`). */
-export interface ParkedAgentPatch {
-	/** Draft preference; consumed by Auto intake, never passed to a UI write. */
-	auto?: boolean
-	effort?: string
-	plan?: boolean
-	fast?: boolean
-	model?: string
-}
+export type ParkedAgentPatch = AgentPatch
 
 export interface ParkedPrompt {
 	autoModel?: true

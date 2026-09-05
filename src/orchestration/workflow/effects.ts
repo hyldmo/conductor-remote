@@ -9,7 +9,7 @@ import {
 	WorkflowTransitionError
 } from '../persistence/db.ts'
 import { quarantineAndBlock } from './effect-recovery.ts'
-import { WorkflowCoordinatorError } from './errors.ts'
+import { WorkflowCompatibilityReadError, WorkflowCoordinatorError, WorkflowRoleVerificationError } from './errors.ts'
 import { cleanUnknown, errorCode, errorMessage, preExecutionRetryClass, sameRelay } from './helpers.ts'
 import { isTerminalWorkflowPhase } from './machine.ts'
 import { assertCompatible, blockRun, effectReadCall, requireEffect, requireRun } from './state.ts'
@@ -232,6 +232,54 @@ export async function failEffect(
 ): Promise<DurableEffectResult> {
 	let effect = requireEffect(context, run.id, actionId)
 	const currentRun = requireRun(context, run.id)
+	if (
+		error instanceof WorkflowCompatibilityReadError &&
+		!isTerminalWorkflowPhase(currentRun.phase) &&
+		!effect.mayExecute
+	) {
+		// The read failed before any external command was released. Settle this
+		// attempt, put the exact intent back, and let the wake budget decide when to pause.
+		const failure = {
+			runId: run.id,
+			actionId,
+			owner: context.relay,
+			attemptNumber,
+			errorCode: error.code,
+			errorMessage: error.message
+		}
+		if (effect.state === 'prepared' && sameRelay(effect.owner, context.relay)) {
+			context.db.markWorkflowEffectFailed(failure)
+		} else if (effect.state === 'dispatched') {
+			context.db.markWorkflowEffectFailedBeforeMayExecute(failure)
+		}
+		if (requireEffect(context, run.id, actionId).state === 'failed') {
+			context.db.retryWorkflowEffect(run.id, actionId, `compatibility-retry:${actionId}:${attemptNumber}`)
+		}
+		throw error
+	}
+	if (
+		error instanceof WorkflowRoleVerificationError &&
+		effect.state === 'dispatched' &&
+		effect.mayExecute &&
+		(effect.kind === 'configure_root' || effect.kind === 'configure_child')
+	) {
+		effect = context.db.markWorkflowConfigurationRejected({
+			runId: run.id,
+			actionId,
+			owner: context.relay,
+			attemptNumber,
+			errorCode: error.code,
+			errorMessage: error.message,
+			evidence: { applied: true, matched: false }
+		})
+		blockRun(context, currentRun, {
+			actionId,
+			errorCode: error.code,
+			message: error.message,
+			retryClass: 'deterministic'
+		})
+		return { effect, changed: true }
+	}
 	if (currentRun.phase === 'cancelled' || currentRun.phase === 'completed') {
 		if (effect.state === 'dispatched') {
 			if (!effect.mayExecute) {

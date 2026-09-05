@@ -182,6 +182,27 @@ export function markWorkflowEffectFailedBeforeMayExecute(
 	})
 }
 
+/** A finished configuration write with a known, mismatching readback is safe to retry. */
+export function markWorkflowConfigurationRejected(
+	context: PersistenceConnection,
+	input: Parameters<typeof markWorkflowEffectFailed>[1]
+): WorkflowEffectRecord {
+	return context.immediate(() => {
+		const effect = requireEffectByAction(context, input.runId, input.actionId)
+		if (effect.kind !== 'configure_root' && effect.kind !== 'configure_child') {
+			throw new WorkflowTransitionError('only a configuration effect can have a verified rejection')
+		}
+		return transitionEffect(context, {
+			...input,
+			from: ['dispatched'],
+			to: 'failed',
+			requireMayExecute: true,
+			eventKey: input.eventKey ?? `configuration_rejected:${input.actionId}:${input.attemptNumber}`,
+			eventType: 'workflow_configuration_rejected'
+		})
+	})
+}
+
 export function markWorkflowEffectAmbiguous(
 	context: PersistenceConnection,
 	input: {

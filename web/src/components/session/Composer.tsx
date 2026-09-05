@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUp, Info, LoaderCircle, Minimize2, PhoneCall, Snowflake, Square, WifiOff } from 'lucide-react'
+import { ArrowUp, Info, LoaderCircle, Minimize2, PhoneCall, Snowflake, Square, WifiOff, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useAutoModelConfig, useContextBreakdown, useWorkflowRoleReadiness } from '../../hooks/agents.ts'
 import { useSendPrompt } from '../../hooks/send.ts'
@@ -10,6 +10,7 @@ import { enterSubmits } from '../../lib/keys.ts'
 import { isLockedError } from '../../lib/lock.ts'
 import { requestPrefsFlush } from '../../lib/prefs.ts'
 import { coldPromptCache } from '../../lib/prompts/cache.ts'
+import { compactDraftLabel, DEFAULT_COMPACT } from '../../lib/prompts/compact-draft.ts'
 import type { ActuatorInfo, Session, WorkflowRoleName, WorkflowRunWire } from '../../lib/types.ts'
 import { useApp } from '../../store.ts'
 import { AgentBar } from '../agents/AgentBar.tsx'
@@ -23,8 +24,8 @@ import {
 
 /**
  * The draft lives in the store (persisted per chat — see lib/prompts/draft.ts), not in
- * local state. A fork stages its transcript attachment in the new chat before
- * this component mounts, so the box has to show it without waiting for a remount.
+ * local state. Fork context is a separate saved attachment: it stays out of the
+ * composer and joins the first message the user sends, including its retries.
  *
  * The agent controls live *inside* the card, under the text and sharing the send
  * button's row — one border, one left edge (card padding 8px + control padding
@@ -44,6 +45,7 @@ export function Composer({
 	working,
 	actuator,
 	onCompact,
+	preparingCompact = false,
 	compactUnavailable,
 	onCall,
 	callActive = false,
@@ -62,8 +64,10 @@ export function Composer({
 	/** Is this chat mid-answer? Conductor's status, or our own optimistic hint (see SessionView). */
 	working: boolean
 	actuator?: ActuatorInfo
-	/** Start fresh context while keeping conversation history and moving the draft. */
-	onCompact?: () => Promise<void>
+	/** On Send, create fresh context and deliver the draft through that chat. */
+	onCompact?: (queue: boolean) => Promise<void>
+	/** Covers the source and destination while the parent prepares and sends a compacted draft. */
+	preparingCompact?: boolean
 	compactUnavailable?: string
 	/** Start a call with this pane's active chat as its initial context. */
 	onCall?: () => void
@@ -78,13 +82,14 @@ export function Composer({
 	workflow?: WorkflowRunWire
 	/** This session's frozen role inside `workflow`, when it is the root or a tracked child. */
 	workflowRole?: WorkflowRoleName
-	/** A newly forked chat asks to continue from the end of its staged handoff. */
+	/** Focus the user's draft after opening a fork. */
 	focusDraft?: boolean
 	onDraftFocused?: () => void
 }) {
 	const draftKey = sessionId ?? workspaceId
 	const text = useApp(s => s.drafts[draftKey] ?? '')
 	const readyAttachments = useApp(s => s.draftAttachments[draftKey] ?? EMPTY_ATTACHMENTS)
+	const visibleAttachments = readyAttachments.filter(attachment => attachment.source !== 'fork')
 	const setDraft = useApp(s => s.setDraft)
 	const addDraftAttachment = useApp(s => s.addDraftAttachment)
 	const removeDraftAttachment = useApp(s => s.removeDraftAttachment)
@@ -93,12 +98,16 @@ export function Composer({
 	const setFocusedDraft = useApp(s => s.setFocusedDraft)
 	const online = useApp(s => s.online)
 	const clearWorking = useApp(s => s.clearWorking)
+	const compactChoice = useApp(s => (sessionId ? s.compactDrafts[sessionId] : undefined))
+	const setCompactDraft = useApp(s => s.setCompactDraft)
 	const sendPrompt = useSendPrompt()
 	const queryClient = useQueryClient()
 	const [stopping, setStopping] = useState(false)
 	const [stopError, setStopError] = useState<string | null>(null)
-	const [compacting, setCompacting] = useState(false)
-	const [compactError, setCompactError] = useState<string | null>(null)
+	const [compactingKey, setCompactingKey] = useState<string | null>(null)
+	const compacting = preparingCompact || compactingKey === draftKey
+	const [compactFailure, setCompactFailure] = useState<{ draftKey: string; message: string } | null>(null)
+	const compactError = compactFailure?.draftKey === draftKey ? compactFailure.message : null
 	const workflowMode = useApp(s => !!sessionId && s.workflowDrafts[sessionId] === true)
 	const autoConfig = useAutoModelConfig()
 	const stagedAuto = useApp(s => (sessionId ? s.agentDrafts[sessionId]?.auto : undefined))
@@ -111,7 +120,7 @@ export function Composer({
 	const ref = useRef<HTMLTextAreaElement>(null)
 	const attachmentUploads = useAttachmentUploads({
 		draftKey,
-		ready: readyAttachments,
+		ready: visibleAttachments,
 		enabled: !!sessionId && online,
 		upload: async (key, file) => (await client.uploadAttachment(key, workspaceId, file)).attachment,
 		accept: addDraftAttachment,
@@ -120,6 +129,7 @@ export function Composer({
 	const uploading = attachmentUploads.uploading
 	const attachmentError = attachmentUploads.hasError
 	const prompt = [...readyAttachments.map(attachment => attachment.token), text.trim()].filter(Boolean).join('\n')
+	const hasMessage = !!text.trim() || visibleAttachments.length > 0
 	const workflowSendPending = useApp(s => s.pending.some(p => p.sessionId === sessionId && !!p.workflow))
 	const localPromptPending = useApp(s => s.pending.some(p => p.sessionId === sessionId))
 	const workflowEligibilityProblem = !session
@@ -179,7 +189,7 @@ export function Composer({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-measure whenever the text changes, however it changed
 	useEffect(autosize, [text])
 
-	// A fork has just switched to a blank chat with its handoff in the draft. Focus only
+	// A fork has just switched to a blank chat with its context staged. Focus only
 	// that explicit request — selecting an ordinary existing chat must not steal focus.
 	useEffect(() => {
 		if (!focusDraft) return
@@ -195,7 +205,7 @@ export function Composer({
 	// until the dedicated route returns the 202 durable-acceptance receipt.
 	const send = (queue = false) => {
 		if (
-			!prompt ||
+			!hasMessage ||
 			uploading ||
 			attachmentError ||
 			compacting ||
@@ -206,6 +216,10 @@ export function Composer({
 			(workflowMode && !workflowReady)
 		)
 			return
+		if (compactChoice) {
+			void sendCompacted(queue)
+			return
+		}
 		const startingWorkflow = workflowMode
 		void sendPrompt({
 			sessionId,
@@ -227,17 +241,20 @@ export function Composer({
 		}
 	}
 
-	const compactDraft = async () => {
-		if (!(onCompact && prompt) || uploading || attachmentError || compacting || compactUnavailable || !online) return
-		setCompacting(true)
-		setCompactError(null)
+	const sendCompacted = async (queue: boolean) => {
+		if (!onCompact || compactUnavailable) {
+			setCompactFailure({ draftKey, message: compactUnavailable ?? 'Compacting is unavailable in this chat' })
+			return
+		}
+		setCompactingKey(draftKey)
+		setCompactFailure(null)
 		try {
-			await onCompact()
+			await onCompact(queue)
 			attachmentUploads.clearPending()
 		} catch (err) {
-			setCompactError(err instanceof Error ? err.message : 'Could not compact this chat')
+			setCompactFailure({ draftKey, message: err instanceof Error ? err.message : 'Could not compact this chat' })
 		} finally {
-			setCompacting(false)
+			setCompactingKey(null)
 		}
 	}
 
@@ -272,12 +289,13 @@ export function Composer({
 	const precise = actuator?.precise && actuator.available
 	const canStop = working && !!sessionId
 	const canSend =
-		(!!text.trim() || readyAttachments.length > 0) &&
+		hasMessage &&
 		!uploading &&
 		!attachmentError &&
 		!workflowSendPending &&
 		!autoPending &&
-		(!workflowMode || workflowReady)
+		(!workflowMode || workflowReady) &&
+		(!compactChoice || (!!onCompact && !compactUnavailable))
 	const coldCache = !working && canSend && session && onCompact ? coldPromptCache(session) : null
 
 	return (
@@ -303,24 +321,57 @@ export function Composer({
 					{isLockedError(stopError) ? <UnlockLink className="mt-1 inline-block" /> : null}
 				</div>
 			) : null}
-			{coldCache ? (
-				<div className="mb-2 flex items-center gap-2 rounded-xl border border-cold-cache/20 bg-cold-cache/8 px-2.5 py-2 text-cold-cache">
-					<Snowflake size={14} className="shrink-0" />
+			{compactChoice || preparingCompact ? (
+				<div
+					className="mb-2 flex items-center gap-2 rounded-xl border border-accent/20 bg-accent-soft px-2.5 py-2 text-accent"
+					role="status"
+				>
+					{compacting ? (
+						<LoaderCircle size={14} className="shrink-0 animate-spin" />
+					) : (
+						<Minimize2 size={14} className="shrink-0" />
+					)}
 					<div className="min-w-0 flex-1">
-						<div className="text-xs font-medium">Prompt cache may be cold</div>
-						<div className="text-[11px] text-muted">Idle past its {coldCache.ttlLabel} window</div>
-						{compactError ? (
+						<div className="text-xs font-medium">
+							{compacting ? 'Compacting and sending…' : 'Will compact before sending'}
+						</div>
+						<div className="text-[11px] text-muted">{compactDraftLabel(compactChoice ?? DEFAULT_COMPACT)}</div>
+						{!compacting && (compactError || compactUnavailable) ? (
 							<div className="mt-0.5 text-[11px] text-del" role="alert">
-								{compactError}
-								{isLockedError(compactError) ? <UnlockLink className="ml-1" /> : null}
+								{compactError || compactUnavailable}
+								{isLockedError(compactError || compactUnavailable || '') ? <UnlockLink className="ml-1" /> : null}
 							</div>
 						) : null}
 					</div>
 					<button
 						type="button"
-						onClick={() => void compactDraft()}
+						aria-label="Cancel compact before sending"
+						title="Keep the current context"
+						disabled={compacting}
+						onClick={() => {
+							if (sessionId) setCompactDraft(sessionId, null)
+							setCompactFailure(null)
+						}}
+						className="flex size-8 shrink-0 items-center justify-center rounded-lg active:bg-accent/10 disabled:opacity-50"
+					>
+						<X size={15} />
+					</button>
+				</div>
+			) : coldCache ? (
+				<div className="mb-2 flex items-center gap-2 rounded-xl border border-cold-cache/20 bg-cold-cache/8 px-2.5 py-2 text-cold-cache">
+					<Snowflake size={14} className="shrink-0" />
+					<div className="min-w-0 flex-1">
+						<div className="text-xs font-medium">Prompt cache may be cold</div>
+						<div className="text-[11px] text-muted">Idle past its {coldCache.ttlLabel} window</div>
+					</div>
+					<button
+						type="button"
+						aria-label="Compact before sending"
+						onClick={() => {
+							if (sessionId) setCompactDraft(sessionId, DEFAULT_COMPACT)
+						}}
 						disabled={compacting || !!compactUnavailable || !online}
-						title={compactUnavailable ?? 'Start fresh context and keep the conversation and draft'}
+						title={compactUnavailable ?? 'Use fresh context when you send this message'}
 						className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-cold-cache/12 px-2.5 text-xs font-semibold transition active:scale-[0.97] active:bg-cold-cache/20 disabled:opacity-50"
 					>
 						{compacting ? <LoaderCircle size={13} className="animate-spin" /> : <Minimize2 size={13} />}

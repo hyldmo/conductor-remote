@@ -135,6 +135,8 @@ export type PrStatus = 'merged' | 'draft' | 'conflicts' | 'checks_failed' | 'che
 export interface SessionState {
 	sessionId: string
 	workspaceId: string
+	/** Creation is the stable boundary for detecting a predecessor resumed after a handoff. */
+	createdAt?: string
 	/** 'working' | 'idle' | 'error' — Conductor's own live agent status. */
 	status: string | null
 	/** Session activity, in Conductor's own sortable timestamp format. */

@@ -9,8 +9,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from './config.ts'
-import type { ParkedAgentPatch } from './delivery/parked.ts'
+import type { AgentDraft } from './contracts/agent-inputs.ts'
 import { attachmentName, attachmentToken } from './files/attachments.ts'
+import { isAgentEffort } from './shared.ts'
 
 /** A ready file reference carried with one unsent composer draft. The bytes stay on the host. */
 export interface DraftAttachment {
@@ -18,6 +19,8 @@ export interface DraftAttachment {
 	path: string
 	bytes: number
 	token: string
+	/** Fork context stays outside the composer and travels with the next user message. */
+	source?: 'fork'
 	/** Present only while a New Workspace file is waiting outside its future worktree. */
 	stageId?: string
 }
@@ -26,7 +29,7 @@ export interface SyncedDraft {
 	/** Empty is valid when agent settings have been staged before any text is typed. */
 	text: string
 	/** Text and its next-send agent choices are one intent and therefore one revision. */
-	agent: ParkedAgentPatch
+	agent: AgentDraft
 	/** Ready attachments are the same intent; uploads still in flight never leave their source device. */
 	attachments: DraftAttachment[]
 	/** Client-side logical timestamp. Newer revisions win; deletion wins an exact tie. */
@@ -62,13 +65,13 @@ function validKey(key: string): boolean {
 	return key.length > 0 && key.length <= MAX_KEY_LENGTH
 }
 
-function sanitizeAgent(raw: unknown): ParkedAgentPatch {
+function sanitizeAgent(raw: unknown): AgentDraft {
 	const value = object(raw)
 	if (!value) return {}
-	const agent: ParkedAgentPatch = {}
+	const agent: AgentDraft = {}
 	if (typeof value.auto === 'boolean') agent.auto = value.auto
 	if (typeof value.model === 'string' && value.model.length <= MAX_AGENT_LABEL_LENGTH) agent.model = value.model
-	if (typeof value.effort === 'string' && value.effort.length <= MAX_AGENT_LABEL_LENGTH) agent.effort = value.effort
+	if (isAgentEffort(value.effort)) agent.effort = value.effort
 	if (typeof value.plan === 'boolean') agent.plan = value.plan
 	if (typeof value.fast === 'boolean') agent.fast = value.fast
 	return agent
@@ -104,7 +107,8 @@ function sanitizeAttachment(raw: unknown): DraftAttachment | null {
 		token.length > MAX_ATTACHMENT_TOKEN_LENGTH ||
 		!Number.isSafeInteger(bytes) ||
 		bytes < 0 ||
-		bytes > MAX_ATTACHMENT_BYTES
+		// Forks reference an already-written transcript, which can exceed the upload limit.
+		(bytes > MAX_ATTACHMENT_BYTES && value.source !== 'fork')
 	)
 		return null
 	const match = attachmentPath.match(/^\.context\/attachments\/([A-Za-z0-9]{6})\/([^/]+)$/)
@@ -112,7 +116,14 @@ function sanitizeAttachment(raw: unknown): DraftAttachment | null {
 		return null
 	const stageId = value.stageId
 	if (stageId !== undefined && (typeof stageId !== 'string' || stageId !== match[1])) return null
-	return { name, path: attachmentPath, bytes, token, ...(stageId ? { stageId } : {}) }
+	return {
+		name,
+		path: attachmentPath,
+		bytes,
+		token,
+		...(value.source === 'fork' ? { source: 'fork' as const } : {}),
+		...(stageId ? { stageId } : {})
+	}
 }
 
 function sanitizeAttachments(raw: unknown): DraftAttachment[] {
@@ -180,6 +191,7 @@ function sameDraft(a: SyncedDraft, b: SyncedDraft): boolean {
 				attachment.path === other.path &&
 				attachment.bytes === other.bytes &&
 				attachment.token === other.token &&
+				attachment.source === other.source &&
 				attachment.stageId === other.stageId
 			)
 		}) &&

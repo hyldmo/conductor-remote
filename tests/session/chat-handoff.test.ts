@@ -34,6 +34,13 @@ const copied: SplitChatResult = {
 	}
 }
 const withReasoning = { thinking: true, tools: false }
+const forkAttachment = {
+	name: copied.attachment.name,
+	path: copied.attachment.path,
+	bytes: copied.attachment.bytes,
+	token: '@⟦Transcript.md⟧(.context%2Fattachments%2Fabc123%2FTranscript.md)',
+	source: 'fork'
+}
 
 beforeEach(() => {
 	// Both the live projection and the durable store participate in moving a draft.
@@ -76,7 +83,8 @@ describe('Fork and Compact handoffs', () => {
 		expect(client.joinChatHistory).toHaveBeenCalledWith('replacement', 'workspace', 'source')
 		expect(client.closeChat).not.toHaveBeenCalled()
 		expect(send).not.toHaveBeenCalled()
-		expect(useApp.getState().drafts.replacement).toBe(copied.text)
+		expect(useApp.getState().drafts.replacement).toBe('')
+		expect(useApp.getState().draftAttachments.replacement).toEqual([forkAttachment])
 	})
 
 	test('saves the selected transcript, existing draft, attachments and agent choices before joining history', async () => {
@@ -86,14 +94,14 @@ describe('Fork and Compact handoffs', () => {
 			bytes: 8,
 			token: '@⟦notes.md⟧(.context%2Fattachments%2Fdef456%2Fnotes.md)'
 		}
-		useApp.getState().setDraft('source', 'Continue with the next step')
+		const draft = '\nContinue with the next step\n\n  Keep this formatting\n'
+		useApp.getState().setDraft('source', draft)
 		useApp.getState().stageAgent('source', { model: 'Chosen model', effort: 'high' })
 		useApp.getState().addDraftAttachment('source', attachment)
 		vi.mocked(client.joinChatHistory).mockImplementation(async () => {
-			expect(useApp.getState().drafts.replacement).toContain(copied.text)
-			expect(useApp.getState().drafts.replacement).toContain('Continue with the next step')
+			expect(useApp.getState().drafts.replacement).toBe(draft)
 			expect(useApp.getState().agentDrafts.replacement).toEqual({ model: 'Chosen model', effort: 'high' })
-			expect(useApp.getState().draftAttachments.replacement).toEqual([attachment])
+			expect(useApp.getState().draftAttachments.replacement).toEqual([attachment, forkAttachment])
 			return { ok: true }
 		})
 		await handoffChat(source, withReasoning, {
@@ -135,7 +143,8 @@ describe('Fork and Compact handoffs', () => {
 			message: 'Connection lost'
 		})
 		expect(onReady).toHaveBeenCalledOnce()
-		expect(useApp.getState().drafts.replacement).toBe(copied.text)
+		expect(useApp.getState().drafts.replacement).toBe('')
+		expect(useApp.getState().draftAttachments.replacement).toEqual([forkAttachment])
 		expect(client.splitChat).toHaveBeenCalledOnce()
 		await joinChatHistory(result.historyError!)
 		expect(client.joinChatHistory).toHaveBeenCalledTimes(2)
@@ -156,7 +165,8 @@ describe('Fork and Compact handoffs', () => {
 		await handoffChat(source, withReasoning, { continuation: 'A tangent', onReady: async () => {} })
 		expect(client.closeChat).not.toHaveBeenCalled()
 		expect(client.joinChatHistory).not.toHaveBeenCalled()
-		expect(useApp.getState().drafts.replacement).toBe(`${copied.text}\nA tangent`)
+		expect(useApp.getState().drafts.replacement).toBe('A tangent')
+		expect(useApp.getState().draftAttachments.replacement).toEqual([forkAttachment])
 	})
 
 	test('a cut from an earlier context uses that transcript while extending the current conversation', async () => {
@@ -180,7 +190,11 @@ describe('Fork and Compact handoffs', () => {
 			sessionId: null
 		})
 		await handoffChat(source, { ...withReasoning, destination: 'workspace' }, { onReady: async () => {} })
-		expect(useApp.getState().drafts['workspace-2']).toBe(copied.text)
+		expect(useApp.getState().drafts['workspace-2']).toBe('')
+		expect(useApp.getState().draftAttachments['workspace-2']).toEqual([forkAttachment])
+		useApp.getState().moveDraft('workspace-2', 'replacement')
+		expect(useApp.getState().draftAttachments.replacement).toEqual([forkAttachment])
+		expect(useApp.getState().draftAttachments['workspace-2']).toBeUndefined()
 		expect(client.closeChat).not.toHaveBeenCalled()
 	})
 })

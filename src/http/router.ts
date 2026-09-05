@@ -1,5 +1,6 @@
 import http from 'node:http'
 
+import { InputError } from '../contracts/validation.ts'
 import { UiBusyError, uiQueueDepth, withUiPriority } from '../writes/ui-lock.ts'
 import { NOT_HANDLED } from './router-types.ts'
 import { createAutoModelRoutes } from './routes/auto-model.ts'
@@ -61,6 +62,7 @@ export function createRelayServer(services: RelayServices) {
 				return json(req, res, 404, { error: 'no route', pathname })
 			} catch (err) {
 				if (err instanceof PayloadTooLargeError) return json(req, res, 413, { error: err.message })
+				if (err instanceof InputError) return json(req, res, 400, { error: err.message })
 				const workflowError = workflowHttpError(err)
 				if (workflowError) {
 					console.warn(

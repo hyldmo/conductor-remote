@@ -47,6 +47,8 @@ export function sanitizeChildOutcome(outcome: WorkflowChildOutcome): WorkflowChi
 		? {
 				kind: 'success',
 				baton: scrubWorkflowSecrets(outcome.baton),
+				...(outcome.text === undefined ? {} : { text: scrubWorkflowSecrets(outcome.text) }),
+				...(outcome.assistantRowid === undefined ? {} : { assistantRowid: outcome.assistantRowid }),
 				...(outcome.evidence === undefined ? {} : { evidence: cleanUnknown(outcome.evidence) })
 			}
 		: {

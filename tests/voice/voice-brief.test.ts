@@ -7,6 +7,7 @@ import {
 	VoiceBriefBoard,
 	type VoiceBriefReads
 } from '../../src/voice/brief.ts'
+import type { ChatHistoryLink } from '../../src/wire.ts'
 
 const NOW = Date.parse('2026-09-02T12:00:00Z')
 
@@ -57,8 +58,14 @@ function workspace(id: string, overrides: Partial<Workspace> = {}): Workspace {
 	}
 }
 
-function boardFor(states: SessionState[], messages: Record<string, string> = {}, workspaces?: Workspace[]) {
+function boardFor(
+	states: SessionState[],
+	messages: Record<string, string> = {},
+	workspaces?: Workspace[],
+	links: Record<string, ChatHistoryLink> = {}
+) {
 	return new VoiceBriefBoard({
+		chatHistory: () => links,
 		reads: {
 			listWorkspaces: () => workspaces ?? states.map(s => workspace(s.sessionId)),
 			listSessionStates: () => states,
@@ -118,7 +125,7 @@ Recommendation: B, because the observer socket is the long pole.`)
 })
 
 describe('VoiceBriefBoard', () => {
-	it('lists the newest work first, names idle questions, and does not mistake unread updates for waits', async () => {
+	it('lists newest work first and separates idle follow-ups from explicit waits and unread updates', async () => {
 		const states = [
 			state('yesterday-error', 'error', '2026-09-01 12:00:00'),
 			state('running', 'working', '2026-09-02 11:59:00'),
@@ -138,18 +145,21 @@ describe('VoiceBriefBoard', () => {
 		)
 		const first = await board.workspaceOverview()
 		expect(first.workspaces.map(item => item.sessionId)).toEqual(['running', 'question', 'unread'])
-		expect(first.waitingForYou).toBe(1)
+		expect(first.waitingForYou).toBe(0)
+		expect(first.waitingChatCount).toBe(0)
+		expect(first.possibleFollowUpCount).toBe(1)
 		expect(first.workspaces[1]).toMatchObject({
-			status: 'is waiting for you',
-			waitingForYou: { sessionId: 'question', question: 'Should I merge the PR?' }
+			waitingForYou: null,
+			possibleFollowUps: [{ sessionId: 'question', question: 'Should I merge the PR?' }]
 		})
+		expect(first.spoken).toContain('Possible follow-up: Should I merge the PR?')
 		expect(first.workspaces[2].waitingForYou).toBeNull()
 		expect((await board.workspaceOverview(first.cursor ?? 0)).workspaces.map(item => item.sessionId)).toEqual([
 			'yesterday-error'
 		])
 		expect(
 			(await board.workspaceOverview(0, { agentStatus: 'needs-you' })).workspaces.map(item => item.sessionId)
-		).toEqual(['question'])
+		).toEqual([])
 	})
 
 	it('keeps a sibling chat waiting for input visible beside newer running work', async () => {
@@ -175,7 +185,7 @@ describe('VoiceBriefBoard', () => {
 	it('names waiting work beyond the latest page without displacing newer activity', async () => {
 		const states = [
 			...['one', 'two', 'three'].map((id, index) => state(id, 'working', `2026-09-02 11:5${9 - index}:00`)),
-			state('waiting', 'idle', '2026-09-02 10:00:00')
+			state('waiting', 'needs_user_input', '2026-09-02 10:00:00')
 		]
 		const overview = await boardFor(states, { waiting: 'May I ship?' }).workspaceOverview()
 		expect(overview.workspaces.map(item => item.sessionId)).toEqual(['one', 'two', 'three'])
@@ -183,6 +193,83 @@ describe('VoiceBriefBoard', () => {
 		expect(overview.waiting).toMatchObject([
 			{ sessionId: 'waiting', workspaceId: 'w-waiting', question: 'May I ship?' }
 		])
+	})
+
+	it('counts and independently pages every waiting sibling without duplicating session rows', async () => {
+		const states = [
+			state('running', 'working', '2026-09-02 11:59:00', { workspaceId: 'w-shared' }),
+			...['one', 'two', 'three', 'four', 'five'].map((id, index) =>
+				state(id, 'needs_user_input', `2026-09-02 11:5${8 - index}:00`, {
+					workspaceId: 'w-shared',
+					sessionTitle: 'Same title'
+				})
+			),
+			state('follow-up', 'idle', '2026-09-02 11:50:00', { workspaceId: 'w-shared' })
+		]
+		const board = boardFor([...states, states[1]], { 'follow-up': 'Anything else?' }, [workspace('shared')])
+		const first = await board.workspaceOverview()
+		expect(first).toMatchObject({
+			current: 1,
+			waitingForYou: 1,
+			waitingChatCount: 5,
+			possibleFollowUpCount: 1,
+			cursor: null,
+			waitingCursor: 3
+		})
+		expect(first.workspaces[0]).toMatchObject({
+			chatCount: 7,
+			workingCount: 1,
+			waitingCount: 5,
+			possibleFollowUpCount: 1
+		})
+		expect(first.waiting.map(chat => chat.sessionId)).toEqual(['one', 'two', 'three'])
+		const second = await board.workspaceOverview(0, {}, first.waitingCursor!)
+		expect(second.waiting.map(chat => chat.sessionId)).toEqual(['four', 'five'])
+		expect(second.waitingCursor).toBeNull()
+		expect(second.waitingChatCount).toBe(5)
+		const filtered = await board.workspaceOverview(0, { agentStatus: 'needs-you' })
+		expect(filtered.workspaces[0]).toMatchObject({
+			chatCount: 5,
+			workingCount: 0,
+			waitingCount: 5,
+			possibleFollowUpCount: 0
+		})
+		expect((await board.workspaceOverview(0, {}, -5)).waiting).toEqual(first.waiting)
+		expect((await board.workspaceOverview(0, {}, 100)).waiting).toEqual([])
+	})
+
+	it('resolves accepted successors before needs-you, date, and dormancy filters', async () => {
+		const old = state('old', 'needs_user_input', '2026-09-02 10:00:00', { workspaceId: 'w-shared' })
+		const next = state('next', 'working', '2026-09-02 11:59:00', {
+			workspaceId: 'w-shared',
+			createdAt: '2026-09-02 11:00:00',
+			turnStartedAt: '2026-09-02 11:01:00'
+		})
+		const links = { next: { previousSessionId: 'old', title: 'Original', createdAt: '2026-09-01 00:00:00' } }
+		const board = boardFor([old, next], { old: 'May I ship?' }, [workspace('shared')], links)
+		expect((await board.workspaceOverview()).workspaces[0]).toMatchObject({
+			sessionId: 'next',
+			chatCount: 1,
+			waitingCount: 0
+		})
+		expect((await board.workspaceOverview(0, { agentStatus: 'needs-you' })).current).toBe(0)
+		expect((await board.workspaceOverview(0, { updatedBefore: '2026-09-02T11:00:00Z' })).current).toBe(0)
+		expect((await board.workspaceOverview(0, { includeDormant: true })).waitingChatCount).toBe(0)
+		expect((await board.rollCall()).queue).toEqual([])
+	})
+
+	it('skips cached decisions replaced or resumed since the roll call', async () => {
+		const old = state('old', 'needs_user_input', '2026-09-02 10:00:00', { workspaceId: 'w-shared' })
+		const next = state('next', 'working', '2026-09-02 11:59:00', { workspaceId: 'w-shared' })
+		const sibling = state('sibling', 'needs_user_input', '2026-09-02 09:00:00', { workspaceId: 'w-shared' })
+		const links: Record<string, ChatHistoryLink> = {}
+		const board = boardFor([old, next, sibling], {}, [workspace('shared')], links)
+		expect((await board.rollCall()).queue.map(chat => chat.sessionId)).toEqual(['old', 'sibling'])
+		links.next = { previousSessionId: 'old', title: 'Original', createdAt: '2026-09-01 00:00:00' }
+		next.turnStartedAt = '2026-09-02 11:01:00'
+		expect(await board.nextDecision()).toMatchObject({ sessionId: 'sibling', cursor: 2 })
+		sibling.status = 'working'
+		expect(await board.nextDecision()).toBeNull()
 	})
 
 	it('ages errors and input waits out too, preserves running work, and can explicitly recover older work', async () => {
@@ -217,8 +304,8 @@ describe('VoiceBriefBoard', () => {
 		)
 		const roll = await board.rollCall()
 		expect(roll.queue.map(item => item.sessionId)).toEqual(['question', 'unread', 'old-error'])
-		expect(roll.needsYou).toBe(2)
-		expect((await board.nextDecision())?.spoken).toContain('Decision needed: May I deploy?')
+		expect(roll.needsYou).toBe(1)
+		expect((await board.nextDecision())?.spoken).toContain('Possible follow-up: May I deploy?')
 	})
 
 	it('does not resurrect a historical structured question after an idle chat finishes', async () => {
@@ -511,13 +598,13 @@ describe('VoiceBriefBoard', () => {
 
 		const roll = await board.rollCall()
 		expect(roll.spoken.startsWith('Mac is unlocked; sends can land.')).toBe(true)
-		expect(roll.spoken).toContain('1 working, 3 need you, 1 dormant')
+		expect(roll.spoken).toContain('1 working, 2 need you, 1 dormant')
 		expect(roll.spoken.length).toBeLessThanOrEqual(600)
-		expect(roll.queue.map(q => q.sessionId)).toEqual(['question', 'input', 'error', 'unread', 'recent'])
+		expect(roll.queue.map(q => q.sessionId)).toEqual(['input', 'error', 'unread', 'question', 'recent'])
 
 		const decision = await board.nextDecision()
-		expect(decision?.sessionId).toBe('question')
-		expect(decision?.spoken).toContain('Which endpoint?')
+		expect(decision?.sessionId).toBe('input')
+		expect((await board.nextDecision(3))?.spoken).toContain('Possible follow-up: Which endpoint?')
 		expect(decision?.spoken.length).toBeLessThanOrEqual(400)
 	})
 

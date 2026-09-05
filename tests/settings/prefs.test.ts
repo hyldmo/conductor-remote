@@ -25,6 +25,27 @@ afterEach(() => {
 })
 
 describe('host preference store', () => {
+	test.each([42, 30 * 1024 * 1024])('retains fork context when saving and reloading a %i-byte transcript', bytes => {
+		const { store, file } = testStore()
+		const context = { ...attachment, bytes, source: 'fork' as const }
+		store.patch({
+			drafts: { chat: { text: '', agent: {}, attachments: [context], updatedAt: 10, deleted: false } }
+		})
+		expect(new PrefsStore(file).read().drafts.chat.attachments).toEqual([context])
+	})
+
+	test('keeps known effort values and drops unsupported values from stored drafts', () => {
+		const { store } = testStore()
+		const prefs = store.patch({
+			drafts: {
+				valid: { text: 'hello', agent: { effort: 'none', fast: false }, updatedAt: 1 },
+				invalid: { text: 'hello', agent: { effort: 'extreme', fast: false }, updatedAt: 1 }
+			}
+		})
+		expect(prefs.drafts.valid.agent).toEqual({ effort: 'none', fast: false })
+		expect(prefs.drafts.invalid.agent).toEqual({ fast: false })
+	})
+
 	test('merges read marks monotonically', () => {
 		const { store } = testStore()
 		store.patch({ readMarks: { a: '2026-08-01', b: '2026-08-03' } })
