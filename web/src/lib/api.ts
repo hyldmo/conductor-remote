@@ -3,6 +3,7 @@
 // `scripts/check-imports.ts` keeps it that way.
 import { routes } from '../../../src/routes.ts'
 import { responseErrorMessage, VIEWING_HEADER } from '../../../src/shared.ts'
+import type { VoiceDiagnosticEvent } from '../../../src/voice/diagnostic-fields.ts'
 import { getToken } from './auth-token.ts'
 import type {
 	AgentPatch,
@@ -244,6 +245,12 @@ export const client = {
 	/** Let the broker speak only after the browser can receive the greeting. */
 	voiceCallReady: (callId: string) =>
 		api<{ ok: true }>(routes.voiceCallReady.path(callId), { method: routes.voiceCallReady.method }, ACTION_TIMEOUT_MS),
+	voiceCallDiagnostics: (callId: string, events: VoiceDiagnosticEvent[]) =>
+		api<{ ok: true }>(routes.voiceCallDiagnostics.path(callId), {
+			method: routes.voiceCallDiagnostics.method,
+			body: JSON.stringify({ events }),
+			keepalive: true
+		}),
 	voiceCallEnd: (callId: string) =>
 		api<{ ok: true }>(routes.voiceCallEnd.path(callId), { method: routes.voiceCallEnd.method }, ACTION_TIMEOUT_MS),
 	voiceHistory: (offset = 0) => api<VoiceHistoryResponse>(`${routes.voiceHistory.path()}?offset=${offset}`),

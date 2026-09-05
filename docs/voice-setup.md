@@ -347,6 +347,35 @@ Rotating a value through `config set` restarts the managed service. The relay to
 
 ## Troubleshooting
 
+### Browser echo and interruptions
+
+WebRTC calls emit `[voice-diagnostics]` metadata into the relay log. After reproducing,
+use `relay_logs` with `contains: "voice-diagnostics"` (or the call ID from
+`list_voice_calls`). For a managed relay, `file: "relay.log"` also reaches entries
+from before a restart. Inspect promptly: the live log is a bounded ring, not a
+permanent diagnostic archive. Both the PWA and relay must run the updated build.
+
+Browser `capture` and five-second `sample` events report actual microphone settings,
+support flags, mute state, playback state and available WebRTC audio levels/energy.
+A null setting means the browser did not report it; `echoCancellation: true` means
+enabled, not proof that all echo was removed. Missing echo-loss statistics mean
+unsupported/unreported, not zero echo. Browser events use monotonic `atMs` since
+diagnostics started for that call; `receivedAt` is the relay's receipt time, which
+may lag after buffering or a network delay. Speech-start, playback-buffer and
+response events carry item/response IDs to correlate with the saved transcript.
+Server events provide a second timeline even when browser uploads fail.
+
+Diagnostics never mute the microphone, change speech thresholds or disable
+interruptions. They store no raw audio, captions, device identifiers, SDP or tools.
+Uploads are bounded and best-effort; `dropped` counts discarded metadata events.
+Background suspension, disconnection or process exit can still leave gaps.
+
+The user bubbles come from a separate transcription model. The Realtime model
+consumes audio directly, so a wrong caption can accompany a correctly understood
+command; see the [Realtime API reference](https://platform.openai.com/docs/api-reference/realtime).
+
+### Connection and configuration
+
 - **The call rings and then fails with no relay log:** confirm the public endpoint is on 443 and is exactly `/voice`. OpenAI does not deliver this webhook through Funnel 8443 or 10000.
 - **Twilio gets 403:** check the allowlist, the account's primary auth token, and that `voice.public-url + /twiml` is byte-for-byte the URL configured on the number.
 - **OpenAI gets 400:** check the webhook signing secret and the Mac's clock.

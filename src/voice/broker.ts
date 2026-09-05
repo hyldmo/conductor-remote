@@ -5,6 +5,7 @@ import path from 'node:path'
 import type { Tool } from '../mcp/types.ts'
 import type { VoiceLanguage } from '../shared.ts'
 import { DEFAULT_VOICE_SPEED, type VoiceReasoningEffort, voiceReasoning } from './config.ts'
+import { voiceRealtimeDiagnostic } from './diagnostic-fields.ts'
 import type { VoiceHistory } from './history.ts'
 import { VOICE_INSTRUCTIONS } from './prompt.ts'
 import { VOICE_TOOL_NAMES } from './tools.ts'
@@ -476,6 +477,11 @@ export class VoiceBroker {
 			return
 		}
 		this.deps.history?.record(callId, event)
+		const diagnostic = voiceRealtimeDiagnostic(event)
+		if (diagnostic)
+			this.log(
+				`[voice-diagnostics] ${JSON.stringify({ callId, source: 'server', receivedAt: this.now(), ...diagnostic })}`
+			)
 		const type = event.type
 		if (type === 'mcp_list_tools.completed') {
 			if (runtime.mode !== 'mcp') return
