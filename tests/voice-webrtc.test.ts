@@ -36,6 +36,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 		expect(session.tools.map(tool => [tool.type, tool.name])).toEqual([
 			['function', 'voice_roll_call'],
 			['function', 'voice_workspace_overview'],
+			['function', 'voice_chat_context'],
 			['function', 'voice_next_decision'],
 			['function', 'voice_list_repos'],
 			['function', 'voice_create_workspace_preview'],
@@ -83,7 +84,7 @@ describe('PWA WebRTC orchestrator calls', () => {
 		expect(form.get('sdp')).toBe('v=0\r\na=offer')
 		const configured = JSON.parse(String(form.get('session'))) as { model: string; tools: unknown[] }
 		expect(configured.model).toBe('gpt-realtime-2.1-mini')
-		expect(configured.tools).toHaveLength(8)
+		expect(configured.tools).toHaveLength(9)
 	})
 
 	it('surfaces a bounded upstream error and refuses a missing call receipt', async () => {

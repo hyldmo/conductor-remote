@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Tool } from '../src/mcp-tools.ts'
 import type { SessionState } from '../src/reads.ts'
 import { VoiceBriefBoard } from '../src/voice/brief.ts'
+import type { VoiceCallTarget, VoiceChatContext } from '../src/voice/context.ts'
 import type { SendPreview, WorkspacePreview } from '../src/voice/preview.ts'
 import { PreviewStore } from '../src/voice/preview.ts'
 import { createVoiceTools, type VoiceDispatchResult, type VoiceWorkspaceCreateResult } from '../src/voice/tools.ts'
@@ -51,6 +52,20 @@ function harness(status = 'idle') {
 		workspaceId: 'w-new'
 	}))
 	const announce = vi.fn()
+	const readChatContext = vi.fn(
+		(target: VoiceCallTarget): VoiceChatContext => ({
+			...target,
+			workspaceTitle: state.workspaceTitle,
+			chatTitle: 'Active chat',
+			repo: state.repoName,
+			branch: null,
+			status: state.status,
+			updatedAt: state.updatedAt,
+			waitingForTasks: false,
+			messages: [{ role: 'assistant', text: 'Latest progress' }],
+			truncated: false
+		})
+	)
 	const tools = createVoiceTools({
 		callId: 'call-a',
 		board,
@@ -61,17 +76,19 @@ function harness(status = 'idle') {
 			{ name: 'website', defaultBranch: 'main' }
 		],
 		createWorkspace,
+		readChatContext,
 		dispatch,
 		announce
 	})
-	return { tools, state, board, dispatch, createWorkspace, announce }
+	return { tools, state, board, dispatch, createWorkspace, announce, readChatContext }
 }
 
 describe('createVoiceTools', () => {
-	it('exposes the scoped overview, creation, and guarded decision tools', () => {
+	it('exposes chat context, fleet reads, creation, and the guarded decision tools', () => {
 		expect(harness().tools.map(candidate => candidate.name)).toEqual([
 			'voice_roll_call',
 			'voice_workspace_overview',
+			'voice_chat_context',
 			'voice_next_decision',
 			'voice_list_repos',
 			'voice_create_workspace_preview',
@@ -187,6 +204,18 @@ describe('createVoiceTools', () => {
 				'The new website workspace was not created. Conductor did not open the workspace.'
 			)
 		)
+	})
+
+	it('refreshes the exact named chat without dispatching or marking a decision handled', async () => {
+		const { tools, readChatContext, dispatch, state } = harness()
+		const contextTool = tool(tools, 'voice_chat_context')
+		const args = { workspace_id: 'w1', session_id: 's1' }
+		expect(JSON.parse(await contextTool.run(args)).status).toBe('idle')
+		state.status = 'working'
+		expect(JSON.parse(await contextTool.run(args)).status).toBe('working')
+		expect(readChatContext).toHaveBeenCalledTimes(2)
+		expect(readChatContext).toHaveBeenLastCalledWith({ workspaceId: 'w1', sessionId: 's1' })
+		expect(dispatch).not.toHaveBeenCalled()
 	})
 
 	it('reads back the exact target and text, then queues only that preview', async () => {

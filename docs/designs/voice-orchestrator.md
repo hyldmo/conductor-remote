@@ -9,8 +9,7 @@ Mode: Builder
 
 ## 2026-09-04 architecture revision: one orchestrator, two transports
 
-The PWA now carries the same fleet orchestrator as the SIP call, not a voice
-accessory for whichever chat happens to be visible. Its phone control sits in the
+The PWA carries the fleet orchestrator over WebRTC. Its fleet phone control sits in the
 workspace-list header immediately left of **+**. The provider lives at the app
 shell, so hiding the controls or navigating between workspaces does not end or
 retarget the call.
@@ -18,7 +17,7 @@ retarget the call.
 The browser sends its WebRTC offer to the authenticated relay. The relay creates
 the Realtime call with its permanent OpenAI key, returns only the SDP answer, and
 uses the call receipt to attach a private sideband controller. The PWA session
-gets the same eight schemas as SIP—roll call, filtered workspace overview, next
+gets the same nine schemas as SIP—roll call, filtered workspace overview, chat context, next
 decision, repository list, previewed/confirmed workspace creation, and
 previewed/confirmed send—but exposes them as function tools executed locally by
 that controller. SIP keeps the remote MCP transport because OpenAI hosts that call.
@@ -30,6 +29,13 @@ The 2026-09-05 capability expansion kept that scoped boundary: ordinary overview
 hide Done and merged workspaces, expose repo/status/PR/date filters, and speak each
 item's update age. Workspace creation has its own persisted one-use preview, so
 the Realtime model still has no raw unconfirmed write.
+
+The current-chat call starts from the right side of the chat composer, immediately
+left of the context control. The relay reads the selected tab's conversation before
+creating the Realtime session, retaining the latest user request and recent replies
+within 24 messages and 16,000 characters. The call keeps that target as the user
+navigates and can refresh it with `voice_chat_context`. Fleet calls retain their
+roll-call opening. Both call modes use the existing confirmation gates for writes.
 
 The call sheet carries live input/output captions and a typed fallback. Voice and
 language are chosen before connecting; server voice activity detection handles

@@ -21,8 +21,8 @@ function statusLabel(status: VoiceCallStatus, muted: boolean): string {
 	if (status === 'idle') return 'Not connected'
 	if (status === 'connecting') return 'Connecting…'
 	if (status === 'listening') return muted ? 'Microphone muted' : 'Listening'
-	if (status === 'thinking') return 'Checking the fleet…'
-	if (status === 'speaking') return 'Orchestrator speaking'
+	if (status === 'thinking') return 'Thinking…'
+	if (status === 'speaking') return 'Speaking'
 	return muted ? 'Microphone muted' : 'Connected'
 }
 
@@ -33,6 +33,7 @@ export function VoiceCallSheet() {
 	const [draft, setDraft] = useState('')
 	const transcript = useRef<HTMLDivElement>(null)
 	const active = voice.status !== 'idle'
+	const target = voice.target
 	const canType = voice.status === 'connected'
 	const transcriptRevision = `${voice.entries.length}:${voice.inputPartial}:${voice.outputPartial}`
 
@@ -66,7 +67,7 @@ export function VoiceCallSheet() {
 			<section
 				role="dialog"
 				aria-modal="true"
-				aria-label="Control room call"
+				aria-label={target ? 'Workspace call' : 'Control room call'}
 				className="app-height fade-in pt-safe pb-safe fixed inset-0 z-[60] flex flex-col bg-bg md:inset-x-auto md:inset-y-8 md:left-1/2 md:w-[32rem] md:-translate-x-1/2 md:rounded-3xl md:border md:border-border-soft md:shadow-2xl"
 			>
 				<header className="flex shrink-0 items-center gap-3 border-b border-border-soft px-4 py-3">
@@ -80,7 +81,7 @@ export function VoiceCallSheet() {
 					</div>
 					<div className="min-w-0 flex-1">
 						<div className="flex items-center gap-1.5">
-							<h2 className="text-[15px] font-semibold">Control room</h2>
+							<h2 className="truncate text-[15px] font-semibold">{target?.workspaceTitle ?? 'Control room'}</h2>
 							<BetaBadge />
 						</div>
 						<p className="flex items-center gap-1.5 text-xs text-muted">
@@ -92,7 +93,9 @@ export function VoiceCallSheet() {
 									)}
 								/>
 							) : null}
-							<span className="truncate">All workspaces · {statusLabel(voice.status, voice.muted)}</span>
+							<span className="truncate">
+								{target?.chatTitle ?? 'All workspaces'} · {statusLabel(voice.status, voice.muted)}
+							</span>
 						</p>
 					</div>
 					<button
@@ -113,7 +116,9 @@ export function VoiceCallSheet() {
 									<div className="grid min-h-48 place-items-center text-center">
 										<div>
 											<LoaderCircle size={22} className="mx-auto mb-3 animate-spin text-voice" />
-											<p className="text-sm text-muted">Opening the fleet channel…</p>
+											<p className="text-sm text-muted">
+												{target ? 'Opening your chat…' : 'Opening the fleet channel…'}
+											</p>
 										</div>
 									</div>
 								) : null}
@@ -166,7 +171,7 @@ export function VoiceCallSheet() {
 									value={draft}
 									onChange={event => setDraft(event.target.value)}
 									disabled={!canType}
-									placeholder={canType ? 'Type to the orchestrator…' : statusLabel(voice.status, voice.muted)}
+									placeholder={canType ? 'Type in this call…' : statusLabel(voice.status, voice.muted)}
 									aria-label="Message the orchestrator"
 									className="h-11 min-w-0 flex-1 rounded-xl border border-border bg-bg px-3 text-sm text-text outline-none placeholder:text-faint focus:border-voice/60 disabled:opacity-60"
 								/>
@@ -210,10 +215,13 @@ export function VoiceCallSheet() {
 							<div className="mb-5 grid size-16 place-items-center rounded-full bg-voice-soft text-voice">
 								<PhoneCall size={27} />
 							</div>
-							<h3 className="text-xl font-semibold tracking-tight">Call your fleet</h3>
+							<h3 className="text-xl font-semibold tracking-tight">
+								{target ? 'Call this workspace' : 'Call your fleet'}
+							</h3>
 							<p className="mt-2 text-sm leading-relaxed text-muted">
-								One orchestrator checks every workspace, brings you one decision at a time, and can create workspaces or
-								queue exact prompts after reading them back for confirmation.
+								{target
+									? `Continue from “${target.chatTitle}” with its recent conversation already in context. You can discuss the task and confirm a prompt to send back to this chat.`
+									: 'One orchestrator checks every workspace, brings you one decision at a time, and can create workspaces or queue exact prompts after reading them back for confirmation.'}
 							</p>
 
 							<div className="mt-7 grid w-full grid-cols-2 gap-3 text-left">
@@ -264,10 +272,12 @@ export function VoiceCallSheet() {
 								className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-voice px-4 text-sm font-semibold text-white active:opacity-80 disabled:bg-surface-2 disabled:text-faint"
 							>
 								<PhoneCall size={18} />
-								{online ? 'Start fleet call' : 'Relay offline'}
+								{online ? (target ? 'Start workspace call' : 'Start fleet call') : 'Relay offline'}
 							</button>
 							<p className="mt-3 text-[11px] leading-snug text-faint">
-								AI-generated voice. Microphone audio is sent to OpenAI for this live call.
+								{target
+									? 'AI-generated voice. Audio and this chat’s recent messages are sent to OpenAI for this live call.'
+									: 'AI-generated voice. Microphone audio is sent to OpenAI for this live call.'}
 							</p>
 						</div>
 					</div>

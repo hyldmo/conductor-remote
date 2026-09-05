@@ -6,7 +6,8 @@ import {
 	parseVoiceEvent,
 	saveVoicePreferences,
 	type VoicePreferences,
-	voiceToolLabel
+	voiceToolLabel,
+	type WorkspaceVoiceTarget
 } from '../lib/voice.ts'
 
 export type VoiceCallStatus = 'idle' | 'connecting' | 'connected' | 'listening' | 'thinking' | 'speaking'
@@ -27,7 +28,9 @@ interface VoiceContextValue {
 	inputPartial: string
 	outputPartial: string
 	preferences: VoicePreferences
+	target: WorkspaceVoiceTarget | null
 	openPanel: () => void
+	openWorkspacePanel: (target: WorkspaceVoiceTarget) => void
 	closePanel: () => void
 	startCall: () => Promise<void>
 	endCall: () => void
@@ -49,7 +52,7 @@ function deniedMicrophone(error: unknown): boolean {
 	return error instanceof DOMException && (error.name === 'NotAllowedError' || error.name === 'SecurityError')
 }
 
-/** One fleet call that survives navigation between every workspace and chat. */
+/** One call whose selected context survives navigation between workspaces and chats. */
 export function VoiceCallProvider({ children }: { children: ReactNode }) {
 	const [panelOpen, setPanelOpen] = useState(false)
 	const [status, setStatusState] = useState<VoiceCallStatus>('idle')
@@ -59,8 +62,10 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 	const [inputPartial, setInputPartial] = useState('')
 	const [outputPartial, setOutputPartial] = useState('')
 	const [preferences, setPreferencesState] = useState(loadVoicePreferences)
+	const [target, setTarget] = useState<WorkspaceVoiceTarget | null>(null)
 	const statusRef = useRef<VoiceCallStatus>('idle')
 	const preferencesRef = useRef(preferences)
+	const targetRef = useRef(target)
 	const generation = useRef(0)
 	const peer = useRef<RTCPeerConnection | null>(null)
 	const channel = useRef<RTCDataChannel | null>(null)
@@ -187,6 +192,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 
 	const startCall = useCallback(async () => {
 		if (statusRef.current !== 'idle') return
+		const selected = targetRef.current
 		if (typeof RTCPeerConnection === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
 			setError('This browser does not support WebRTC calling')
 			return
@@ -234,8 +240,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 				if (currentGeneration === generation.current) handleEvent(event.data)
 			})
 			dc.addEventListener('close', () => {
-				if (currentGeneration === generation.current && statusRef.current !== 'idle')
-					failCall('The control-room call closed')
+				if (currentGeneration === generation.current && statusRef.current !== 'idle') failCall('The call closed')
 			})
 			pc.addEventListener('connectionstatechange', () => {
 				if (currentGeneration !== generation.current) return
@@ -244,12 +249,12 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 					disconnectTimer.current = null
 				}
 				if (pc.connectionState === 'failed' || pc.connectionState === 'closed')
-					return failCall('The control-room connection failed')
+					return failCall('The call connection failed')
 				if (pc.connectionState === 'disconnected' && !disconnectTimer.current) {
 					disconnectTimer.current = setTimeout(() => {
 						disconnectTimer.current = null
 						if (currentGeneration === generation.current && pc.connectionState === 'disconnected')
-							failCall('The control-room connection was lost')
+							failCall('The call connection was lost')
 					}, 4_000)
 				}
 			})
@@ -258,7 +263,13 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 			await pc.setLocalDescription(offer)
 			const localSdp = pc.localDescription?.sdp
 			if (!localSdp) throw new Error('The browser did not create a WebRTC offer')
-			const answer = await client.voiceCall(localSdp, preferencesRef.current.voice, preferencesRef.current.language)
+			if (currentGeneration !== generation.current) return
+			const answer = await client.voiceCall(
+				localSdp,
+				preferencesRef.current.voice,
+				preferencesRef.current.language,
+				selected ? { workspaceId: selected.workspaceId, sessionId: selected.sessionId } : undefined
+			)
 			if (currentGeneration !== generation.current) {
 				void client.voiceCallEnd(answer.callId).catch(() => undefined)
 				return
@@ -348,7 +359,22 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 			.then(() => setError(null))
 			.catch(() => setError('This browser is still blocking call audio'))
 	}, [])
-	const openPanel = useCallback(() => setPanelOpen(true), [])
+	const openPanel = useCallback(() => {
+		if (statusRef.current === 'idle') {
+			targetRef.current = null
+			setTarget(null)
+			setError(null)
+		}
+		setPanelOpen(true)
+	}, [])
+	const openWorkspacePanel = useCallback((selected: WorkspaceVoiceTarget) => {
+		if (statusRef.current === 'idle') {
+			targetRef.current = { ...selected }
+			setTarget(targetRef.current)
+			setError(null)
+		}
+		setPanelOpen(true)
+	}, [])
 	const closePanel = useCallback(() => setPanelOpen(false), [])
 	const dismissError = useCallback(() => setError(null), [])
 	const setVoice = useCallback((voice: OpenAIRealtimeVoice) => updatePreferences({ voice }), [updatePreferences])
@@ -373,7 +399,9 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 			inputPartial,
 			outputPartial,
 			preferences,
+			target,
 			openPanel,
+			openWorkspacePanel,
 			closePanel,
 			startCall,
 			endCall,
@@ -393,7 +421,9 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 			inputPartial,
 			outputPartial,
 			preferences,
+			target,
 			openPanel,
+			openWorkspacePanel,
 			closePanel,
 			startCall,
 			endCall,

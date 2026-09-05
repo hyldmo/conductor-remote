@@ -125,6 +125,7 @@ describe('the call accept payload', () => {
 					allowed_tools: [
 						'voice_roll_call',
 						'voice_workspace_overview',
+						'voice_chat_context',
 						'voice_next_decision',
 						'voice_list_repos',
 						'voice_create_workspace_preview',

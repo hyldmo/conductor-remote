@@ -55,6 +55,7 @@ export type { MergeMethod, MergeResult } from './merge.ts'
 export type { NoSleepResult } from './nosleep.ts'
 export type { PrStatus, UnreadSession } from './reads.ts'
 export type { SearchRole, SearchSnippet } from './search.ts'
+export type { VoiceCallTarget } from './voice/context.ts'
 export type {
 	ActuatorInfo,
 	CachedModelGroup,

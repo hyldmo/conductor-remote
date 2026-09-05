@@ -57,6 +57,7 @@ import type {
 	UpdateRolesResult,
 	UploadAttachmentResult,
 	VoiceCallResponse,
+	VoiceCallTarget,
 	VoiceLanguage,
 	VoiceTicketResponse,
 	WorkflowAdoptRequest,
@@ -246,12 +247,12 @@ export const client = {
 	/** Mint a short-lived native-call URI using the same bearer this PWA already holds. */
 	voiceTicket: () => api<VoiceTicketResponse>(routes.voiceTicket.path(), { method: routes.voiceTicket.method }),
 	/** Negotiate an app-wide Realtime call without sending the permanent key to the browser. */
-	voiceCall: (sdp: string, voice: OpenAIRealtimeVoice, language: VoiceLanguage) =>
+	voiceCall: (sdp: string, voice: OpenAIRealtimeVoice, language: VoiceLanguage, target?: VoiceCallTarget) =>
 		api<VoiceCallResponse>(
 			routes.voiceCall.path(),
 			{
 				method: routes.voiceCall.method,
-				body: JSON.stringify({ sdp, voice, language })
+				body: JSON.stringify({ sdp, voice, language, target })
 			},
 			ACTION_TIMEOUT_MS
 		),
