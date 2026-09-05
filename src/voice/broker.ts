@@ -1,15 +1,19 @@
 /** OpenAI SIP/WebRTC setup plus the authenticated sideband controller for one live call. */
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Tool } from '../mcp-tools.ts'
+import type { VoiceLanguage } from '../shared.ts'
+import type { VoiceHistory } from './history.ts'
 import { VOICE_INSTRUCTIONS } from './prompt.ts'
 import { VOICE_TOOL_NAMES } from './tools.ts'
+import { voiceTranscription } from './transcription.ts'
 
 export interface BrokerSocket {
 	readonly readyState: number
 	send(data: string): void
 	close(): void
-	addEventListener(type: string, listener: (event: { data?: unknown }) => void): void
+	addEventListener(type: string, listener: (event: { data?: unknown; code?: number }) => void): void
 }
 
 export type BrokerSocketFactory = (url: string, headers: Record<string, string>) => BrokerSocket
@@ -21,6 +25,7 @@ interface AcceptBodyInput {
 	mcpUrl: string
 	mcpToken: string
 	instructions: string
+	language?: VoiceLanguage
 }
 
 /** Current Realtime call-accept shape, kept pure so upstream API drift has a snapshot-sized test. */
@@ -30,7 +35,7 @@ export function buildAcceptBody(input: AcceptBodyInput): Record<string, unknown>
 		model: input.model,
 		instructions: input.instructions,
 		max_output_tokens: 800,
-		audio: { output: { voice: input.voice } },
+		audio: { input: { transcription: voiceTranscription(input.language) }, output: { voice: input.voice } },
 		tools: [
 			{
 				type: 'mcp',
@@ -91,6 +96,7 @@ interface StoredCall {
 }
 
 interface Runtime {
+	callId: string
 	socket: BrokerSocket
 	mode: StoredCall['mode']
 	ready: boolean
@@ -123,6 +129,7 @@ interface BrokerDeps {
 	/** Function tools are used only for relay-created WebRTC calls. */
 	tools?: (callId: string) => Tool[]
 	onClose?: (callId: string) => void
+	history?: VoiceHistory
 }
 
 export interface VoiceCallOptions {
@@ -130,6 +137,7 @@ export interface VoiceCallOptions {
 	voice?: string
 	/** Per-call language or presentation instructions layered over the relay default. */
 	instructions?: string
+	language?: VoiceLanguage
 }
 
 function defaultSocket(url: string, headers: Record<string, string>): BrokerSocket {
@@ -212,6 +220,7 @@ export class VoiceBroker {
 					callId,
 					model: this.deps.model,
 					voice: options.voice ?? this.deps.voice,
+					language: options.language,
 					mcpUrl: this.deps.mcpUrl,
 					mcpToken: this.deps.mcpToken,
 					instructions: options.instructions ?? this.deps.instructions ?? VOICE_INSTRUCTIONS
@@ -227,6 +236,14 @@ export class VoiceBroker {
 			greeted: false
 		})
 		this.persist()
+		this.deps.history?.start({
+			callId,
+			startedAt: this.now(),
+			transport: 'sip',
+			model: this.deps.model,
+			voice: options.voice ?? this.deps.voice,
+			language: options.language ?? 'auto'
+		})
 		this.attach(callId)
 	}
 
@@ -241,7 +258,21 @@ export class VoiceBroker {
 
 	/** Reattach every call whose socket was alive when a self-update stopped this process. */
 	async restore(): Promise<void> {
-		for (const callId of this.calls.keys()) this.attach(callId)
+		this.deps.history?.recover()
+		for (const call of this.calls.values()) {
+			this.deps.history?.start(
+				{
+					callId: call.callId,
+					startedAt: call.acceptedAt,
+					transport: call.mode === 'function' ? 'webrtc' : 'sip',
+					model: this.deps.model,
+					voice: this.deps.voice,
+					language: 'auto'
+				},
+				true
+			)
+			this.attach(call.callId)
+		}
 	}
 
 	private attach(callId: string): void {
@@ -252,6 +283,7 @@ export class VoiceBroker {
 			authorization: `Bearer ${this.deps.apiKey}`
 		})
 		const runtime: Runtime = {
+			callId,
 			socket,
 			mode: call.mode,
 			ready: call.ready,
@@ -275,9 +307,10 @@ export class VoiceBroker {
 		})
 		socket.addEventListener('message', event => this.onEvent(callId, runtime, messageText(event.data)))
 		socket.addEventListener('error', () => this.log(`[voice] ${callId} observer socket error`))
-		socket.addEventListener('close', () => {
+		socket.addEventListener('close', event => {
 			if (this.runtimes.get(callId) !== runtime) return
 			this.forget(callId, runtime)
+			this.deps.history?.finish(callId, event.code === 1000 ? 'ended' : 'interrupted')
 			this.log(`[voice] ${callId} observer closed`)
 		})
 		this.maybeStart(runtime)
@@ -315,9 +348,11 @@ export class VoiceBroker {
 		if (!runtime.toolsReady || !runtime.greeted || runtime.responseActive || runtime.socket.readyState !== 1) return
 		const text = runtime.pending.shift()
 		if (!text) return
+		const itemId = `relay_${crypto.randomBytes(10).toString('hex')}`
+		this.deps.history?.internal(runtime.callId, itemId)
 		this.send(runtime, {
 			type: 'conversation.item.create',
-			item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
+			item: { id: itemId, type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
 		})
 		this.createResponse(runtime)
 	}
@@ -409,6 +444,7 @@ export class VoiceBroker {
 			this.log(`[voice] ${callId} sent an unreadable observer event`)
 			return
 		}
+		this.deps.history?.record(callId, event)
 		const type = event.type
 		if (type === 'mcp_list_tools.completed') {
 			if (runtime.mode !== 'mcp') return
@@ -482,7 +518,7 @@ export class VoiceBroker {
 	}
 
 	/** Attach the relay sideband before the browser receives its SDP answer. */
-	registerWebRtc(callId: string): void {
+	registerWebRtc(callId: string, options: VoiceCallOptions = {}): void {
 		this.calls.set(callId, {
 			callId,
 			acceptedAt: this.now(),
@@ -491,6 +527,14 @@ export class VoiceBroker {
 			greeted: false
 		})
 		this.persist()
+		this.deps.history?.start({
+			callId,
+			startedAt: this.now(),
+			transport: 'webrtc',
+			model: this.deps.model,
+			voice: options.voice ?? this.deps.voice,
+			language: options.language ?? 'auto'
+		})
 		this.attach(callId)
 	}
 
@@ -517,10 +561,13 @@ export class VoiceBroker {
 			headers: { authorization: `Bearer ${this.deps.apiKey}` }
 		})
 		const runtime = this.runtimes.get(callId)
+		// Retire the observer before closing it: a synchronous close callback must
+		// not label this deliberate hang-up as a missing stretch of conversation.
+		this.forget(callId, runtime)
 		try {
 			runtime?.socket.close()
 		} finally {
-			this.forget(callId, runtime)
+			this.deps.history?.finish(callId, response.ok ? 'ended' : 'interrupted')
 		}
 		if (!response.ok) throw new Error(`OpenAI call hangup returned ${response.status}: ${await response.text()}`)
 		return true

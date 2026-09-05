@@ -465,6 +465,60 @@ export interface VoiceCallResponse {
 	sdp: string
 }
 
+/** Locally archived voice text, independent of any Conductor workspace. */
+export interface VoiceHistoryEntry {
+	id: string
+	role: 'user' | 'assistant' | 'tool' | 'relay'
+	text: string
+	at: number
+	partial: boolean
+	interrupted: boolean
+	transcriptionFailed: boolean
+}
+
+export interface VoiceHistorySummary {
+	callId: string
+	startedAt: number
+	updatedAt: number
+	endedAt: number | null
+	transport: 'webrtc' | 'sip'
+	model: string
+	voice: string
+	language: VoiceLanguage
+	status: 'active' | 'ended' | 'interrupted'
+	hasGaps: boolean
+	preview: string
+	entryCount: number
+	captureError?: string
+}
+
+export interface VoiceHistoryCall extends VoiceHistorySummary {
+	entries: VoiceHistoryEntry[]
+}
+
+export interface VoiceHistoryResponse {
+	calls: VoiceHistorySummary[]
+	hasMore: boolean
+}
+
+export interface VoiceHistorySearchHit {
+	call: VoiceHistorySummary
+	itemId: string
+	role: 'user' | 'assistant'
+	at: number
+	partial: boolean
+	interrupted: boolean
+	transcriptionFailed: boolean
+	/** Same HIT_OPEN/HIT_CLOSE markers as chat search. */
+	snippet: string
+}
+
+export interface VoiceHistorySearchResponse {
+	query: string
+	hits: VoiceHistorySearchHit[]
+	hasMore: boolean
+}
+
 /** GET /api/files/:reference — a bounded source preview for a chat file link. */
 export interface FilePreviewResponse {
 	/** Absolute workspace path from the link. */

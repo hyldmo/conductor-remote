@@ -25,6 +25,8 @@ interface VoiceContextValue {
 	muted: boolean
 	error: string | null
 	entries: VoiceCallEntry[]
+	/** Kept after hang-up so the sheet can open the saved call. */
+	lastCallId: string | null
 	inputPartial: string
 	outputPartial: string
 	preferences: VoicePreferences
@@ -59,6 +61,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 	const [muted, setMuted] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [entries, setEntries] = useState<VoiceCallEntry[]>([])
+	const [lastCallId, setLastCallId] = useState<string | null>(null)
 	const [inputPartial, setInputPartial] = useState('')
 	const [outputPartial, setOutputPartial] = useState('')
 	const [preferences, setPreferencesState] = useState(loadVoicePreferences)
@@ -200,6 +203,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 		setPanelOpen(true)
 		setError(null)
 		setEntries([])
+		setLastCallId(null)
 		clearPartials()
 		completedInputs.current.clear()
 		completedOutputs.current.clear()
@@ -275,6 +279,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 				return
 			}
 			callId.current = answer.callId
+			setLastCallId(answer.callId)
 			await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
 			await new Promise<void>((resolve, reject) => {
 				if (dc.readyState === 'open') return resolve()
@@ -396,6 +401,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 			muted,
 			error,
 			entries,
+			lastCallId,
 			inputPartial,
 			outputPartial,
 			preferences,
@@ -418,6 +424,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 			muted,
 			error,
 			entries,
+			lastCallId,
 			inputPartial,
 			outputPartial,
 			preferences,

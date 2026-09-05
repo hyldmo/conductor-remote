@@ -4,12 +4,10 @@ import { oneLine } from '../speech.ts'
 import type { VoiceChatContext } from './context.ts'
 import { VOICE_INSTRUCTIONS, workspaceVoiceInstructions } from './prompt.ts'
 import { voiceFunctionTools } from './tools.ts'
+import { voiceTranscription } from './transcription.ts'
 
-export const TRANSCRIPTION_MODEL = 'gpt-live-transcribe'
+export { TRANSCRIPTION_MODEL } from './transcription.ts'
 export const MAX_SDP_CHARS = 100_000
-
-const TRANSCRIPTION_CONTEXT =
-	'Software development fleet control. Likely terms include Conductor, Codex, TypeScript, React, WebRTC, Tailwind, Biome, workspace, pull request, branch names, and file paths.'
 
 function languageInstruction(language: VoiceLanguage): string {
 	switch (language) {
@@ -46,12 +44,7 @@ export function buildWebRtcSession(input: WebRtcSessionInput): Record<string, un
 		parallel_tool_calls: false,
 		audio: {
 			input: {
-				transcription: {
-					model: TRANSCRIPTION_MODEL,
-					prompt: TRANSCRIPTION_CONTEXT,
-					delay: 'low',
-					...(input.language === 'auto' ? {} : { languages: [input.language] })
-				},
+				transcription: voiceTranscription(input.language),
 				noise_reduction: { type: 'near_field' },
 				turn_detection: {
 					type: 'server_vad',

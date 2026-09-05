@@ -1,10 +1,13 @@
-import { LoaderCircle, Mic, MicOff, PhoneCall, PhoneOff, Send, X } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { History, LoaderCircle, Mic, MicOff, PhoneCall, PhoneOff, Send, X } from 'lucide-react'
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { OPENAI_REALTIME_VOICES, type OpenAIRealtimeVoice, type VoiceLanguage } from '../../../src/shared.ts'
+import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { useApp } from '../store.ts'
 import { BetaBadge } from './BetaBadge.tsx'
+import { VoiceHistoryPanel } from './VoiceHistoryPanel.tsx'
 import { useVoiceCall, type VoiceCallStatus } from './VoiceProvider.tsx'
 
 const LANGUAGE_OPTIONS: [VoiceLanguage, string][] = [
@@ -31,11 +34,29 @@ export function VoiceCallSheet() {
 	const voice = useVoiceCall()
 	const online = useApp(state => state.online)
 	const [draft, setDraft] = useState('')
+	const [historyOpen, setHistoryOpen] = useState(false)
+	const [selectedCallId, setSelectedCallId] = useState<string | null>(null)
+	const wasActive = useRef(false)
 	const transcript = useRef<HTMLDivElement>(null)
 	const active = voice.status !== 'idle'
 	const target = voice.target
 	const canType = voice.status === 'connected'
 	const transcriptRevision = `${voice.entries.length}:${voice.inputPartial}:${voice.outputPartial}`
+	const recording = useQuery({
+		queryKey: ['voice-recording', voice.lastCallId],
+		queryFn: () => client.voiceTranscriptStatus(voice.lastCallId!),
+		enabled: voice.panelOpen && active && Boolean(voice.lastCallId),
+		refetchInterval: 5_000,
+		retry: false
+	})
+
+	useEffect(() => {
+		if (wasActive.current && !active && voice.lastCallId) {
+			setSelectedCallId(voice.lastCallId)
+			setHistoryOpen(true)
+		}
+		wasActive.current = active
+	}, [active, voice.lastCallId])
 
 	useEffect(() => {
 		if (!voice.panelOpen) return
@@ -98,6 +119,19 @@ export function VoiceCallSheet() {
 							</span>
 						</p>
 					</div>
+					{!active ? (
+						<button
+							type="button"
+							onClick={() => {
+								setSelectedCallId(null)
+								setHistoryOpen(true)
+							}}
+							aria-label="Open call history"
+							className="grid size-11 shrink-0 place-items-center rounded-full text-muted active:bg-surface-2 active:text-text"
+						>
+							<History size={19} />
+						</button>
+					) : null}
 					<button
 						type="button"
 						onClick={voice.closePanel}
@@ -157,6 +191,12 @@ export function VoiceCallSheet() {
 						</div>
 
 						<div className="shrink-0 border-t border-border-soft bg-surface/80 px-4 pb-3 pt-3 backdrop-blur-xl">
+							{recording.error || recording.data?.captureError ? (
+								<p role="alert" className="mb-2 text-xs text-del">
+									{recording.data?.captureError ??
+										'Transcript saving could not be confirmed. Check call history when the connection returns.'}
+								</p>
+							) : null}
 							{voice.error ? (
 								<button
 									type="button"
@@ -209,6 +249,12 @@ export function VoiceCallSheet() {
 							</div>
 						</div>
 					</>
+				) : historyOpen ? (
+					<VoiceHistoryPanel
+						selectedId={selectedCallId}
+						onSelect={setSelectedCallId}
+						onBack={() => setHistoryOpen(false)}
+					/>
 				) : (
 					<div className="min-h-0 flex-1 overflow-y-auto px-5 py-7">
 						<div className="mx-auto flex max-w-sm flex-col items-center text-center">
@@ -277,7 +323,8 @@ export function VoiceCallSheet() {
 							<p className="mt-3 text-[11px] leading-snug text-faint">
 								{target
 									? 'AI-generated voice. Audio and this chat’s recent messages are sent to OpenAI for this live call.'
-									: 'AI-generated voice. Microphone audio is sent to OpenAI for this live call.'}
+									: 'AI-generated voice. Microphone audio is sent to OpenAI for this live call.'}{' '}
+								Transcripts are saved on your Mac.
 							</p>
 						</div>
 					</div>

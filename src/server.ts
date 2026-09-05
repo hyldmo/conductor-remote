@@ -119,6 +119,7 @@ import { VoiceBroker } from './voice/broker.ts'
 import { openAIOriginForSipHost, readVoiceConfig, voicePort } from './voice/config.ts'
 import { parseVoiceCallTarget, readVoiceChatContext, VoiceContextError } from './voice/context.ts'
 import { createVoiceGateway } from './voice/gateway.ts'
+import { MAX_VOICE_SEARCH_CHARS, VoiceHistory } from './voice/history.ts'
 import { PreviewStore, type WorkspacePreview } from './voice/preview.ts'
 import { createVoiceServer } from './voice/server.ts'
 import { mintSipTicket, missingTicketConfig } from './voice/ticket.ts'
@@ -349,6 +350,8 @@ const voiceConfig = readVoiceConfig()
 const voiceSafetyIdentifier = crypto.createHash('sha256').update(`conductor-remote:${cfg.token}`).digest('hex')
 const voiceBoards = new Map<string, VoiceBriefBoard>()
 const voicePreviews = new PreviewStore(path.join(stateDir(), 'voice-previews.json'))
+const voiceHistory = new VoiceHistory(path.join(stateDir(), 'voice-history.db'))
+process.on('exit', () => voiceHistory.close())
 const voiceBroker = voiceConfig.openaiKey
 	? new VoiceBroker({
 			apiKey: voiceConfig.openaiKey,
@@ -358,6 +361,7 @@ const voiceBroker = voiceConfig.openaiKey
 			mcpUrl: voiceConfig.publicBaseUrl ? `${voiceConfig.publicBaseUrl}/mcp` : null,
 			mcpToken: voiceConfig.mcpToken,
 			stateFile: path.join(stateDir(), 'voice-calls.json'),
+			history: voiceHistory,
 			tools: callId => voiceToolsForCall(callId),
 			onClose: callId => voiceBoards.delete(callId)
 		})
@@ -2888,6 +2892,44 @@ const server = http.createServer(async (req, res) => {
 				})
 			}
 
+			const voiceTranscript = routeParam(routes.voiceTranscript, req.method, pathname)
+			if (
+				isRoute(routes.voiceHistory, req.method, pathname) ||
+				isRoute(routes.voiceSearch, req.method, pathname) ||
+				voiceTranscript
+			) {
+				try {
+					if (isRoute(routes.voiceSearch, req.method, pathname)) {
+						const query = url.searchParams.get('q')?.trim() ?? ''
+						if (!query || query.length > MAX_VOICE_SEARCH_CHARS)
+							return json(req, res, 400, { error: `q must contain 1–${MAX_VOICE_SEARCH_CHARS} characters` })
+						return json(
+							req,
+							res,
+							200,
+							voiceHistory.search(query, {
+								limit: Math.max(1, Math.min(50, Number(url.searchParams.get('limit')) || 12)),
+								offset: Math.max(0, Math.min(1_000_000, Number(url.searchParams.get('offset')) || 0)),
+								callId: url.searchParams.get('callId') || undefined
+							})
+						)
+					}
+					if (!voiceTranscript) {
+						const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 30))
+						const offset = Math.max(0, Math.min(1_000_000, Number(url.searchParams.get('offset')) || 0))
+						return json(req, res, 200, voiceHistory.list(Math.floor(limit), Math.floor(offset)))
+					}
+					const call =
+						url.searchParams.get('summary') === '1'
+							? voiceHistory.status(voiceTranscript)
+							: voiceHistory.read(voiceTranscript)
+					return call ? json(req, res, 200, call) : json(req, res, 404, { error: 'Saved voice call not found' })
+				} catch (error) {
+					console.warn('[voice] could not read call history:', error)
+					return json(req, res, 503, { error: 'Call history is unavailable. Check the relay logs.' })
+				}
+			}
+
 			// POST /api/voice/ticket — the native app presents the same relay bearer as
 			// the PWA, and receives only a two-minute SIP URI. The OpenAI key, webhook
 			// secret and marker key never leave this Mac.
@@ -2932,7 +2974,7 @@ const server = http.createServer(async (req, res) => {
 						},
 						voiceSafetyIdentifier
 					)
-					voiceBroker.registerWebRtc(call.callId)
+					voiceBroker.registerWebRtc(call.callId, { voice: body.voice, language: body.language })
 					return json(req, res, 200, call)
 				} catch (err) {
 					if (err instanceof VoiceContextError) return json(req, res, err.status, { error: err.message })
@@ -4150,6 +4192,7 @@ server.listen(cfg.port, cfg.host, () => {
 	voiceServer.listen(voicePort(), '127.0.0.1', () => {
 		console.info(`  voice:      127.0.0.1:${voicePort()}${voiceBroker ? '' : ' (waiting for OpenAI config)'}`)
 		void voiceBroker?.restore()
+		if (!voiceBroker) voiceHistory.recover()
 	})
 	if (orchestration.writable) {
 		setInterval(() => orchestration.heartbeatRelayInstance(relayIdentity), 2_000).unref()

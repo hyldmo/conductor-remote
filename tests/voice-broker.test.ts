@@ -10,10 +10,13 @@ import {
 	estimateRealtimeCost,
 	VoiceBroker
 } from '../src/voice/broker.ts'
+import { VoiceHistory } from '../src/voice/history.ts'
 import { VOICE_INSTRUCTIONS } from '../src/voice/prompt.ts'
 
 const dirs: string[] = []
+const histories: VoiceHistory[] = []
 afterEach(() => {
+	for (const history of histories.splice(0)) history.close()
 	for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
 })
 
@@ -73,6 +76,8 @@ function setup(apiOrigin = 'https://api.openai.com') {
 		}
 	]
 	let now = 1_000
+	const history = new VoiceHistory(path.join(dir, 'history.db'), { now: () => now })
+	histories.push(history)
 	const broker = new VoiceBroker({
 		apiKey: 'sk-test-secret',
 		apiOrigin,
@@ -86,7 +91,8 @@ function setup(apiOrigin = 'https://api.openai.com') {
 		log: line => logs.push(line),
 		tools: () => functionTools,
 		onClose,
-		now: () => now
+		now: () => now,
+		history
 	})
 	return {
 		broker,
@@ -96,6 +102,7 @@ function setup(apiOrigin = 'https://api.openai.com') {
 		logs,
 		onClose,
 		functionToolRun,
+		history,
 		advance: (ms: number) => (now += ms)
 	}
 }
@@ -140,6 +147,46 @@ describe('the call accept payload', () => {
 })
 
 describe('VoiceBroker', () => {
+	it('archives both sides of a browser call through the sideband and keeps the transcript after hang-up', async () => {
+		const { broker, sockets, history } = setup()
+		broker.registerWebRtc('rtc_saved', { voice: 'cedar', language: 'no' })
+		const socket = sockets[0]
+		socket.emit('open')
+		socket.event({ type: 'input_audio_buffer.committed', item_id: 'u1', previous_item_id: null })
+		socket.event({
+			type: 'conversation.item.added',
+			previous_item_id: 'u1',
+			item: { id: 'a1', type: 'message', role: 'assistant', content: [] }
+		})
+		socket.event({ type: 'response.output_audio_transcript.done', item_id: 'a1', transcript: 'I will check.' })
+		socket.event({
+			type: 'conversation.item.input_audio_transcription.completed',
+			item_id: 'u1',
+			transcript: 'What is running?'
+		})
+		expect(history.read('rtc_saved')?.entries.map(entry => entry.text)).toEqual(['What is running?', 'I will check.'])
+		await broker.hangupWebRtc('rtc_saved')
+		expect(history.read('rtc_saved')).toMatchObject({
+			status: 'ended',
+			hasGaps: false,
+			voice: 'cedar',
+			language: 'no',
+			entryCount: 2
+		})
+	})
+
+	it('keeps a partial transcript visible after an unexpected observer disconnect', () => {
+		const { broker, sockets, history } = setup()
+		broker.registerWebRtc('rtc_partial')
+		sockets[0].event({ type: 'response.output_audio_transcript.delta', item_id: 'a1', delta: 'Here is the' })
+		sockets[0].emit('close')
+		expect(history.read('rtc_partial')).toMatchObject({
+			status: 'interrupted',
+			hasGaps: true,
+			entries: [{ text: 'Here is the', partial: true }]
+		})
+	})
+
 	it('accepts, persists, and opens the authenticated observer socket', async () => {
 		const { broker, sockets, socketFactory, fetcher } = setup()
 		await broker.accept('rtc_1')
@@ -260,7 +307,12 @@ describe('VoiceBroker', () => {
 		expect(socket.sent.map(value => JSON.parse(value)).slice(1)).toEqual([
 			{
 				type: 'conversation.item.create',
-				item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'The build failed.' }] }
+				item: {
+					id: expect.stringMatching(/^relay_/),
+					type: 'message',
+					role: 'user',
+					content: [{ type: 'input_text', text: 'The build failed.' }]
+				}
 			},
 			{ type: 'response.create' }
 		])
@@ -282,7 +334,12 @@ describe('VoiceBroker', () => {
 		expect(socket.sent.map(value => JSON.parse(value))).toEqual([
 			{
 				type: 'conversation.item.create',
-				item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'The send parked.' }] }
+				item: {
+					id: expect.stringMatching(/^relay_/),
+					type: 'message',
+					role: 'user',
+					content: [{ type: 'input_text', text: 'The send parked.' }]
+				}
 			},
 			{ type: 'response.create' }
 		])

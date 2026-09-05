@@ -321,11 +321,12 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 relay-backed reads and ordinary Conductor controls. Workflow Start, recovery, and
 role editing deliberately remain authenticated phone UI operations.
 
-Two transports, same 23 tools.
+Two transports, same tools.
 
 | | |
 |---|---|
 | `search_chats` · `read_chat` | full-text search every chat on this Mac, archived included, then read one |
+| `list_voice_calls` · `search_voice_calls` · `read_voice_call` | list, search, and read saved voice-call transcripts, with surrounding context and recording gaps |
 | `list_workspaces` · `list_chats` · `workspace_diff` · `list_repos` | what is running, and what it changed |
 | `plan_usage` | prompt-free Claude/Codex subscription allowances and reset times |
 | `create_workspace` | start ordinary work in a repo, with an optional first prompt and model/effort/plan/fast choices. Creation uses a deep link; selected settings apply before the prompt |
@@ -344,7 +345,7 @@ Two transports, same 23 tools.
 **Name it `conductor-remote`, not `conductor`.** Conductor injects an MCP server of its
 own into every agent it runs, and that one is already called `conductor`. Register this
 under the same name and inside a Conductor workspace the two collide: Conductor's tools
-win, these 23 vanish, and the only trace left is this server's instructions text —
+win, these tools vanish, and the only trace left is this server's instructions text —
 so it reads as if the tools should be there.
 
 **stdio** — for an agent running on this Mac. The client spawns it as a child process;
@@ -386,6 +387,9 @@ of the time.
 |---|---|
 | `search_chats` | full-text search every chat on the Mac, archived included |
 | `read_chat` | a transcript by `session_id` — works for archived workspaces |
+| `list_voice_calls` | recent saved voice calls with previews and call IDs, including older pages |
+| `search_voice_calls` | search caller and assistant text across saved calls, with IDs for reading context |
+| `read_voice_call` | a saved call's latest entries or a window around a search hit, with partial text and recording gaps labeled |
 | `list_workspaces` | what is running right now, with status and model |
 | `list_chats` | the chat tabs in a workspace |
 | `list_roles` | picker-backed cross-provider role definitions and validation issues |

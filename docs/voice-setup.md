@@ -209,6 +209,30 @@ conductor-remote service logs
 
 Each call starts with the Mac's lock state. A confirmed send returns to the voice session immediately and reuses the relay's existing transcript receipt, retry, idempotency, and parked-prompt path. A landed send stays silent; a locked or failed send is announced. Merely hearing a decision does not clear it—dispatching it or explicitly skipping it advances the read mark.
 
+### Saved transcripts
+
+New browser and dial-in calls are saved automatically on the Mac. Open **Control room → Call history** to read a past call, copy its text, or export a `.txt` file. Hanging up a browser call opens its saved transcript. History is available to every device authenticated to this relay, including when voice calling is no longer configured.
+
+The archive lives at `~/Library/Application Support/conductor-remote/voice-history.db`, with owner-only file permissions. It is a separate SQLite database owned by the relay; Conductor's database remains read-only. Back it up using SQLite's backup facility, or stop the relay before copying it, since an active database can have a `-wal` file alongside it. Calls are kept indefinitely.
+
+The relay saves caller transcriptions, typed messages, assistant text, tool names, and call timestamps through its existing OpenAI sideband connection. Completed utterances are committed immediately; partial captions are checkpointed every half-second and flushed on shutdown. Audio recordings, raw event payloads, tool arguments and authentication headers are not archived. Saving works while the call panel is hidden and does not depend on a final upload from the phone.
+
+Transcription can finish out of order, so the archive follows conversation item IDs and predecessor links rather than the arrival order of captions. See OpenAI's [transcription events](https://developers.openai.com/api/docs/guides/realtime-transcription) and [sideband controls](https://developers.openai.com/api/docs/guides/realtime-server-controls).
+
+An interrupted reply is labeled because generated text can include words that were never played. Failed transcription is shown explicitly. A lost observer connection or relay restart marks possible gaps; reconnecting does not promise to recover events missed while disconnected. Previously completed calls that were never captured cannot be backfilled. Storage failures appear in the call panel and history, with details in the relay logs.
+
+Authenticated reads are `GET /api/voice/history?limit=30&offset=0` for call summaries and `GET /api/voice/history/:callId` for one complete transcript. `?summary=1` reads its recording status without transferring the conversation.
+
+The standard conductor-remote MCP server exposes the same archive over both stdio and HTTP:
+
+- `list_voice_calls` lists recent calls with previews and call IDs. Use `limit` and `offset` to page through older calls.
+- `search_voice_calls` searches caller and assistant text, with the same words/quoted-phrase grammar as `search_chats`. Each hit includes a call ID and an item ID; `call_id` can restrict the search to one call. Partial captions are searchable and are replaced when their corrected final text arrives.
+- `read_voice_call` reads a call's latest entries, or a window around `near` (an item ID from search). `before`, `after`, `limit`, and `max_chars` bound the result. `older_item` and `newer_item` let the agent continue through the conversation. Gaps, failed transcription and interrupted replies remain explicit in MCP output.
+
+For example, an agent can call `search_voice_calls({"query":"\"release Friday\""})`, then `read_voice_call({"call_id":"rtc_…","near":"item_…","before":4,"after":4})` with IDs from the result. These tools only read the archive through authenticated relay routes and never drive Conductor's UI or start a call. They are part of the main MCP server; the live voice session's scoped action tools remain separate. After installing the release, reconnect an existing MCP client so it discovers the new tools.
+
+Search uses `GET /api/voice/search?q=…&limit=12&offset=0`, optionally with `callId=…`. Its local full-text index contains only caller and assistant text; tool payloads and internal relay nudges are excluded. Existing archives are indexed automatically without replacing their saved transcripts.
+
 ### Cost
 
 The default is `gpt-realtime-2.1-mini`. OpenAI currently publishes these per-million-token prices:
