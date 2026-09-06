@@ -179,6 +179,7 @@ export function decodeDelegation(raw: unknown): PersistedDelegation {
 		createdAt: integer(value.createdAt, 'createdAt'),
 		updatedAt: integer(value.updatedAt, 'updatedAt'),
 		...(value.handoff === undefined ? {} : { handoff: decodeAttachment(value.handoff) }),
+		...(value.assignment === undefined ? {} : { assignment: decodeAttachment(value.assignment) }),
 		...(value.sendDelivery === undefined ? {} : { sendDelivery: decodeDelivery(value.sendDelivery, 'sendDelivery') }),
 		...(value.sentRowid === undefined ? {} : { sentRowid: integer(value.sentRowid, 'sentRowid', 1) }),
 		...(value.completionRowid === undefined

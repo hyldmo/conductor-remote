@@ -229,12 +229,6 @@ export function createWorkflowServices(
 								{ retryable: opened.retryable !== false }
 							)
 						}
-						if (!opened.sessionId) {
-							throw new WorkflowCoordinatorError(
-								'workflow_effect_failed',
-								'Conductor opened a child tab but did not record its exact session ID.'
-							)
-						}
 						return { sessionId: opened.sessionId }
 					})
 				},

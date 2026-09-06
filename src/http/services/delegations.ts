@@ -1,6 +1,6 @@
 import { writeAttachment } from '../../files/attachments.ts'
 
-import { delegatedPrompt } from '../../orchestration/delegation/prompt.ts'
+import { delegatedPrompt, writeDelegatedAssignment } from '../../orchestration/delegation/prompt.ts'
 import { DelegationQueue } from '../../orchestration/delegation/queue.ts'
 import { delegationReturnAttachment, delegationReturnText } from '../../orchestration/delegation/return.ts'
 import type {
@@ -99,8 +99,10 @@ export function createDelegationsServices(
 			return delegationError('opening_failed', 'The Mac is locked — unlock it and try again.')
 		}
 		let handoff: Attachment
+		let assignment: Attachment
 		try {
 			handoff = delegationHandoff(job, ws)
+			assignment = writeDelegatedAssignment({ ...job, handoff }, ws.worktree)
 		} catch (err) {
 			return delegationError('opening_failed', err instanceof Error ? err.message : String(err), false)
 		}
@@ -112,9 +114,7 @@ export function createDelegationsServices(
 				opened.retryable !== false
 			)
 		}
-		if (!opened.sessionId)
-			return delegationError('opening_failed', 'Conductor opened a tab but did not record its chat id', false)
-		return { ok: true as const, childSessionId: opened.sessionId, handoff }
+		return { ok: true as const, childSessionId: opened.sessionId, handoff, assignment }
 	}
 
 	async function configureDelegation(job: PersistedDelegation) {
@@ -234,7 +234,14 @@ export function createDelegationsServices(
 		} catch (err) {
 			return delegationError('state_invalid', err instanceof Error ? err.message : String(err), false)
 		}
-		const result = await trackedPrompt(ws, job.childSessionId, text, job.sendDelivery, 'send_failed', job.handoff)
+		const result = await trackedPrompt(
+			ws,
+			job.childSessionId,
+			text,
+			job.sendDelivery,
+			'send_failed',
+			job.assignment ?? job.handoff
+		)
 		if (!result.ok) return result
 		return 'pending' in result
 			? { ok: true as const, pending: true as const, sendDelivery: result.delivery }
@@ -343,7 +350,12 @@ export function createDelegationsServices(
 				if (!delivery || !sessionId) return null
 				const text = returning ? job.returnText : delegatedPrompt(job)
 				if (!text) return null
-				const receipt = trackedReceipt(sessionId, text, delivery, returning ? job.returnAttachment : job.handoff)
+				const receipt = trackedReceipt(
+					sessionId,
+					text,
+					delivery,
+					returning ? job.returnAttachment : (job.assignment ?? job.handoff)
+				)
 				return receipt
 					? { stage: returning ? 'returning' : 'sending', delivery: { ...delivery, messageId: receipt.id } }
 					: null

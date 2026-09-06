@@ -576,6 +576,15 @@ Two asymmetric halves — keep them separate:
     Pending acceptance spends no attempts and never resends. A saved baseline recovers
     a receipt lost across retry/restart, an exact accepted id cannot be replaced by a
     later identical prompt, and cancellation fails visibly without undoing the cancel.
+    New children receive an ASCII reference to a frozen UTF-8 `assignment.md` beside
+    their transcript. The file holds the complete role preamble, assignment and
+    parent-context instructions; this avoids Conductor's per-chunk socket decoder
+    replacing a Unicode character split across chunks. The reference is persisted
+    before configuring/sending. Older jobs without an assignment file keep their
+    exact inline prompt for receipt matching, and altered receipts still stop retries.
+    Chat creation holds the UI lease from its session baseline through the unique
+    new-row receipt, including after a shortcut error. An absent or ambiguous receipt
+    fails without automatically opening another tab; a script exit alone is not success.
     New ad hoc jobs never mark an ordinary parent as `planning`: that marker is
     also used by the sidebar's pre-coordinator Workflow identity fallback.
     **A helper's final reply is the report source** (`src/orchestration/delegation/return.ts`).

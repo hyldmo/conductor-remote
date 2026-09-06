@@ -36,6 +36,8 @@ export interface PersistedDelegation {
 	createdAt: number
 	updatedAt: number
 	handoff?: Attachment
+	/** New jobs carry their full UTF-8 instructions on disk; older jobs keep their original inline prompt. */
+	assignment?: Attachment
 	sendDelivery?: DelegationDelivery
 	sentRowid?: number
 	completionRowid?: number
@@ -68,6 +70,7 @@ export interface SessionRolesRead {
 export interface DelegationTransitionPatch {
 	childSessionId?: string
 	handoff?: Attachment
+	assignment?: Attachment
 	sentRowid?: number
 	completionRowid?: number
 	returnCursor?: number
@@ -89,7 +92,9 @@ export interface DelegationActionError {
 	retryable?: boolean
 }
 
-export type OpenDelegationResult = { ok: true; childSessionId: string; handoff: Attachment } | DelegationActionError
+export type OpenDelegationResult =
+	| { ok: true; childSessionId: string; handoff: Attachment; assignment?: Attachment }
+	| DelegationActionError
 
 export type ConfigureDelegationResult = { ok: true } | DelegationActionError
 

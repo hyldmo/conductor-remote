@@ -43,6 +43,7 @@ export function transitionDelegation(
 		updatedAt,
 		...(patch.childSessionId === undefined ? {} : { childSessionId: patch.childSessionId }),
 		...(patch.handoff === undefined ? {} : { handoff: patch.handoff }),
+		...(patch.assignment === undefined ? {} : { assignment: patch.assignment }),
 		...(patch.sentRowid === undefined ? {} : { sentRowid: patch.sentRowid }),
 		...(patch.completionRowid === undefined ? {} : { completionRowid: patch.completionRowid }),
 		...(patch.returnCursor === undefined ? {} : { returnCursor: patch.returnCursor }),
@@ -198,7 +199,7 @@ export class DelegationQueue {
 					transitionDelegation(
 						job,
 						'configuring',
-						{ childSessionId: result.childSessionId, handoff: result.handoff },
+						{ childSessionId: result.childSessionId, handoff: result.handoff, assignment: result.assignment },
 						this.now()
 					)
 				)

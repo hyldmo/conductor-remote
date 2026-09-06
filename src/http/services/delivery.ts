@@ -21,7 +21,7 @@ import { setAgentOptions } from '../../writes/agent-options.ts'
 import { newChat } from '../../writes/chats.ts'
 import { lockBlocked, retryWontHelp, screenLocked, sendNeverStarted } from '../../writes/guards.ts'
 import type { ChatTab, SendResult } from '../../writes/types.ts'
-import { withUiPriority } from '../../writes/ui-lock.ts'
+import { uiTurn, withUiPriority } from '../../writes/ui-lock.ts'
 import type { BaseServices } from './base.ts'
 
 export function createDeliveryServices(
@@ -158,40 +158,49 @@ export function createDeliveryServices(
 	/**
 	 * Open a chat tab in a workspace and come back with its id.
 	 *
-	 * ⌘T is fire-and-forget like every other keystroke here, so the id is not something
-	 * the write can return — the DB is the receipt. Which row is the new one is decided by
-	 * diffing the tab list against the one taken *before* the keystroke, not by taking the
-	 * newest: a sibling tab or another agent may have opened one in between, and picking by
-	 * `created_at` would hand back theirs.
+	 * The UI lease spans the baseline, shortcut and DB receipt. Snapshotting before
+	 * the lease or releasing it before the receipt lets concurrent opens claim each
+	 * other's tabs. A script exit is only an attempted action; only one new row is
+	 * success, including when a script fails after its shortcut already took effect.
 	 */
 	async function openChat(
 		ws: Workspace
 	): Promise<
-		{ sessionId: string | null } | { error: true; result: Awaited<ReturnType<typeof newChat>>; retryable?: boolean }
+		{ sessionId: string } | { error: true; result: Awaited<ReturnType<typeof newChat>>; retryable?: boolean }
 	> {
-		const before = new Set(reads.listSessions(ws.id).map(s => s.id))
-		const result = await newChat(ws)
-		if (!result.ok) return { error: true, result }
-		// The new session lands in the DB a beat after Cmd+T — poll for the fresh id.
-		for (let i = 0; i < 12; i++) {
-			await sleep(500)
-			const fresh = reads.listSessions(ws.id).filter(s => !before.has(s.id))
-			if (fresh.length > 1) {
-				return {
-					error: true,
-					retryable: false,
-					result: {
-						ok: false,
-						strategy: actuator.name,
-						error: 'more than one new chat appeared; refusing to guess which one this request opened'
+		return uiTurn(async () => {
+			const before = new Set(reads.listSessions(ws.id).map(s => s.id))
+			const result = await newChat(ws)
+			for (let i = 0; i <= 12; i++) {
+				const fresh = reads.listSessions(ws.id).filter(s => !before.has(s.id))
+				if (fresh.length > 1) {
+					return {
+						error: true as const,
+						retryable: false,
+						result: {
+							ok: false,
+							strategy: result.strategy,
+							error: 'more than one new chat appeared; refusing to guess which one this request opened'
+						}
 					}
 				}
+				if (fresh[0]) return { sessionId: fresh[0].id }
+				if (i < 12) await sleep(500)
 			}
-			if (fresh[0]) return { sessionId: fresh[0].id }
-		}
-		// The tab is almost certainly on screen; only its id is missing. Say so rather than
-		// failing the call, so a caller can still tell the user where the work went.
-		return { sessionId: null }
+			return {
+				error: true as const,
+				// A late tab cannot be distinguished from a retry's tab. Do not replay an
+				// unconfirmed creation automatically; the user can inspect the workspace.
+				retryable: false,
+				result: result.ok
+					? {
+							ok: false,
+							strategy: result.strategy,
+							error: 'Conductor did not confirm a new chat. Check the workspace before trying again.'
+						}
+					: result
+			}
+		})
 	}
 
 	/**

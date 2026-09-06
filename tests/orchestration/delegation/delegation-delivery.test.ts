@@ -7,7 +7,7 @@ import { stateDir } from '../../../src/config.ts'
 import type { ConductorDb } from '../../../src/db.ts'
 import { createDelegationsServices } from '../../../src/http/services/delegations.ts'
 import { createDeliveryServices } from '../../../src/http/services/delivery.ts'
-import { delegatedPrompt } from '../../../src/orchestration/delegation/prompt.ts'
+import { delegatedPrompt, writeDelegatedAssignment } from '../../../src/orchestration/delegation/prompt.ts'
 import { DelegationStore } from '../../../src/orchestration/delegation/store.ts'
 import type { PersistedDelegation } from '../../../src/orchestration/delegation/types.ts'
 import { MessageReads } from '../../../src/reads/messages.ts'
@@ -144,6 +144,71 @@ function returningJob(f: ReturnType<typeof fixture>, returnMode: 'queue' | 'stee
 }
 
 describe('delegation delivery receipts', () => {
+	test.each([
+		false,
+		true
+	])('keeps Unicode on disk and survives every socket split and restart (interrupted=%s)', async interrupted => {
+		const f = fixture()
+		f.job.prompt = `${'Inspect the delivery path. '.repeat(400)}globals → routing.json; café; 日本語; 🧪`
+		f.job.resolvedRole.preamble = 'Respect ÆØÅ and return the requested résumé → 🧪.'
+		const inline = delegatedPrompt(f.job)
+		f.job.assignment = writeDelegatedAssignment(f.job, f.worktree)
+		const assignment = f.job.assignment
+		const body = fs.readFileSync(path.join(f.worktree, assignment.path), 'utf8')
+		expect(body).toContain(inline)
+		expect(body).toContain(JSON.stringify(f.job.handoff!.path))
+		const text = delegatedPrompt(f.job)
+		expect(Buffer.byteLength(text)).toBe(text.length)
+		expect(text.length).toBeLessThan(500)
+		f.send.mockImplementationOnce(async (target, actual) => {
+			// Check durability before the first external action, then reproduce the
+			// runtime's per-chunk decoding at every possible transport boundary.
+			expect(f.store.get(f.job.id)?.assignment).toEqual(assignment)
+			const bytes = Buffer.from(JSON.stringify({ message: actual }))
+			for (let split = 1; split < bytes.length; split++) {
+				const decoded = JSON.parse(bytes.subarray(0, split).toString() + bytes.subarray(split).toString()).message
+				expect(decoded).toBe(text)
+			}
+			f.accept('unicode-assignment', target.sessionId as string, actual)
+			if (interrupted) throw new Error('disconnected after acceptance')
+			return { ok: true, strategy: 'test' }
+		})
+		const queue = f.createQueue()
+		queue.enqueue(f.store, f.job)
+		await queue.wake()
+		vi.setSystemTime(Date.now() + 10_000)
+		const resumed = f.createQueue()
+		resumed.resume([new DelegationStore(f.worktree)])
+		await resumed.wake()
+		expect(f.send).toHaveBeenCalledTimes(1)
+		f.promote('unicode-assignment')
+		await resumed.wake()
+		expect(f.store.get(f.job.id)).toMatchObject({ status: 'running', sentRowid: 1, assignment })
+		expect(fs.readFileSync(path.join(f.worktree, assignment.path), 'utf8')).toBe(body)
+		expect(f.send).toHaveBeenCalledTimes(1)
+	})
+
+	test('retains the assignment reference when an altered bootstrap must be correlated after restart', async () => {
+		const f = fixture()
+		f.job.assignment = writeDelegatedAssignment(f.job, f.worktree)
+		f.store.put({
+			...f.job,
+			status: 'failed',
+			sendDelivery: { rowid: 0, outboxIds: [] },
+			failure: { code: 'send_failed', message: 'disconnected', retryable: true }
+		})
+		f.accept('altered-bootstrap', f.child.id, `${delegatedPrompt(f.job)}changed`)
+		const queue = f.createQueue()
+		queue.resume([f.store])
+		await queue.wake()
+		expect(f.store.get(f.job.id)).toMatchObject({
+			status: 'failed',
+			sendDelivery: { messageId: 'altered-bootstrap' },
+			failure: { code: 'delivery_altered', retryable: false }
+		})
+		expect(f.send).not.toHaveBeenCalled()
+	})
+
 	test.each([
 		'outbox',
 		'message',
