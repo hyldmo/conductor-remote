@@ -9,7 +9,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from '../config.ts'
-import { currentModelCatalog, modelAgentType, modelPickerLabel } from '../shared.ts'
+import { modelAgentType, modelPickerLabel, savedModelCatalog } from '../shared.ts'
 
 export { newestModelSnapshot } from '../shared.ts'
 
@@ -173,14 +173,14 @@ export function roleModelIssues(
 	groups: CachedModelGroup[]
 ): Array<{ role: string; error: DelegationError }> {
 	const issues: Array<{ role: string; error: DelegationError }> = []
-	const models = currentModelCatalog(groups)
+	const models = savedModelCatalog(groups)
 	for (const [name, role] of Object.entries(config.roles)) {
 		if (!models.includes(modelPickerLabel(role.model))) {
 			issues.push({
 				role: name,
 				error: issue(
 					'model_missing',
-					`Role ${name} needs an exact model from Conductor's current picker catalog; update it in the role editor.`
+					`Role ${name} needs an exact model from Conductor's saved picker catalog; update it in the role editor.`
 				)
 			})
 			continue
@@ -207,12 +207,12 @@ export function resolveRole(config: RolesConfig, name: string, groups: CachedMod
 		return { ok: false, error: issue('role_not_found', `Unknown delegated role ${name}.`) }
 	}
 	const role = config.roles[name]
-	if (!currentModelCatalog(groups).includes(modelPickerLabel(role.model))) {
+	if (!savedModelCatalog(groups).includes(modelPickerLabel(role.model))) {
 		return {
 			ok: false,
 			error: issue(
 				'model_missing',
-				`Role ${name} needs an exact model from Conductor's current picker catalog; update it in the role editor.`
+				`Role ${name} needs an exact model from Conductor's saved picker catalog; update it in the role editor.`
 			)
 		}
 	}
