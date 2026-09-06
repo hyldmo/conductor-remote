@@ -84,6 +84,28 @@ describe('delegation transitions', () => {
 })
 
 describe('delegation queue', () => {
+	test('persists the assignment file from opening before configuring or sending', async () => {
+		const persisted = store()
+		const assignment = { ...handoff, name: 'assignment.md', path: '.context/attachments/DEF456/assignment.md' }
+		const queue = new DelegationQueue({
+			open: async () => ({ ok: true, childSessionId: 'child-1', handoff, assignment }),
+			configure: async current => {
+				expect(current.assignment).toEqual(assignment)
+				expect(persisted.get(current.id)?.assignment).toEqual(assignment)
+				return { ok: true }
+			},
+			send: async current => {
+				expect(current.assignment).toEqual(assignment)
+				return { ok: true, sentRowid: 20 }
+			},
+			completion: () => null,
+			returnResult: async () => ({ ok: true, returnRowid: 40 })
+		})
+		queue.enqueue(persisted, job())
+		await queue.wake()
+		expect(persisted.get('job-1')).toMatchObject({ status: 'running', assignment })
+	})
+
 	test('runs intake through a stable completion and queued return, retaining role identity', async () => {
 		const persisted = store()
 		const calls: string[] = []
