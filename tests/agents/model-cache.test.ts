@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { ModelCache } from '../../src/agents/model-cache.ts'
-import { currentModelCatalog, newestModelSnapshot } from '../../src/shared.ts'
+import { currentModelCatalog, newestModelSnapshot, savedModelCatalog } from '../../src/shared.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -99,6 +99,16 @@ describe('model cache', () => {
 		// Only a real later menu can establish that the second choice has disappeared.
 		cache.remember('acp', [first])
 		expect(currentModelCatalog(new ModelCache(file).list())).toEqual([first])
+	})
+
+	test('keeps every persisted label available to saved-choice settings', () => {
+		const groups = [
+			{ models: ['Fable 5'], snapshotAt: 1, updatedAt: 1 },
+			{ models: ['5.6 Sol', 'Fable 5.1'], snapshotAt: 2, updatedAt: 2 }
+		]
+
+		expect(currentModelCatalog(groups)).toEqual(['5.6 Sol', 'Fable 5.1'])
+		expect(savedModelCatalog(groups)).toEqual(['5.6 Sol', 'Fable 5', 'Fable 5.1'])
 	})
 
 	test('a selected model adds evidence without replacing a menu, and a later menu can retire it', () => {

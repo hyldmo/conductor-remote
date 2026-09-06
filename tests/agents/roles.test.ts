@@ -189,7 +189,7 @@ describe('delegated role store', () => {
 		})
 	})
 
-	test('uses only the newest non-empty whole-picker snapshot', () => {
+	test('keeps saved role choices valid after a newer picker snapshot', () => {
 		const groups = [
 			{ agentType: 'claude', models: ['Fable 5', '5.6 Sol'], snapshotAt: 10, updatedAt: 10 },
 			{ agentType: 'codex', models: ['5.6 Sol'], snapshotAt: null, updatedAt: 30 },
@@ -197,15 +197,15 @@ describe('delegated role store', () => {
 		]
 		expect(newestModelSnapshot(groups)?.updatedAt).toBe(20)
 		expect(resolveRole({ version: 1, roles: { planning: { model: 'Fable 5' } } }, 'planning', groups)).toMatchObject({
-			ok: false,
-			error: { code: 'model_missing' }
+			ok: true,
+			role: { model: 'Fable 5', agentType: 'claude' }
 		})
 		expect(resolveRole({ version: 1, roles: { planning: { model: 'Fable 5.1' } } }, 'planning', groups)).toMatchObject({
 			ok: true
 		})
 	})
 
-	test('a newer Spark menu cannot invalidate other providers, but a provider rename still does', () => {
+	test('a saved label remains valid when a later menu omits it', () => {
 		const spark = 'opencode-go/muse-spark-1.3-contributor'
 		const config = {
 			version: 1 as const,
@@ -226,8 +226,8 @@ describe('delegated role store', () => {
 		expect(roleModelIssues(config, groups)).toEqual([])
 		for (const role of Object.keys(config.roles)) expect(resolveRole(config, role, groups)).toMatchObject({ ok: true })
 		expect(resolveRole({ version: 1, roles: { planning: { model: 'Fable 5' } } }, 'planning', groups)).toMatchObject({
-			ok: false,
-			error: { code: 'model_missing' }
+			ok: true,
+			role: { model: 'Fable 5', agentType: 'claude' }
 		})
 	})
 

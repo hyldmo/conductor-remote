@@ -5,9 +5,9 @@ import { createPortal } from 'react-dom'
 import {
 	agentTypeCanExposeEffort,
 	agentTypeCanExposeFastMode,
-	currentModelCatalog,
 	modelAgentType,
-	modelPickerLabel
+	modelPickerLabel,
+	savedModelCatalog
 } from '../../../../src/shared.ts'
 import { useModelCatalog, useRoles } from '../../hooks/agents.ts'
 import { EFFORT_LABELS } from '../../lib/agent.ts'
@@ -54,8 +54,8 @@ export function roleWithModel(role: DelegatedRole, model: string): DelegatedRole
 }
 
 export function roleModelProblem(role: DelegatedRole, groups: CachedModelGroup[]): string | null {
-	if (!currentModelCatalog(groups).includes(modelPickerLabel(role.model))) {
-		return 'Choose an exact model from Conductor’s current picker catalog.'
+	if (!savedModelCatalog(groups).includes(modelPickerLabel(role.model))) {
+		return 'Choose an exact model from Conductor’s saved picker catalog.'
 	}
 	const agentType = modelAgentType(role.model)
 	if (!agentType) return 'This model label does not identify a supported provider.'
@@ -69,9 +69,9 @@ export function roleModelProblem(role: DelegatedRole, groups: CachedModelGroup[]
 	return null
 }
 
-/** Each provider uses its latest observed menu; identity comes from the exact model label. */
+/** A saved exact picker label determines the provider used for the role. */
 export function roleAgentType(role: DelegatedRole, groups: CachedModelGroup[]): string | null {
-	if (!currentModelCatalog(groups).includes(modelPickerLabel(role.model))) return null
+	if (!savedModelCatalog(groups).includes(modelPickerLabel(role.model))) return null
 	return modelAgentType(role.model) ?? null
 }
 
@@ -223,7 +223,7 @@ export function RolesSettings({ onClose }: { onClose: () => void }) {
 	}, [rolesQuery.data, dirty])
 
 	const groups = modelCatalog.data?.groups
-	const models = useMemo(() => currentModelCatalog(groups ?? []), [groups])
+	const models = useMemo(() => savedModelCatalog(groups ?? []), [groups])
 	const remoteIssues = new Map(rolesQuery.data?.issues.map(issue => [issue.role, issue.error.message]) ?? [])
 	const config = draft
 	const invalid = new Map<string, string>()

@@ -324,7 +324,7 @@ describe('delegation phone surfaces', () => {
 		expect(roleDraftCanSave(true, false, [], 1)).toBe(false)
 	})
 
-	test('uses the latest observation per provider for role validation', () => {
+	test('uses every saved picker label for role editing and validation', () => {
 		const currentModels = ['5.6 Sol', 'opencode-go/muse-spark-1.3-contributor']
 		const groups = [
 			{ agentType: 'claude', models: ['Fable 5'], snapshotAt: 0, updatedAt: 0 },
@@ -336,7 +336,7 @@ describe('delegation phone surfaces', () => {
 		expect(roleAgentType({ model: '5.6 Sol' }, groups)).toBe('codex')
 		expect(roleAgentType({ model: 'opencode-go/muse-spark-1.3-contributor' }, groups)).toBe('acp')
 		expect(roleModelProblem({ model: 'Fable 5.1' }, groups)).toBeNull()
-		expect(roleModelProblem({ model: 'Fable 5' }, groups)).toContain('current picker catalog')
+		expect(roleModelProblem({ model: 'Fable 5' }, groups)).toBeNull()
 		expect(roleModelProblem({ model: 'unknown-model' }, groups)).toContain('exact model')
 	})
 

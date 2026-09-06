@@ -364,6 +364,16 @@ export function currentModelCatalog(
 	return [...models].sort((a, b) => a.localeCompare(b))
 }
 
+/**
+ * Every picker label persisted by the relay, regardless of whether a later menu
+ * snapshot retired it. Settings that edit saved choices use this complete list.
+ */
+export function savedModelCatalog(groups: readonly { models: readonly string[] }[]): string[] {
+	return [
+		...new Set(groups.flatMap(group => group.models.map(model => modelPickerLabel(model).trim()).filter(Boolean)))
+	].sort((a, b) => a.localeCompare(b))
+}
+
 /** Stable, case-insensitive grouping shared by every model selector. */
 export function groupModelPickerLabels(models: string[]): ModelPickerGroup[] {
 	const grouped = new Map<string, string[]>()
