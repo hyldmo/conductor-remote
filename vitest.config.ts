@@ -15,6 +15,11 @@ export default defineConfig({
 					name: 'unit',
 					include: ['tests/**/*.test.{ts,tsx}'],
 					exclude: ['tests/voice/voice-corpus.test.ts'],
+					// Vitest otherwise uses every performance core but one (17 workers on
+					// this Mac). Several tests exercise real child-process and AppleScript
+					// deadlines, so that synthetic CPU/process storm makes their clocks —
+					// and the live read below — flaky without resembling relay load.
+					maxWorkers: 4,
 					testTimeout: 20_000,
 					sequence: { groupOrder: 0 }
 				}
