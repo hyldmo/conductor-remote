@@ -42,7 +42,13 @@ async function flush(ms = 0): Promise<void> {
 
 beforeEach(() => {
 	vi.useFakeTimers()
-	vi.setSystemTime(new Date('2026-08-31T00:00:00Z'))
+	// Frozen, but anchored to the real present rather than a calendar date, because
+	// `vi.clearAllTimers()` drops the fake clock: a `load()` after one reads the real
+	// Date.now() while the entry it is reading carries the frozen `createdAt`. Pinned to
+	// 2026-08-31, that gap grew by a day per day until it passed `KEEP_FAILED_MS` (7 days)
+	// and the restart test started reading its own persisted entry as stale — green in CI
+	// on 2026-09-06, failing everywhere from 2026-09-07 with nothing in between changing.
+	vi.setSystemTime(new Date())
 })
 
 afterEach(() => {

@@ -1550,6 +1550,27 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
   resolved at the top of `install()` and baked like its nine siblings. `config` also
   cross-checks the configured posture against live `tailscale serve status`, because a
   relay that believes the wrong one repairs itself in the wrong direction.
+- **Install checks the loopback ports; Tailscale's HTTPS ports were always the easy
+  half.** `relayServeState`/`freeServePort` have long refused to take a serve port
+  another mount holds, but nothing asked whether `127.0.0.1:RELAY_PORT` was bindable —
+  and `server.listen` had no `'error'` handler, so a taken port reached launchd as an
+  unhandled event, `KeepAlive` respawned it, and the whole story was a stack trace in
+  `relay.err.log` while install printed a success line, a phone URL and a QR code.
+  `install()` now runs `assertPortsUsable()` before anything is written: both values must
+  parse as ports, they must differ (the two servers share one process, and `VOICE_PORT`
+  defaults to 8788 — a habitual second relay port, which is how the pair meets), and each
+  is **probed by binding it** (`src/host/ports.ts` ▸ `probeListen`), because that is the
+  only test that agrees with the real listen when a wildcard listener blocks a loopback
+  bind or a privileged port is refused rather than busy. A port **our own running daemon**
+  holds is not a conflict — a re-install boots it out moments later — which is why the
+  `EADDRINUSE` branch compares `lsof`'s pids against `agentPid()`. `lsof` is read in field
+  form (`-Fpcn`), never its table: the COMMAND column carries spaces, so a column split
+  names the wrong process in exactly the case someone is hunting for what holds their port.
+  Both refusals and the relay's own bind failure share one wording (`bindFailureLines`),
+  so the message names the same port and the same `config set` knob wherever it appears.
+  The relay's bind failure exits; **the voice listener's does not** — it is opt-in, the
+  control panel is the product, and `printVoiceRoute` already reports that route
+  separately, so a second server that never came up must not take the phone's relay down.
 - **Token is persisted**, not per-boot: `~/Library/Application Support/conductor-remote/token`
   (`config.ts` → `resolveToken`). Don't reintroduce a random-per-start token — it
   breaks the phone's saved home-screen URL. `RELAY_TOKEN` env still overrides.
