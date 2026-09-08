@@ -31,6 +31,20 @@ function serviceLoaded(): boolean {
 }
 
 /**
+ * The pid of the running LaunchAgent, or null when it is not loaded or not running. Used by the install
+ * preflight to tell "the port is taken" from "the port is taken by the very relay we are about to replace".
+ */
+export function agentPid(): number | null {
+	try {
+		const out = execFileSync('launchctl', ['print', `${domain}/${LABEL}`], { encoding: 'utf8', stdio: 'pipe' })
+		const pid = Number(out.match(/pid = (\d+)/)?.[1])
+		return Number.isInteger(pid) ? pid : null
+	} catch {
+		return null
+	}
+}
+
+/**
  * Reload the agent from the freshly written plist. `bootout` of a *running* instance is asynchronous,
  * so we wait for it to fully unload before `bootstrap` — otherwise bootstrap races the teardown and
  * fails silently, leaving the relay down after a re-deploy. Bootstrap is retried and its failure is fatal.

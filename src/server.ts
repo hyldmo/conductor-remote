@@ -2,6 +2,7 @@ import { startAutoUpdate } from './host/autoupdate.ts'
 
 import { startFunnelWatchdog } from './host/funnel-watchdog.ts'
 import { watchNoSleepExpiry } from './host/nosleep.ts'
+import { bindFailureLines } from './host/ports.ts'
 import { driftWarningLines, tailscaleBin } from './host/tailscale.ts'
 import { createRelayServer } from './http/router.ts'
 import { createRelayServices } from './http/services.ts'
@@ -31,6 +32,21 @@ const {
 	sessionPoller
 } = services
 const server = createRelayServer(services)
+
+// A `listen` failure arrives as an 'error' event, and with nobody listening for it the process throws.
+// Under launchd that is a KeepAlive restart loop whose only trace is a stack trace in relay.err.log with
+// the port nowhere in it, while `service status` says only "loaded but not running". Name the port.
+server.on('error', (err: NodeJS.ErrnoException) => {
+	for (const line of bindFailureLines('the relay', cfg.host, cfg.port, err.code ?? null, 'port')) console.error(line)
+	process.exit(1)
+})
+// The voice listener is opt-in and the control panel is the product, so its own bind failure is loud
+// rather than fatal: taking the phone's relay down over an unconfigured second server is the worse trade.
+// `service status` reports the voice route separately, so a listener that never came up still shows there.
+voiceServer.on('error', (err: NodeJS.ErrnoException) => {
+	for (const line of bindFailureLines('the voice listener', '127.0.0.1', voicePort(), err.code ?? null, 'voice-port'))
+		console.error(line)
+})
 
 server.listen(cfg.port, cfg.host, () => {
 	voiceServer.listen(voicePort(), '127.0.0.1', () => {

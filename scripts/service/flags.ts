@@ -1,3 +1,5 @@
+import { parsePortValue } from '../../src/host/ports.ts'
+
 /**
  * Install-time knobs are accepted as documented CLI flags OR the matching env var — a flag wins over the
  * ambient env. Parsed flags are folded back into process.env so everything downstream (and the plist we
@@ -38,6 +40,13 @@ export function applyFlags(argv: string[]): void {
 		}
 		if (name === '--prevent-screen-lock' && value !== 'on' && value !== 'off') {
 			console.error(`flag ${name} must be on or off`)
+			process.exit(1)
+		}
+		// Named here as well as in the install preflight because a typo is worth catching against the
+		// argument that carries it. The preflight still runs: an ambient RELAY_PORT reaches install
+		// without passing through any flag, and only the preflight sees both ports at once.
+		if ((name === '--port' || name === '--voice-port') && parsePortValue(value) === null) {
+			console.error(`flag ${name} must be a whole number from 1 to 65535, not "${value}"`)
 			process.exit(1)
 		}
 		process.env[envKey] = value

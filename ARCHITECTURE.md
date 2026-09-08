@@ -124,7 +124,8 @@ src/                     Node relay; source runs as .ts, npm ships emitted dist-
                          tool-usage.ts/service/worker keep payload scans off the HTTP thread
   notifications/         notify.ts: TurnWatcher + subscription store; webpush.ts: VAPID/encryption
   host/                  Tailscale/Wi-Fi, self-update/ingress watchdog, logs, relay process identity,
-                         UI-lease watchdog and the nosleep controller/root-helper source
+                         UI-lease watchdog, the nosleep controller/root-helper source, and ports.ts:
+                         the bind probe and shared bind-failure wording used by install and the relay
   voice/                 scoped fleet/current-chat tools, call broker/history, SIP/WebRTC transports,
                          caller gate, previews, secrets and shared speech bounding
 web/                     React PWA; Vite root

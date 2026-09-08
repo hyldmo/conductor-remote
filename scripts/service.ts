@@ -15,4 +15,4 @@ if ((process.argv[2] ?? 'status') !== 'logs') applyFlags(process.argv.slice(3))
 
 // Import only after parsing flags: environment.ts freezes the relay/voice ports.
 const { runServiceCommand } = await import('./service/commands.ts')
-runServiceCommand()
+await runServiceCommand()

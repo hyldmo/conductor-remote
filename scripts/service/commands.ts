@@ -3,11 +3,11 @@ import { FLAG_ENV } from './flags.ts'
 import { install, restart, uninstall } from './installation.ts'
 import { logs, status } from './presentation.ts'
 
-export function runServiceCommand(): void {
+export async function runServiceCommand(): Promise<void> {
 	const cmd = process.argv[2] ?? 'status'
 	switch (cmd) {
 		case 'install':
-			install()
+			await install()
 			break
 		case 'uninstall':
 			uninstall()
