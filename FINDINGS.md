@@ -396,6 +396,12 @@ then. Today it is not a reliable actuator, so the AX path
 this test was reverted afterwards.
 
 ### ✓ Sidecar IPC socket — the precise path (opt-in `WRITE_STRATEGY=sidecar`)
+
+> Update: the send below is currently **broken against current Conductor
+> builds** — the `query` payload is rejected upstream (schema drift since this
+> recon) and the `type:"query"` shape validates then silently drops the prompt
+> for sessions not live in the sidecar's store. AppleScript is the working send
+> path. Fixes welcome; the live probe handover is issue #97.
 Conductor's agents don't run under the Tauri app directly. A single
 **`conductor-runtime sidecar`** process (child of the app) **parents every live
 `claude`/`codex` agent**, and the app drives it over a unix domain socket:
@@ -493,6 +499,11 @@ until it re-reads. Noted as a fallback, not the default.
   update-fragile surface is the AX prompt-field target, remapped in minutes.
 
 ## Suggested next steps
+
+> Update: item 1 no longer holds — the sidecar send broke upstream, so the
+> `conductor://` link + AX confirmation in `AppleScriptActuator` is the working
+> targeting path. Item 2 is issue #97, where a live probe confirmed the drift.
+> Both items are kept below as history.
 1. **Per-workspace targeting — solved** via the sidecar socket (see Writes ▸
    Sidecar IPC). `SidecarActuator` addresses the session directly; the AX-tree /
    `conductor://` route mapping is no longer needed.

@@ -9,15 +9,16 @@ import { exec, uiTurn } from './ui-lock.ts'
  * `sessionId` over Conductor's own dispatch socket (see src/writes/sidecar.ts), so it needs
  * no window focus and the app UI reflects the turn correctly.
  *
- * Opt-in (WRITE_STRATEGY=sidecar) because it speaks a private, versioned IPC and
- * hasn't been validated by an automated live send (that would inject a prompt
- * into a running agent). It is the intended default once you've confirmed it on
- * your setup.
+ * Opt-in (WRITE_STRATEGY=sidecar) because it speaks a private, versioned IPC.
+ * BROKEN against current Conductor builds — the send payload is rejected
+ * upstream (schema drift, see src/writes/sidecar.ts and issue #97). Do not
+ * select it expecting sends to land; AppleScript is the working path. There is
+ * no fallback to AppleScript on send failure: a failed sidecar send reports
+ * failure. Fixes welcome.
  */
 export class SidecarActuator implements Actuator {
 	readonly name = 'sidecar'
-	readonly caveat =
-		'Delivered straight to the target session over Conductor’s dispatch socket — precise per-workspace targeting.'
+	readonly caveat = 'Broken against current Conductor builds (see issue #97) — AppleScript is the working path.'
 	readonly precise = true
 
 	available(): Promise<boolean> {
@@ -29,10 +30,19 @@ export class SidecarActuator implements Actuator {
 		const sessionId = target.sessionId ?? target.workspace.active_session_id
 		if (!sessionId) return { ok: false, strategy: this.name, error: 'no session id to target' }
 		try {
-			await sidecarSendUserMessage(sessionId, text, options.queue ? 'queue' : 'default')
+			// `options.queue` has no sidecar equivalent: the live schema accepts
+			// only 'default' | 'steering' and rejects the old 'queue' value, so
+			// always send 'default' rather than a known-invalid enum.
+			void options.queue
+			await sidecarSendUserMessage(sessionId, text, 'default')
 			return { ok: true, strategy: this.name }
 		} catch (err) {
-			return { ok: false, strategy: this.name, error: err instanceof Error ? err.message : String(err) }
+			const raw = err instanceof Error ? err.message : String(err)
+			return {
+				ok: false,
+				strategy: this.name,
+				error: `${raw} (sidecar sends are broken against current Conductor builds — see issue #97; AppleScript is the working path)`
+			}
 		}
 	}
 }
