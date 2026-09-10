@@ -14,14 +14,20 @@ import path from 'node:path'
  * `sessionId`, so there is no window focus or AppleScript involved and the app's
  * UI updates correctly because it's the real dispatch path. It is also the most
  * update-fragile surface (a private, versioned IPC), which is why it lives
- * behind the Actuator interface and falls back to AppleScript when the socket
- * can't be reached (see src/writes/actuator.ts).
+ * behind the Actuator interface as an opt-in (`WRITE_STRATEGY=sidecar`).
+ *
+ * BROKEN against current Conductor builds: the send payload below is rejected
+ * by the live sidecar (`ok:false`, schema drift since the 0.76 recon) and the
+ * `type:"query"` shape validates then silently drops the prompt for sessions
+ * that aren't live in the sidecar's store. AppleScript is the working send
+ * path. Fixes welcome — see issue #97 for the probe handover.
  *
  * Reverse-engineered from conductor-runtime (Conductor 0.76):
  *   - socket:      `$TMPDIR/conductor-sidecar-v2-<sidecarPid>.sock`
  *   - transport:   newline-delimited JSON-RPC 2.0 (`{jsonrpc,id,method,params}`)
  *   - local auth:  the literal `{ userId: 'local', auth: 'local' }`
- *   - send prompt: method `query`, params `{ type: 'sendUserMessageRequest', … }`
+ *   - send prompt (STALE — rejected by current builds, see above):
+ *     method `query`, params `{ type: 'sendUserMessageRequest', … }`
  *   - safe read:   method `contextUsage`, params `{ sessionId, …auth }`
  *
  * Stale socket files from exited sidecars linger in `$TMPDIR`, so discovery is
@@ -32,7 +38,12 @@ import path from 'node:path'
 const SOCKET_PREFIX = 'conductor-sidecar-v2-'
 const LOCAL_AUTH = { userId: 'local', auth: 'local' } as const
 
-export type SidecarDeliveryMode = 'default' | 'queue'
+/**
+ * Delivery modes the live sidecar's `sendUserMessageRequest` schema accepts
+ * (Zod `Dl6` per the #97 probe: `"default" | "steering"`). The old `'queue'`
+ * value was never valid against this schema — Conductor rejects it.
+ */
+export type SidecarDeliveryMode = 'default' | 'steering'
 
 /** Candidate sidecar socket paths in `$TMPDIR`, newest mtime first. */
 function listSidecarSockets(): string[] {
@@ -137,7 +148,9 @@ async function rpc(method: string, params: Record<string, unknown>, timeoutMs = 
 	throw lastErr instanceof Error ? lastErr : new Error('sidecar unreachable')
 }
 
-/** Resolve a connectable sidecar socket, or null. Used to decide write strategy. */
+/** True when a sidecar socket accepts connections. Note: a reachable socket
+ * does NOT mean sends work — the send payload is currently rejected upstream
+ * (see header). Used to decide write strategy. */
 export function sidecarSocket(timeoutMs = 800): Promise<string | null> {
 	const candidates = listSidecarSockets()
 	return (async () => {
@@ -174,6 +187,9 @@ export async function sidecarAvailable(): Promise<boolean> {
 /**
  * Deliver a prompt to a specific session — the real send path, precisely
  * targeted. Resolves once the sidecar has accepted (queued/sent) the message.
+ *
+ * Currently BROKEN upstream (see header): expect rejection against current
+ * Conductor builds. Failures must surface, never report success.
  */
 export async function sidecarSendUserMessage(
 	sessionId: string,

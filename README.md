@@ -293,10 +293,10 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   - **`applescript`** (default): drives Conductor's real UI send, landing in the
     *focused* session. Uses the session's own model/permission mode (zero risk of
     altering the agent). Bring the target workspace to front first.
-  - **`sidecar`** (opt-in, `WRITE_STRATEGY=sidecar`): delivers straight to the
-    target `sessionId` over Conductor's dispatch socket — precise per-workspace
-    targeting, no focus needed. Speaks a private, versioned IPC (see FINDINGS ▸
-    Writes), so it's the more fragile of the two.
+  - **`sidecar`** (opt-in, `WRITE_STRATEGY=sidecar`): **broken against current
+    Conductor builds** — Conductor changed the private `-v2-` IPC the send payload
+    was reverse-engineered from, so sends are rejected upstream. AppleScript above
+    is the working path. Fixes welcome (see issue #97 for the probe handover).
 - ✅ **Attach images and files** — tap the paperclip or paste an image into the
   composer. Text pastes over 2,000 characters become a removable `pasted-text.txt`
   attachment in chats and New workspace; shorter or offline pastes stay in the
