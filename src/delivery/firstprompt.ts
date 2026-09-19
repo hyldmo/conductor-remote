@@ -166,7 +166,7 @@ const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
 
 export class FirstPromptQueue {
 	// Explicit field assignment, not parameter properties: the dev run type-*strips*
-	// rather than transforms, and parameter properties need a transform (see CLAUDE.md).
+	// rather than transforms, and parameter properties need a transform (see AGENTS.md).
 	private readonly file: string
 	private readonly deps: DeliveryDeps
 	private entries: FirstPrompt[]

@@ -4,7 +4,7 @@
  * port and posture the deploy configured, so "how do we find tailscale / this node's public name / the
  * expose mode" lives here once rather than drifting between deploy-time and runtime copies.
  *
- * Stdlib only, strip-clean (no transform-requiring syntax — see CLAUDE.md ▸ dev path).
+ * Stdlib only, strip-clean (no transform-requiring syntax — see AGENTS.md ▸ dev path).
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'

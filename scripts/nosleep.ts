@@ -15,7 +15,7 @@
 // ScreenSaverDaemon checks that assertion before starting the idle screen saver
 // that locks the session. An explicit lock or lid close can still lock macOS;
 // those sends park in `src/delivery/parked.ts` until the next unlock. Strip-clean
-// (plain-node type-stripping), stdlib-only — see CLAUDE.md.
+// (plain-node type-stripping), stdlib-only — see AGENTS.md.
 
 import { spawn } from 'node:child_process'
 import { installedServiceEnvironment, preventScreenLockEnabled } from '../src/config.ts'

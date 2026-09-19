@@ -2,7 +2,7 @@
  * Read marks — the newest activity this phone has actually had on screen, per chat.
  *
  * Conductor's unread flag is cleared by *opening the workspace on the Mac*, and the
- * relay holds the DB read-only (see CLAUDE.md), so nothing the phone does can clear
+ * relay holds the DB read-only (see AGENTS.md), so nothing the phone does can clear
  * it. Without a local mark, a chat you read here stays shouting until you touch the
  * Mac — which is exactly the state a phone user is trying to avoid.
  *

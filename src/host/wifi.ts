@@ -15,7 +15,7 @@
  *    unknown SSID is reported rather than guessed at. Nothing secret reaches settings.json
  *    or the log, which matters because `/api/logs` is a wire surface.
  *
- * Stdlib only, strip-clean — see CLAUDE.md.
+ * Stdlib only, strip-clean — see AGENTS.md.
  */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
