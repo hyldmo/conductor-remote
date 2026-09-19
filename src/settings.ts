@@ -11,7 +11,7 @@
  * password. An SSID the Mac doesn't know is reported as unjoinable rather than stored
  * with one.
  *
- * Stdlib only, strip-clean — see CLAUDE.md.
+ * Stdlib only, strip-clean — see AGENTS.md.
  */
 import fs from 'node:fs'
 import path from 'node:path'

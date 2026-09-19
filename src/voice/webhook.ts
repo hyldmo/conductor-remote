@@ -85,7 +85,7 @@ export function verifyWebhookSignature(
 export class ReplayGuard {
 	private seen = new Map<string, number>()
 	// Explicit field, never a parameter property: the dev path runs these sources through Node's
-	// type *stripping*, which cannot transform one (CLAUDE.md ▸ Traps).
+	// type *stripping*, which cannot transform one (AGENTS.md ▸ Traps).
 	private memoryMs: number
 
 	constructor(memoryMs: number = REPLAY_MEMORY_MS) {

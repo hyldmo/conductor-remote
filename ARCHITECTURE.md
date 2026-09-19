@@ -2,7 +2,7 @@
 
 Where each file sits and what it owns, plus how to re-derive Conductor's
 internals when an update breaks a read or a write. The *why* behind these
-choices lives in [CLAUDE.md](./CLAUDE.md) (the mental model and the traps) and
+choices lives in [AGENTS.md](./AGENTS.md) (the mental model and the traps) and
 [FINDINGS.md](./FINDINGS.md) (the reverse-engineering the design rests on);
 [README.md](./README.md) covers installing and running it.
 

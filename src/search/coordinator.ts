@@ -34,7 +34,7 @@ import { chatCursor } from '../transcript/cursor.ts'
  *
  * **`node:sqlite` ships FTS5.** Porter stemming, `bm25()`, `snippet()`, `NEAR()`
  * all work on the bundled SQLite (3.51.2), so the index costs no runtime
- * dependency — which the tarball rule requires (see CLAUDE.md ▸ Traps).
+ * dependency — which the tarball rule requires (see AGENTS.md ▸ Traps).
  *
  * The index is **never** written into `conductor.db`. That handle is read-only and
  * stays that way; this opens its own file under the relay's state dir, and it is

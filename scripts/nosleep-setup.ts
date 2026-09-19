@@ -25,7 +25,7 @@
 // checked with `visudo -cf` as a draft, and the whole assembled set is re-checked
 // after install with the drop-in removed again on failure.
 //
-// Strip-clean (plain-node type-stripping), stdlib-only — see CLAUDE.md.
+// Strip-clean (plain-node type-stripping), stdlib-only — see AGENTS.md.
 
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'

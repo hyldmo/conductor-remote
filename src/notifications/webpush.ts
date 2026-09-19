@@ -3,7 +3,7 @@
  * payload encryption (RFC 8291 over RFC 8188).
  *
  * Why by hand rather than the `web-push` package: the tarball ships **zero
- * runtime deps** (see CLAUDE.md ▸ traps) and that is worth keeping — the whole
+ * runtime deps** (see AGENTS.md ▸ traps) and that is worth keeping — the whole
  * protocol is one ECDH, three HKDF expansions and an AES-GCM record, all of
  * which `node:crypto` already has. Nothing here talks to Conductor; it is a
  * pure encoder plus one `fetch`.

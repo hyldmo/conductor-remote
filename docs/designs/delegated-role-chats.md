@@ -341,7 +341,7 @@ above; check it off as it ships.
   - Verify: component tests for zero/many jobs, invalid model, save failure, distinct dismiss actions, and role retention after return.
 - [x] **T8 (P2)** — verification/docs — Complete automated verification and documentation; leave any live cross-provider task/evaluation for a separately authorized pass. Never use Conductor Plan mode in one.
   - Surfaced by: test review, measured-only actuator policy, and the accepted restart caveat.
-  - Files: `tests/`, `CLAUDE.md`, `ARCHITECTURE.md`, `FINDINGS.md`
+  - Files: `tests/`, `AGENTS.md`, `ARCHITECTURE.md`, `FINDINGS.md`
   - Verify: `yarn verify` passes. Live delegate-return loop intentionally not run.
 - [x] **T9 (P1)** — workflow kickoff — Add an explicit Workflow mode to New workspace and pristine `+` chats, backed by the planning role; persist root identity through first-prompt delivery and expose workspace creation through MCP. Keep all generic agent controls disabled/reversible and Plan hidden while active.
   - Surfaced by: follow-up product feedback that role UI alone did not provide a discoverable way to start the special delegation flow.

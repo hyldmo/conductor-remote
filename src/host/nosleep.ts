@@ -34,7 +34,7 @@
  *    with the process even if the EXIT trap never runs. The pidfile records that mode
  *    so the phone can warn accurately, and the persisted setting can opt out.
  *
- * Stdlib only, strip-clean — see CLAUDE.md.
+ * Stdlib only, strip-clean — see AGENTS.md.
  */
 import { execFile, spawn } from 'node:child_process'
 import fs from 'node:fs'

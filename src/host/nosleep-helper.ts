@@ -11,7 +11,7 @@
 // arrive at run time, and the rule grants the path with no argument pattern. So the
 // script validates its own input (digits only) instead of trusting the caller.
 //
-// Strip-clean (plain-node type-stripping), stdlib-only — see CLAUDE.md.
+// Strip-clean (plain-node type-stripping), stdlib-only — see AGENTS.md.
 
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the shell body is full of POSIX parameter expansions (${1:-0}, ${sb:-1}) in ordinary strings — that is the point, not a mis-typed template literal.
 

@@ -1,7 +1,7 @@
 /**
  * Push notifications: "your agent finished" on the lock screen.
  *
- * This is a *third* shape next to the reads/writes split in CLAUDE.md, and the
+ * This is a *third* shape next to the reads/writes split in AGENTS.md, and the
  * cheapest one — it is a **read that pushes**. Nothing here touches Conductor:
  * the trigger is a poll of the same read-only SQLite the list view uses, and the
  * delivery is an HTTPS POST to Apple/Google/Mozilla's push service. No

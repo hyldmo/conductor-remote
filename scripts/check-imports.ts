@@ -23,7 +23,7 @@
  * `yarn build` might catch rule 1 as a Rollup warning about an externalised builtin,
  * on a good day, at the bottom of a wall of output. This says which line.
  *
- * Portable (no macOS, no relay), stdlib-only, strip-clean — see CLAUDE.md.
+ * Portable (no macOS, no relay), stdlib-only, strip-clean — see AGENTS.md.
  */
 import fs from 'node:fs'
 import path from 'node:path'

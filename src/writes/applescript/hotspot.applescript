@@ -15,7 +15,7 @@
    live on macOS 26.5, 2026-08). A "whose value of attribute ..." filter fails
    wholesale (-1728) when any element lacks the attribute - several menu bar
    items do - so every lookup here walks with a per-item try instead.
-   The SE-terms trap at the top of CLAUDE.md's applescript section bit this
+   The SE-terms trap at the top of AGENTS.md's applescript section bit this
    code through a HANDLER PARAMETER: findAxId's first argument was once named
    `container`, a System Events dictionary word, so inside the tell it
    resolved as the term and the walk found nothing - through an error-eating
