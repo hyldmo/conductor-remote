@@ -364,18 +364,21 @@ function penalty(m: boolean[][]): number {
  * black-on-white style so it scans correctly regardless of the terminal theme, plus the 4-module quiet
  * zone the spec requires. `indent` is prepended (outside the styled region) to align with other output.
  */
+// Each module is two background-coloured spaces on one line. Cell backgrounds fill the whole cell,
+// including the terminal's line spacing, so the code has no gaps whatever the font or line height;
+// half-block glyphs (▀▄) leave white seams between lines that break scanning. Bright white (107)
+// rather than white (47), which many themes render as grey.
+const DARK = '\x1b[40m  '
+const LIGHT = '\x1b[107m  '
+
 function render(m: boolean[][], indent: string): string[] {
 	const size = m.length
 	const quiet = 4
-	const dark = (r: number, c: number) => (r >= 0 && r < size && c >= 0 && c < size ? m[r][c] : false)
+	const dark = (r: number, c: number) => r >= 0 && r < size && c >= 0 && c < size && m[r][c]
 	const lines: string[] = []
-	for (let r = -quiet; r < size + quiet; r += 2) {
-		let line = `${indent}\x1b[30;47m`
-		for (let c = -quiet; c < size + quiet; c++) {
-			const top = dark(r, c)
-			const bottom = dark(r + 1, c)
-			line += top && bottom ? '█' : top ? '▀' : bottom ? '▄' : ' '
-		}
+	for (let r = -quiet; r < size + quiet; r++) {
+		let line = indent
+		for (let c = -quiet; c < size + quiet; c++) line += dark(r, c) ? DARK : LIGHT
 		lines.push(`${line}\x1b[0m`)
 	}
 	return lines
