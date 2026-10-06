@@ -408,6 +408,12 @@ Two asymmetric halves — keep them separate:
        verify, then Enter. No clipboard hijack, no Cmd+L/Cmd+V. Clipboard paste
        survives only as a fallback — and `fillComposer` **clears whatever it wrote
        before falling back**, or the paste appends and sends a garbled prompt.
+       **A draft already in that box is the Mac user's, and the write replaces it**,
+       so the send script reads it first and `restoreDraft` writes it back once
+       Conductor has taken the prompt, but only into an empty box (text there means
+       Conductor kept something or someone typed since). A send that never left the
+       box puts the draft back too, or the retry would save its own prompt as the
+       draft and restore it after the send that worked.
     5. **Read the composer back after Enter** (`submitComposer`) — Conductor
        consumes the draft when it takes a prompt, so a box still holding the text
        is a keystroke that went nowhere, and that is the only receipt a run can

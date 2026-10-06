@@ -87,6 +87,10 @@ my focusWorkspace()
 my selectChatTab()
 set promptText to my normalizeNewlines(do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
 set textBox to my composerField()
+set priorDraft to my composerTextOf(textBox)
+-- An earlier attempt killed after its fill leaves this prompt in the box, and saving
+-- that as the draft would put the prompt back after it was sent: one Enter from a dup.
+if priorDraft is not missing value and priorDraft contains promptText then set priorDraft to missing value
 if not (my fillComposer(textBox, promptText)) then
 	set savedClipboard to the clipboard
 	my pasteComposer()
@@ -94,7 +98,16 @@ if not (my fillComposer(textBox, promptText)) then
 	set the clipboard to savedClipboard
 end if
 set presses to my submitComposer(textBox, promptText, (system attribute "RELAY_QUEUE_PROMPT") is "1")
-if presses is 0 then error "Conductor ignored Enter - the prompt is still sitting in its composer"
+if presses is 0 then
+	-- The prompt is still in the box. Put the Mac draft back in its place, or a retry
+	-- would save this prompt as the "draft" and restore it after a send that worked.
+	try
+		my clearComposer(textBox)
+		my restoreDraft(textBox, priorDraft)
+	end try
+	error "Conductor ignored Enter - the prompt is still sitting in its composer"
+end if
+my restoreDraft(textBox, priorDraft)
 return "presses:" & presses
 `.trim()
 		// Pass the prompt via a temp file + env to avoid AppleScript string escaping.

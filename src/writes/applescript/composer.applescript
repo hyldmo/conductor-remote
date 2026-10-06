@@ -78,6 +78,31 @@ on clearComposer(textBox)
 	end tell
 end clearComposer
 
+on restoreDraft(textBox, draftText)
+	-- Put back what was in the composer before the relay wrote into it. A send
+	-- replaces the box's value, so a draft typed on the Mac was lost every time a
+	-- prompt came from the phone into the same chat.
+	--
+	-- Only into an empty box: anything else means Conductor kept text there or
+	-- someone typed since, and overwriting that is the same loss again. The short
+	-- wait lets Conductor finish clearing the composer after it took the prompt,
+	-- or the write could land before that clear and be wiped by it.
+	if draftText is missing value or draftText is "" then return
+	if textBox is missing value then return
+	delay 0.3
+	set seen to my composerTextOf(textBox)
+	if seen is missing value then
+		set textBox to my composerField()
+		set seen to my composerTextOf(textBox)
+	end if
+	if seen is not "" then return
+	try
+		tell application "System Events" to tell process "Conductor"
+			set value of textBox to draftText
+		end tell
+	end try
+end restoreDraft
+
 on pressSend(queueIt)
 	-- Return sends, Command-Return queues the prompt behind the running answer.
 	-- The choice is made out here because inside a System Events tell an ordinary
