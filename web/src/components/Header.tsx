@@ -6,7 +6,7 @@ import { OfflineBanner } from './ui.tsx'
 /** Shared sticky header surface for rows that provide their own layout. */
 export function HeaderFrame({ children }: { children: ReactNode }) {
 	return (
-		<header className="pt-safe sticky top-0 z-10 border-b border-border-soft bg-bg/80 backdrop-blur-xl">
+		<header className="edge-bar pt-safe sticky top-0 z-10 border-b border-border-soft bg-bg/80 backdrop-blur-xl">
 			{children}
 			<OfflineBanner />
 		</header>

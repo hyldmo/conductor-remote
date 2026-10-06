@@ -449,6 +449,23 @@
 .pb-safe {
 	padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
 }
+/* iOS 26 draws a Liquid Glass blur ~40pt down from the top of an installed web app,
+   over the page, and no CSS or meta tag turns it off. WebKit skips it only when a
+   fixed or sticky full-width box at that edge paints one solid colour, which it then
+   extends under the status bar. The frosted header lets the transcript show through,
+   so WebKit sampled many colours and blurred the header's own title and buttons.
+   Installed app only: a browser tab keeps the frosted look. Unlayered, so it beats
+   the header's bg-bg/80 and backdrop-blur utilities. */
+@media (display-mode: standalone) {
+	.edge-bar {
+		background-color: var(--color-bg);
+		backdrop-filter: none;
+	}
+}
+html[data-standalone] .edge-bar {
+	background-color: var(--color-bg);
+	backdrop-filter: none;
+}
 /* With the keyboard up (data-keyboard, set by useVisualViewportHeight) the app's
    bottom edge is the top of the keyboard, not the screen — the home indicator is
    behind the keyboard, so reserving its inset just floats the composer on a dead
